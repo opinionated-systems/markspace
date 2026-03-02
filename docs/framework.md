@@ -2,6 +2,7 @@
 
 ## Contents
 
+- [The Coordination Problem](#the-coordination-problem)
 - [Coordination Through Environment, Not Communication](#coordination-through-environment-not-communication)
 - [Five Mark Types](#five-mark-types)
 - [Coordination Surfaces](#coordination-surfaces)
@@ -10,6 +11,8 @@
 - [Evaluation](#evaluation)
 - [Related Work](#related-work)
 - [References](#references)
+
+## The Coordination Problem
 
 Autonomous agents are non-deterministic and fallible. A system that depends on their behavior inherits both properties. [Agents of Chaos](https://agentsofchaos.baulab.info/report.html) documents what happens when autonomous agents operate without structural constraints: unauthorized compliance with non-owners, sensitive data disclosure, resource exhaustion loops, identity spoofing, and cross-agent propagation of unsafe practices, covering 16 case studies in a red-teaming exercise with 6 fully autonomous agents. [Google's scaling research](https://arxiv.org/abs/2512.08296) (Kim et al., 2025) finds that multi-agent coordination degrades performance by 39-70% on sequential tasks and amplifies errors up to 17.2x, even when it helps on parallelizable work. In both cases, coordination is implemented as agent behavior rather than infrastructure. The coordination layer between agents determines system-level outcomes.
 
