@@ -380,7 +380,7 @@ In real-time systems this problem is called **priority inversion**, the canonica
 
 **Fix: deferred resolution.** Agents write intents (unguarded), get BLOCKED, and end-of-round resolution sorts by confidence. Making HIGHEST_CONFIDENCE meaningful under lock-based serialization requires collecting all claims before comparing them.
 
-The underlying tension: locks guarantee safety (no double bookings) but destroy the information needed for priority comparison (who else wants this resource?). The deferred pattern separates claim collection from allocation. This is a variant of the [Informational Braess Paradox](https://doi.org/10.1257/aer.20171898) (Acemoglu et al., 2018): more information (who currently holds the lock) can hurt when it forces serial processing of inherently parallel decisions. The [validation experiments (Section 4)](../validation/analysis.md#4-the-visibility-reversal) document the same phenomenon for calendar visibility.
+The underlying tension: locks guarantee safety (no double bookings) but destroy the information needed for priority comparison (who else wants this resource?). The deferred pattern separates claim collection from allocation. This is a variant of the [Informational Braess Paradox](https://doi.org/10.1287/opre.2017.1712) (Acemoglu et al., 2018): more information (who currently holds the lock) can hurt when it forces serial processing of inherently parallel decisions. The [validation experiments (Section 4)](../validation/analysis.md#4-the-visibility-reversal) document the same phenomenon for calendar visibility.
 
 ### 6.4 YIELD_ALL is the right pattern for scarce shared resources
 
