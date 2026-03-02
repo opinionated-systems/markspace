@@ -93,3 +93,9 @@ pytest  # 88 tests
 | [`experiments/validation/analysis.md`](experiments/validation/analysis.md) | Validation experiments: safety, visibility, concurrency, scaling, multi-phase |
 | [`experiments/stress_test/design.md`](experiments/stress_test/design.md) | 105-agent stress test design: scenario, agents, resources, adversarial setup |
 | [`experiments/stress_test/analysis.md`](experiments/stress_test/analysis.md) | 105-agent stress test analysis |
+
+## License
+
+The protocol specification (`docs/`) is licensed under [CC-BY 4.0](LICENSE-CC-BY-4.0). You can use, share, and adapt the spec freely - just give credit.
+
+All code is licensed under the [MIT License](LICENSE-MIT).
