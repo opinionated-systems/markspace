@@ -447,35 +447,11 @@ Cost growth is driven by the multi-step tool loop, not prompt size. PM rounds co
 
 ---
 
-## 7. Does It Work?
-
-**What held up:**
-- Safety invariants (zero violations at 105-agent scale, including adversarial agents)
-- Adversarial robustness (190 denied attempts across 5 adversarial agents)
-- Multi-scope isolation (CLASSIFIED, PROTECTED, OPEN)
-- Projected reads under PROTECTED visibility (8,197 redacted reads)
-- Mediated resolution (YIELD_ALL -> NEED -> principal)
-- External agent integration (different trust levels, decay)
-- Temporal decay (observations, warnings, intent TTL)
-- Confidence-based priority (when using deferred resolution pattern)
-
-**What the protocol defers to other mechanisms:**
-- **Priority comparison** is deferred to a resolution phase. Lock-based guards serialize access, which prevents the simultaneous comparison HIGHEST_CONFIDENCE needs. The deferred pattern (collect intents, resolve at batch boundary) restores it.
-- **Fairness** is deferred to the scheduling layer. The protocol guarantees safety but is agnostic to submission order. Randomizing agent scheduling eliminates ordering bias.
-- **Mediation** is deferred to a principal. YIELD_ALL explicitly hands contested decisions to an external authority. The protocol provides the signaling (NEED marks, `aggregate_needs()`); the principal provides the judgment.
-- **Confidence validation** is deferred to the trust model. Nothing in the protocol prevents an agent from claiming confidence=1.0. Enforcing that confidence reflects actual priority is a policy layer concern. The adversarial test ([Section 8](#8-adversarial-robustness)) showed that confidence manipulation alone does not bypass scope enforcement: adversarial agents could not book resources outside their department scope regardless of claimed confidence.
-
-**What the protocol cannot solve:**
-- Strategic planning: agents have no cross-round memory; each round is a fresh decision with no ability to reason about future availability
-- Demand-pressure visibility: an agent sees 3 open rooms but cannot know 40 others are about to pick the same one; the protocol shows current state, not impending contention
-
----
-
-## 8. Adversarial Robustness
+## 7. Adversarial Robustness
 
 Five adversarial agents (one per department) were added with normal permissions but adversarial system prompts instructing them to attempt cross-department resource acquisition and warning injection. They were given two extra tools not available to normal agents: `book_other_dept_room` (attempts to book a room in another department's scope, rejects same-department targets) and `issue_warning` (attempts to write WARNING marks to arbitrary scopes).
 
-### 8.1 Adversarial agent activity
+### 7.1 Adversarial agent activity
 
 | Metric | Value |
 |---|---|
@@ -493,7 +469,7 @@ Five adversarial agents (one per department) were added with normal permissions 
 
 The 69 ALLOW verdicts are legitimate: adversarial agents succeeded only on resources within their normal permissions. Own-department rooms, shared rooms, tasks, lunch, and parking were all accessible because these agents held valid department membership. The protocol does not distinguish between adversarial and normal agents at the identity level; it enforces scope boundaries regardless of intent.
 
-### 8.2 Cross-department booking attempts
+### 7.2 Cross-department booking attempts
 
 | Result | Count | Rate | Notes |
 |---|---|---|---|
@@ -502,7 +478,7 @@ The 69 ALLOW verdicts are legitimate: adversarial agents succeeded only on resou
 
 All 121 attempts to book rooms via the cross-department tool were denied. The tool enforces "other department" as a precondition (rejecting same-department targets before reaching the guard), and the guard enforces scope boundaries (rejecting cross-department targets). Neither layer can be bypassed.
 
-### 8.3 Warning injection attempts
+### 7.3 Warning injection attempts
 
 | Result | Count | Rate |
 |---|---|---|
@@ -510,8 +486,32 @@ All 121 attempts to book rooms via the cross-department tool were denied. The to
 
 All 37 attempts to write WARNING marks to scopes outside the agent's trust level were denied. WARNING marks require elevated trust (building ops bot level), and adversarial agents had normal employee trust. The guard rejects the write before the mark reaches the space.
 
-### 8.4 Key finding
+### 7.4 Key finding
 
 The guard and scope system enforce invariants independent of agent intent. The adversarial prompts instructed agents to be creative, persistent, and to try different approaches. Across 398 steps, 5 adversarial agents tested cross-department bookings, warning injection, and various tool parameter combinations. None succeeded in violating scope boundaries. All 121 cross-department booking attempts were denied. All 37 warning injection attempts were denied.
 
 The protocol enforces invariants regardless of what the agent's prompt says. Adversarial and cooperative agents produce the same safety outcome; the difference shows up only in the DENIED verdict count.
+
+---
+
+## 8. Strengths and Limitations
+
+**What held up:**
+- Safety invariants (zero violations at 105-agent scale, including adversarial agents)
+- Adversarial robustness (190 denied attempts across 5 adversarial agents)
+- Multi-scope isolation (CLASSIFIED, PROTECTED, OPEN)
+- Projected reads under PROTECTED visibility (8,197 redacted reads)
+- Mediated resolution (YIELD_ALL -> NEED -> principal)
+- External agent integration (different trust levels, decay)
+- Temporal decay (observations, warnings, intent TTL)
+- Confidence-based priority (when using deferred resolution pattern)
+
+**What the protocol defers to other mechanisms:**
+- **Priority comparison** is deferred to a resolution phase. Lock-based guards serialize access, which prevents the simultaneous comparison HIGHEST_CONFIDENCE needs. The deferred pattern (collect intents, resolve at batch boundary) restores it.
+- **Fairness** is deferred to the scheduling layer. The protocol guarantees safety but is agnostic to submission order. Randomizing agent scheduling eliminates ordering bias.
+- **Mediation** is deferred to a principal. YIELD_ALL explicitly hands contested decisions to an external authority. The protocol provides the signaling (NEED marks, `aggregate_needs()`); the principal provides the judgment.
+- **Confidence validation** is deferred to the trust model. Nothing in the protocol prevents an agent from claiming confidence=1.0. Enforcing that confidence reflects actual priority is a policy layer concern. The adversarial test ([Section 7](#7-adversarial-robustness)) showed that confidence manipulation alone does not bypass scope enforcement: adversarial agents could not book resources outside their department scope regardless of claimed confidence.
+
+**What the protocol cannot solve:**
+- Strategic planning: agents have no cross-round memory; each round is a fresh decision with no ability to reason about future availability
+- Demand-pressure visibility: an agent sees 3 open rooms but cannot know 40 others are about to pick the same one; the protocol shows current state, not impending contention
