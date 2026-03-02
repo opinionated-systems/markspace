@@ -2,7 +2,7 @@
   <img src="logo.svg" alt="markspace" width="280"/>
 </p>
 
-A coordination protocol for LLM agent fleets, based on stigmergy: indirect coordination through marks left in a shared environment.
+A [coordination protocol](docs/framework.md) for LLM agent fleets, based on stigmergy: indirect coordination through marks left in a shared environment.
 
 Agents read and write typed marks in a shared space. A deterministic guard layer enforces safety invariants before any tool executes, independent of LLM behavior. A prompt-injected or misbehaving agent cannot bypass the guard because enforcement happens at the mark space boundary, not inside the agent.
 
