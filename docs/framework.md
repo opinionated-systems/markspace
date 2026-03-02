@@ -572,7 +572,7 @@ The gaps (delegation chains, dynamic trust, agent-internal monitoring, verifiabl
 
 ### Theoretical Grounding
 
-The [CALM theorem](https://doi.org/10.1145/3369736) (Hellerstein & Alvaro, 2020) proves that monotonic programs (those that only accumulate information, never retract it) can achieve eventual consistency without coordination. Mark read/write operations are monotonic: marks are written (accumulated) and decay (weaken) but are never deleted or mutated in storage. Strength is computed at read time as a pure function. The guard's conflict resolution is not purely monotonic - it reads current state and makes an atomic decision (see [Open Questions](#open-questions)). But this is infrastructure enforcement, not agent coordination. Mark operations are monotonic and proceed without synchronization. The guard serializes conflict checks at the infrastructure layer, which is the architectural distinction this protocol exists to make.
+The [CALM theorem](https://doi.org/10.1145/3369736) (Hellerstein & Alvaro, 2020) proves that monotonic programs (those that only accumulate information, never retract it) can achieve eventual consistency without coordination. Mark read/write operations are monotonic: marks are written (accumulated) and decay (weaken) but are never deleted or mutated in storage. Strength is computed at read time as a pure function. The guard's conflict resolution is not purely monotonic - it reads current state and makes an atomic decision (see [Open Questions](#open-questions)). Mark operations proceed without synchronization; the guard serializes conflict checks at the infrastructure layer.
 
 
 ## Related Work
