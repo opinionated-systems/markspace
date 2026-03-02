@@ -1,0 +1,38 @@
+[project]
+name = "markspace"
+version = "0.1.0"
+description = "Stigmergic coordination protocol for LLM agent fleets"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "httpx>=0.24",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+experiments = [
+    "matplotlib>=3.7",
+    "numpy>=1.24",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+include = ["markspace*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["markspace", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "pre-commit (>=4.5.1,<5.0.0)"
+]
