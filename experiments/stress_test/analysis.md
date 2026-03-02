@@ -2,6 +2,44 @@
 
 Scenario design and agent configuration: [`design.md`](design.md).
 
+## Contents
+
+- [Summary](#summary)
+- [1. Safety](#1-safety)
+- [2. Protocol Coverage](#2-protocol-coverage)
+- [3. Resource Allocation Results](#3-resource-allocation-results)
+  - [3.1 Overview by resource type](#31-overview-by-resource-type)
+  - [3.2 Department completion rates](#32-department-completion-rates)
+  - [3.3 Parking: HIGHEST_CONFIDENCE with deferred resolution](#33-parking-highest_confidence-with-deferred-resolution)
+  - [3.4 Lunch: preference satisfaction](#34-lunch-preference-satisfaction)
+  - [3.5 Shared rooms: the hardest resource](#35-shared-rooms-the-hardest-resource)
+  - [3.6 Boardroom: YIELD_ALL in action](#36-boardroom-yield_all-in-action)
+  - [3.7 Tasks: dependency chains working](#37-tasks-dependency-chains-working)
+- [4. Agent Behavior](#4-agent-behavior)
+  - [4.1 Tool usage patterns](#41-tool-usage-patterns)
+  - [4.2 Steps per agent](#42-steps-per-agent)
+  - [4.3 Most and least active agents](#43-most-and-least-active-agents)
+  - [4.4 Waste rate increases over time](#44-waste-rate-increases-over-time)
+  - [4.5 Heads vs regular agents](#45-heads-vs-regular-agents)
+- [5. Temporal Dynamics](#5-temporal-dynamics)
+  - [5.1 Mark accumulation](#51-mark-accumulation)
+  - [5.2 Clock and decay](#52-clock-and-decay)
+- [6. What We Learned](#6-what-we-learned)
+  - [6.1 The protocol works where architecture matches decomposition](#61-the-protocol-works-where-architecture-matches-decomposition)
+  - [6.2 Fairness requires explicit design](#62-fairness-requires-explicit-design)
+  - [6.3 Lock-based guards break HIGHEST_CONFIDENCE](#63-lock-based-guards-break-highest_confidence)
+  - [6.4 YIELD_ALL is the right pattern for scarce shared resources](#64-yield_all-is-the-right-pattern-for-scarce-shared-resources)
+  - [6.5 Projected reads enable coordination without full disclosure](#65-projected-reads-enable-coordination-without-full-disclosure)
+  - [6.6 Observation decay models information freshness](#66-observation-decay-models-information-freshness)
+  - [6.7 Where the protocol is weakest: sequential work](#67-where-the-protocol-is-weakest-sequential-work)
+  - [6.8 Token economics](#68-token-economics)
+- [7. Adversarial Robustness](#7-adversarial-robustness)
+  - [7.1 Adversarial agent activity](#71-adversarial-agent-activity)
+  - [7.2 Cross-department booking attempts](#72-cross-department-booking-attempts)
+  - [7.3 Warning injection attempts](#73-warning-injection-attempts)
+  - [7.4 Key finding](#74-key-finding)
+- [8. Strengths and Limitations](#8-strengths-and-limitations)
+
 ## Summary
 
 105 AI agents (100 normal + 5 adversarial, one per department) coordinated through a shared mark space over a simulated 5-day work week (10 rounds). No central scheduler. No direct communication between agents. All coordination happened indirectly through stigmergic marks: intents, actions, observations, warnings, and needs. The adversarial agents had normal permissions but adversarial prompts, and were given extra tools (`book_other_dept_room`, `issue_warning`) to attempt cross-department violations.

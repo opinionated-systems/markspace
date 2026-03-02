@@ -1,5 +1,16 @@
 # Stigmergic Coordination for Autonomous Agent Fleets
 
+## Contents
+
+- [Coordination Through Environment, Not Communication](#coordination-through-environment-not-communication)
+- [Five Mark Types](#five-mark-types)
+- [Coordination Surfaces](#coordination-surfaces)
+- [Mark Space Architecture](#mark-space-architecture)
+- [Scopes](#scopes)
+- [Evaluation](#evaluation)
+- [Related Work](#related-work)
+- [References](#references)
+
 Autonomous agents are non-deterministic and fallible. A system that depends on their behavior inherits both properties. [Agents of Chaos](https://agentsofchaos.baulab.info/report.html) documents what happens when autonomous agents operate without structural constraints: unauthorized compliance with non-owners, sensitive data disclosure, resource exhaustion loops, identity spoofing, and cross-agent propagation of unsafe practices, covering 16 case studies in a red-teaming exercise with 6 fully autonomous agents. [Google's scaling research](https://arxiv.org/abs/2512.08296) (Kim et al., 2025) finds that multi-agent coordination degrades performance by 39-70% on sequential tasks and amplifies errors up to 17.2x, even when it helps on parallelizable work. In both cases, coordination is implemented as agent behavior rather than infrastructure. The coordination layer between agents determines system-level outcomes.
 
 Consensus-based coordination, the dominant approach, makes the problem worse. Three structural problems:
@@ -46,7 +57,7 @@ Social insects have coordinated at scale through stigmergy since at least the Cr
 >
 > This follows from a structural argument. Every agent action passes through a validation stack (scope check, schema check) that the agent itself cannot bypass. A compromised or low-quality agent can produce worse output, but it cannot violate the protocol's safety constraints. Quality affects the value of marks written; the protocol bounds what marks can be written at all.
 
-## The Framework: Five Mark Types
+## Five Mark Types
 
 An agent's entire coordination interface:
 
@@ -477,7 +488,7 @@ def reinforce(strengths: list[float]) -> float:
 
 The reinforcement function is sublinear. Two observations are stronger than one, but ten observations aren't ten times stronger. This prevents mark flooding attacks (an adversary writing many weak marks to overwhelm legitimate ones) while still rewarding genuine convergence.
 
-## Scope and Decomposability
+## Scopes
 
 ### Scope Definition Language
 
