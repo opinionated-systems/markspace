@@ -707,6 +707,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 ### Governance and safety
 
 - Tomasev, N. et al. (2025). "Practices for Governing Agentic AI Systems." DeepMind. [arXiv:2401.13138](https://arxiv.org/abs/2401.13138). [Governance framework for agentic AI: oversight, monitoring, alignment.]
+- NIST Center for AI Standards and Innovation (2026). ["AI Agent Standards Initiative."](https://www.nist.gov/news-events/news/2026/02/announcing-ai-agent-standards-initiative-interoperable-and-secure) [Industry-led standards for secure, interoperable AI agents: security controls, risk management, identity and authorization, with an open [RFI on AI agent security](https://www.nist.gov/news-events/news/2026/01/caisi-issues-request-information-about-securing-ai-agent-systems).]
 
 ### Formal verification
 
