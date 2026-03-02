@@ -10,7 +10,7 @@ Consensus-based coordination, the dominant approach, makes the problem worse. Th
 
 Consensus addresses agreement (state machine replication, total ordering, leader election). But the operative problem in agent fleets is coordination: running hundreds of agents across different tasks, time horizons, and trust boundaries without them stepping on each other, going stale, or requiring constant attention.
 
-Infrastructure engineering solved this a decade ago. When components are unreliable, you don't fix the components — you move the guarantees into the layer they can't reach.
+Infrastructure engineering solved this a decade ago. When components are unreliable, you don't fix the components - you move the guarantees into the layer they can't reach.
 
 ## Coordination Through Environment, Not Communication
 

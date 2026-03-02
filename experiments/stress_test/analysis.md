@@ -12,7 +12,7 @@ Zero double bookings across 927 resource claims. Zero scope violations across 8,
 
 **Protocol coverage: 9/9 (100%).** Every feature in the spec produced non-trivial output: all 5 mark types, all 4 verdict types, and projected reads.
 
-**Cost: ~8.0M tokens for 470 seconds of wall clock time.** Each agent consumed an average of 76K tokens across 6.8 active rounds.
+**Cost: ~8.0M tokens and 470 seconds of wall clock time.** Each agent consumed an average of 76K tokens across 6.8 active rounds.
 
 All agents ran gpt-oss-120b. No model comparison; the experiment targets protocol behavior.
 
