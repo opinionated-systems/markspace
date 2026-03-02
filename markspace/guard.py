@@ -20,7 +20,7 @@ LLM being reliable.
                                             (deterministic)
         → GUARD writes action mark
 
-Spec Section 8b.
+Spec Section 9.
 """
 
 from __future__ import annotations

@@ -152,7 +152,7 @@ class Agent(BaseModel):
     read_scopes: set of scope names with full content read access.
     Both are hierarchical: permission for "a" implies permission for "a/b".
 
-    Spec Section 9.
+    Spec Section 11.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -385,7 +385,7 @@ def effective_strength_with_warnings(
     Effective strength after warning invalidation.
     Warnings targeting this mark reduce its effective strength.
 
-    Spec Section 10.1.
+    Spec Section 9.5.
     P20: Result MUST NOT be < 0.
     P21: As warnings decay, invalidated mark's strength recovers.
     """
@@ -449,7 +449,7 @@ def project_mark(mark: AnyMark) -> AnyMark:
     Create a projected copy of a mark with content fields redacted.
     Structural/coordination metadata is preserved. The projected flag is set.
 
-    Spec Section 7.3a — PROTECTED scope projected reads.
+    Spec Section 7.4 — PROTECTED scope projected reads.
     """
     updates: dict[str, Any] = {"projected": True}
     for field_name in CONTENT_FIELDS.get(mark.mark_type, ()):

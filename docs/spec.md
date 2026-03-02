@@ -35,33 +35,31 @@
   - [7.1 Scope Definition](#71-scope-definition)
   - [7.2 DecayConfig](#72-decayconfig)
   - [7.3 Scope Authorization](#73-scope-authorization)
-  - [7.3a Scope Visibility](#73a-scope-visibility)
-  - [7.4 Hierarchical Scopes](#74-hierarchical-scopes)
-  - [7.5 Formal Properties](#75-formal-properties)
+  - [7.4 Scope Visibility](#74-scope-visibility)
+  - [7.5 Hierarchical Scopes](#75-hierarchical-scopes)
+  - [7.6 Formal Properties](#76-formal-properties)
 - [8. Mark Space](#8-mark-space)
   - [8.1 Write](#81-write)
   - [8.2 Read](#82-read)
   - [8.3 Resolve](#83-resolve)
   - [8.4 Aggregate Needs](#84-aggregate-needs)
   - [8.5 Formal Properties](#85-formal-properties)
-- [8b. Guard (Deterministic Enforcement Layer)](#8b-guard-deterministic-enforcement-layer)
-  - [8b.1 Principle](#8b1-principle)
-  - [8b.2 Guard Operations](#8b2-guard-operations)
-  - [8b.3 GuardDecision](#8b3-guarddecision)
-  - [8b.4 What the Agent Still Does](#8b4-what-the-agent-still-does)
-  - [8b.5 Formal Properties](#8b5-formal-properties)
-- [8c. Generalized Supersession](#8c-generalized-supersession)
-  - [8c.1 Formal Properties](#8c1-formal-properties)
-- [9. Agent](#9-agent)
-  - [9.1 Agent Definition](#91-agent-definition)
-  - [9.2 Agent-Local Rules](#92-agent-local-rules)
-- [10. Warning Invalidation](#10-warning-invalidation)
-  - [10.1 Invalidation Rule](#101-invalidation-rule)
-  - [10.2 Formal Properties](#102-formal-properties)
-- [11. Properties Summary](#11-properties-summary)
-- [12. Reference Implementation](#12-reference-implementation)
-  - [12.1 DSL Usage](#121-dsl-usage)
-- [13. Conformance](#13-conformance)
+- [9. Guard](#9-guard-deterministic-enforcement-layer)
+  - [9.1 Principle](#91-principle)
+  - [9.2 Guard Operations](#92-guard-operations)
+  - [9.3 GuardDecision](#93-guarddecision)
+  - [9.4 What the Agent Still Does](#94-what-the-agent-still-does)
+  - [9.5 Warning Invalidation](#95-warning-invalidation)
+  - [9.6 Formal Properties](#96-formal-properties)
+- [10. Generalized Supersession](#10-generalized-supersession)
+  - [10.1 Formal Properties](#101-formal-properties)
+- [11. Agent](#11-agent)
+  - [11.1 Agent Definition](#111-agent-definition)
+  - [11.2 Agent-Local Rules](#112-agent-local-rules)
+- [12. Properties Summary](#12-properties-summary)
+- [13. Reference Implementation](#13-reference-implementation)
+  - [13.1 DSL Usage](#131-dsl-usage)
+- [14. Conformance](#14-conformance)
 
 ## Abstract
 
@@ -385,7 +383,7 @@ When an agent reads intent marks on a resource it also intends to modify:
 
 ### 6.2 Deferred Resolution
 
-Lock-based guards (Section 8b) serialize access: at most one agent enters `pre_action` at a time per scope. Under serialization, HIGHEST_CONFIDENCE degenerates to FIRST_WRITER because the second agent finds an already-committed action, not a competing intent. The guard returns CONFLICT (resource taken), never performing the confidence comparison. This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html): a low-priority agent holding the lock blocks a higher-priority agent.
+Lock-based guards (Section 9) serialize access: at most one agent enters `pre_action` at a time per scope. Under serialization, HIGHEST_CONFIDENCE degenerates to FIRST_WRITER because the second agent finds an already-committed action, not a competing intent. The guard returns CONFLICT (resource taken), never performing the confidence comparison. This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html): a low-priority agent holding the lock blocks a higher-priority agent.
 
 Deferred resolution fixes this by separating claim collection from allocation.
 
@@ -471,7 +469,7 @@ enum ConflictPolicy {
 
 message Scope {
   string          name               = 1;  // hierarchical namespace ("calendar", "research/topic/X")
-  ScopeVisibility visibility         = 2;  // default: OPEN (Section 7.3a)
+  ScopeVisibility visibility         = 2;  // default: OPEN (Section 7.4)
   repeated string intent_actions     = 3;  // allowed intent action verbs
   repeated string action_actions     = 4;  // allowed action verbs
   repeated string observation_topics = 5;  // allowed observation topics ("*" for any)
@@ -495,11 +493,11 @@ message DecayConfig {
 
 An agent's permissions are defined as:
 - **Write permissions**: a set of (scope, mark_type) pairs. An agent MUST NOT write a mark to a scope it is not authorized for. An implementation MUST reject unauthorized writes.
-- **Read permissions**: a set of scope names granting full content access. Only relevant for PROTECTED and CLASSIFIED scopes (see [Section 7.3a](#73a-scope-visibility)).
+- **Read permissions**: a set of scope names granting full content access. Only relevant for PROTECTED and CLASSIFIED scopes (see [Section 7.4](#74-scope-visibility)).
 
 For OPEN scopes, reads are unrestricted and any agent reads full marks. This mirrors biological stigmergy where any ant can smell any pheromone. For PROTECTED and CLASSIFIED scopes, read authorization controls content access.
 
-### 7.3a Scope Visibility
+### 7.4 Scope Visibility
 
 Scopes declare a **visibility level** that controls read access. The three levels are a simplified [Bell-LaPadula](https://apps.dtic.mil/sti/citations/AD0770768) lattice (Bell & LaPadula, 1973), reduced from arbitrary security levels to exactly three because the use case is coordination visibility, not military classification. The novel element is the projected read (PROTECTED): Bell-LaPadula has no analogue for "you can see that a mark exists but not what it says." Three levels, in order of increasing restriction:
 
@@ -548,11 +546,11 @@ legal = Scope(name="legal", visibility=ScopeVisibility.CLASSIFIED)
 - PROTECTED: the existence of marks is not sensitive, but their content is. Agents can still coordinate around protected resources (see marks exist, avoid conflicts) without seeing the data.
 - CLASSIFIED: even the existence of marks is sensitive. An agent shouldn't know that a legal investigation mark exists for employee-X. Coordination in classified scopes is limited to authorized agents. Unauthorized agents cannot avoid conflicts they can't see, so the guard becomes the sole coordination mechanism.
 
-### 7.4 Hierarchical Scopes
+### 7.5 Hierarchical Scopes
 
 Scope names MAY use `/` as a hierarchy separator. Authorization for a parent scope (e.g., `research`) implies authorization for all child scopes (e.g., `research/topic/X`). An implementation MUST support this inheritance.
 
-### 7.5 Formal Properties
+### 7.6 Formal Properties
 
 **P14: Scope Isolation**: An agent without authorization for scope S MUST be unable to write any mark to S. `write(unauthorized_agent, mark_in_S) → Error`.
 
@@ -588,7 +586,7 @@ Preconditions:
 
 Postconditions:
   - mark is stored with a new unique id and created_at = now
-  - mark is immediately visible to subsequent reads (subject to scope visibility rules, Section 7.3a)
+  - mark is immediately visible to subsequent reads (subject to scope visibility rules, Section 7.4)
 ```
 
 ### 8.2 Read
@@ -600,7 +598,7 @@ read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader
   - Each mark's effective_strength is computed at read time (Section 3 + 4)
   - Marks with effective_strength < min_strength are excluded
   - Results SHOULD be sorted by effective_strength descending
-  - reader: the agent performing the read (controls visibility per Section 7.3a)
+  - reader: the agent performing the read (controls visibility per Section 7.4)
     - None: full access (used by guard, aggregator, internal infrastructure)
     - Agent: respects scope visibility rules (OPEN/PROTECTED/CLASSIFIED)
 ```
@@ -650,7 +648,7 @@ The aggregator is deliberately simple. It groups, scores, and sorts. It has no i
 
 Ref: [`markspace/space.py::MarkSpace`](../markspace/space.py), [`tests/test_properties.py::TestMarkSpaceProperties`](../tests/test_properties.py)
 
-## 8b. Guard (Deterministic Enforcement Layer)
+## 9. Guard (Deterministic Enforcement Layer)
 
 Agents cannot be trusted to voluntarily read marks before acting. LLMs are non-deterministic and may forget or ignore instructions. The guard moves coordination enforcement from the agent (unreliable) to the harness (deterministic). The guard is a descendant of [Hoare monitors](https://doi.org/10.1145/355620.361161) (1974): a monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. Here, the guard wraps the mark space, ensuring every tool call passes through `pre_action` before execution.
 
@@ -660,13 +658,13 @@ Agent reasons → agent calls tool → GUARD checks marks → tool executes
 → GUARD writes action mark
 ```
 
-### 8b.1 Principle
+### 9.1 Principle
 
 Marks are WRITTEN by agents (voluntary, through LLM reasoning) but ENFORCED by the guard (deterministic, wrapping every tool call). The agent writes intents and observations as part of its reasoning. The guard reads intents and enforces conflict resolution mechanically before any tool executes.
 
 Coordination reliability MUST NOT depend on the LLM being reliable.
 
-### 8b.2 Guard Operations
+### 9.2 Guard Operations
 
 ```
 pre_action(agent, scope, resource, action, confidence) → GuardDecision
@@ -695,7 +693,7 @@ execute(agent, scope, resource, intent_action, result_action, tool_fn, confidenc
   4. Return (decision, result)
 ```
 
-### 8b.3 GuardDecision
+### 9.3 GuardDecision
 
 ```protobuf
 enum Verdict {
@@ -715,7 +713,7 @@ message GuardDecision {
 
 The decision is informational for the agent's reasoning ("I was blocked because another agent has higher priority on this resource, I'll try a different one"). The agent cannot override the verdict; the harness enforces it.
 
-### 8b.4 What the Agent Still Does
+### 9.4 What the Agent Still Does
 
 The guard handles conflict enforcement. The agent still voluntarily:
 - Writes observation marks (sharing knowledge with the fleet)
@@ -725,7 +723,24 @@ The guard handles conflict enforcement. The agent still voluntarily:
 
 The division: **the agent decides WHAT to do. The guard decides WHETHER it's allowed.**
 
-### 8b.5 Formal Properties
+### 9.5 Warning Invalidation
+
+When a warning mark references `invalidates: mark_id`, it reduces the target mark's effective strength.
+
+```
+effective_strength_with_warnings(mark, now) =
+  max(0, effective_strength(mark, now) - sum(effective_strength(w, now) for w in warnings_targeting(mark)))
+```
+
+A warning at full strength completely cancels a mark of equal base strength. As the warning decays, the invalidated mark's effective strength recovers. This models the biological pattern: a repellent pheromone suppresses an attractant, but as the repellent evaporates, the attractant becomes detectable again (if it hasn't also evaporated).
+
+Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestWarningProperties`](../tests/test_properties.py)
+
+### 9.6 Formal Properties
+
+**P20: Invalidation Bound**: A warning MUST NOT reduce a mark's effective strength below 0.
+
+**P21: Invalidation Decay**: As a warning decays, the invalidated mark's effective strength MUST recover (assuming the mark itself hasn't fully decayed).
 
 **P22: Guard Determinism**: Given the same mark space state, `pre_action` MUST return the same verdict for the same inputs.
 
@@ -737,7 +752,7 @@ The division: **the agent decides WHAT to do. The guard decides WHETHER it's all
 
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_guard.py`](../tests/test_guard.py)
 
-## 8c. Generalized Supersession
+## 10. Generalized Supersession
 
 All mark types MAY carry a `supersedes` field. An observation can supersede a prior observation on the same topic. An intent can supersede the same agent's prior intent on the same resource. This provides explicit versioning alongside continuous decay.
 
@@ -749,17 +764,17 @@ Any mark type MAY include an `optional string supersedes` field. When set, the r
 
 **When to use supersession vs warnings**: Supersession replaces a mark quietly (the old version vanishes). Warnings loudly declare that something is wrong (the invalidation is itself a mark other agents can read). Use supersession for routine updates ("new price observation"), warnings for notable corrections ("previous data was wrong").
 
-### 8c.1 Formal Properties
+### 10.1 Formal Properties
 
 **P25: Supersession Transitivity**: If mark C supersedes B, and B supersedes A, then A, B are both invisible and C is the only visible mark.
 
 Ref: [`tests/test_guard.py::TestGeneralizedSupersession`](../tests/test_guard.py)
 
-## 9. Agent
+## 11. Agent
 
 An agent is an identity with scope permissions and local rules. The protocol does not specify what agents do internally, only how they interact with the mark space.
 
-### 9.1 Agent Definition
+### 11.1 Agent Definition
 
 ```protobuf
 message ScopePermission {
@@ -775,9 +790,9 @@ message Agent {
 }
 ```
 
-`read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.3a](#73a-scope-visibility)). For OPEN scopes, `read_scopes` is irrelevant. Both `permissions` and `read_scopes` support hierarchical matching.
+`read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` is irrelevant. Both `permissions` and `read_scopes` support hierarchical matching.
 
-### 9.2 Agent-Local Rules
+### 11.2 Agent-Local Rules
 
 The protocol does not prescribe agent-internal logic. An agent's behavior is defined by:
 
@@ -787,28 +802,7 @@ The protocol does not prescribe agent-internal logic. An agent's behavior is def
 
 The decomposability guarantee follows from this. You can test an agent in isolation by mocking the mark space. You can add new agents without changing existing ones. The mark space is the only coupling point.
 
-## 10. Warning Invalidation
-
-When a warning mark references `invalidates: mark_id`, it reduces the target mark's effective strength.
-
-### 10.1 Invalidation Rule
-
-```
-effective_strength_with_warnings(mark, now) =
-  max(0, effective_strength(mark, now) - sum(effective_strength(w, now) for w in warnings_targeting(mark)))
-```
-
-A warning at full strength completely cancels a mark of equal base strength. As the warning decays, the invalidated mark's effective strength recovers. This models the biological pattern: a repellent pheromone suppresses an attractant, but as the repellent evaporates, the attractant becomes detectable again (if it hasn't also evaporated).
-
-### 10.2 Formal Properties
-
-**P20: Invalidation Bound**: A warning MUST NOT reduce a mark's effective strength below 0.
-
-**P21: Invalidation Decay**: As a warning decays, the invalidated mark's effective strength MUST recover (assuming the mark itself hasn't fully decayed).
-
-Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestWarningProperties`](../tests/test_properties.py)
-
-## 11. Properties Summary
+## 12. Properties Summary
 
 All normative properties, collected. A conforming implementation MUST satisfy all of these. The reference implementation's test suite verifies each one.
 
@@ -827,29 +821,29 @@ All normative properties, collected. A conforming implementation MUST satisfy al
 | P11 | Determinism | 6.3 |
 | P12 | Progress | 6.3 |
 | P13 | Consistency | 6.3 |
-| P14 | Scope Isolation | 7.5 |
-| P15a | Structural Visibility | 7.5 |
-| P15b | Content Access | 7.5 |
-| P15c | Classified Opacity | 7.5 |
-| P16 | Hierarchy | 7.5 |
+| P14 | Scope Isolation | 7.6 |
+| P15a | Structural Visibility | 7.6 |
+| P15b | Content Access | 7.6 |
+| P15c | Classified Opacity | 7.6 |
+| P16 | Hierarchy | 7.6 |
 | P17 | Write Visibility | 8.5 |
 | P18 | Read Purity | 8.5 |
 | P19 | Resolution Immediacy | 8.5 |
-| P20 | Invalidation Bound | 10.2 |
-| P21 | Invalidation Decay | 10.2 |
-| P22 | Guard Determinism | 8b.5 |
-| P23 | Guard Atomicity | 8b.5 |
-| P24 | Guard Transparency | 8b.5 |
-| P25 | Supersession Transitivity | 8c.1 |
-| P26 | Action Precedence | 8b.5 |
-| P27 | Projection Preservation | 7.3a |
-| P28 | Classified No Fallback | 7.3a |
-| P29 | Visibility Hierarchy | 7.3a |
+| P20 | Invalidation Bound | 9.6 |
+| P21 | Invalidation Decay | 9.6 |
+| P22 | Guard Determinism | 9.6 |
+| P23 | Guard Atomicity | 9.6 |
+| P24 | Guard Transparency | 9.6 |
+| P25 | Supersession Transitivity | 10.1 |
+| P26 | Action Precedence | 9.6 |
+| P27 | Projection Preservation | 7.4 |
+| P28 | Classified No Fallback | 7.4 |
+| P29 | Visibility Hierarchy | 7.4 |
 | P30 | Deferred Completeness | 6.4 |
 | P31 | Deferred Priority Fidelity | 6.4 |
 | P32 | Deferred Liveness | 6.4 |
 
-## 12. Reference Implementation
+## 13. Reference Implementation
 
 The reference implementation is in Python (3.11+), with pydantic and httpx as runtime dependencies. It is structured as:
 
@@ -869,7 +863,7 @@ tests/
   test_concurrent.py  -- thread-safety tests
 ```
 
-### 12.1 DSL Usage
+### 13.1 DSL Usage
 
 ```python
 from markspace import (
@@ -947,7 +941,7 @@ marks = space.read(scope="calendar", resource="thu-14:00")
 # Intent is gone (superseded)
 ```
 
-## 13. Conformance
+## 14. Conformance
 
 An implementation is conformant if:
 
@@ -957,9 +951,9 @@ An implementation is conformant if:
 4. It implements sublinear, bounded reinforcement ([Section 5](#5-reinforcement)).
 5. It resolves intent conflicts deterministically according to the scope's policy ([Section 6](#6-conflict-resolution)), including deferred resolution for HIGHEST_CONFIDENCE under lock-based serialization ([Section 6.2](#62-deferred-resolution)).
 6. It enforces scope-based write authorization ([Section 7](#7-scope)).
-7. It provides a deterministic guard layer that enforces coordination without depending on agent compliance ([Section 8b](#8b-guard-deterministic-enforcement-layer)).
-8. It supports generalized supersession across all mark types ([Section 8c](#8c-generalized-supersession)).
-9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projected reads and content redaction ([Section 7.3a](#73a-scope-visibility)).
-10. It satisfies all 32 formal properties ([Section 11](#11-properties-summary)).
+7. It provides a deterministic guard layer that enforces coordination without depending on agent compliance ([Section 9](#9-guard-deterministic-enforcement-layer)).
+8. It supports generalized supersession across all mark types ([Section 10](#10-generalized-supersession)).
+9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projected reads and content redaction ([Section 7.4](#74-scope-visibility)).
+10. It satisfies all 32 formal properties ([Section 12](#12-properties-summary)).
 
 An implementation MAY differ from the reference implementation in storage backend, concurrency model, garbage collection strategy, or internal data structures, provided the properties hold.
