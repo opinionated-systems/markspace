@@ -38,3 +38,6 @@ typeCheckingMode = "basic"
 dev = [
     "pre-commit (>=4.5.1,<5.0.0)"
 ]
+test = [
+    "hypothesis (>=6.151.9,<7.0.0)"
+]

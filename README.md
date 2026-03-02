@@ -43,7 +43,7 @@ Full protocol design in [`framework.md`](docs/framework.md). Formal specificatio
 
 The reference implementation and experiments verify that the protocol's properties hold under realistic conditions.
 
-**Unit tests (88):** Mark algebra, decay functions, trust weighting, conflict resolution, guard enforcement, deferred resolution, scope visibility, and thread safety under concurrent access.
+**Unit tests (119):** Mark algebra, decay functions, trust weighting, conflict resolution, guard enforcement, deferred resolution, scope visibility, thread safety under concurrent access, and hypothesis property-based tests across randomized inputs.
 
 **[105-agent stress test:](experiments/stress_test/analysis.md)** 100 employees across 5 departments (each with an AI personal assistant) plus 5 adversarial agents with normal permissions but adversarial prompts. No central scheduler. All coordination happens through the shared mark space over a simulated work week.
 
@@ -66,12 +66,12 @@ The protocol can be implemented in any language. This package is a Python 3.11+ 
 
 ```bash
 pip install -e .
-pip install -e ".[test]"        # adds pytest
+pip install -e ".[test]"        # adds pytest, hypothesis
 pip install -e ".[experiments]"  # adds matplotlib, numpy
 ```
 
 ```bash
-pytest  # 88 tests
+pytest  # 119 tests
 ```
 
 | Module | Role |
@@ -81,7 +81,7 @@ pytest  # 88 tests
 | `guard.py` | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. |
 | `llm.py` | Provider-agnostic LLM client (OpenAI-compatible). |
 | `models.py` | Model registry. |
-| `tests/` | 88 property and scenario tests. |
+| `tests/` | 119 property, scenario, and hypothesis tests. |
 | `experiments/` | Validation experiments and 105-agent stress test. |
 
 ## Documentation
