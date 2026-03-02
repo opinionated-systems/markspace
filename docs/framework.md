@@ -554,7 +554,7 @@ The protocol is a coordination primitive, not a complete agent safety system. It
 
 ### Coverage Against Intelligent Delegation
 
-[Intelligent Delegation](https://arxiv.org/html/2602.11865v1) frames the broader challenge of safe delegation and identifies nine technical components (trust management, permissions and access control, monitoring, adaptive coordination, verifiable completion, security, delegation chains, accountability, and human oversight). Markspace is a coordination protocol, not a delegation framework, but it structurally satisfies five of the nine through environment design. The remaining four require agent-internal mechanisms at a different architectural level.
+[Intelligent Delegation](https://arxiv.org/html/2602.11865v1) frames the broader challenge of safe delegation and identifies nine technical components (trust management, permissions and access control, monitoring, adaptive coordination, verifiable completion, security, delegation chains, accountability, and human oversight). Markspace covers five of the nine.
 
 | Component | MarkSpace Coverage | Notes |
 |---|---|---|
