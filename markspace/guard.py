@@ -232,9 +232,9 @@ class Guard:
 
         Spec Section 6.2 (Phase 3: Batch resolution).
 
-        P30: MUST consider ALL active intents at the resolution boundary.
-        P31: Winner MUST be identical to simultaneous HIGHEST_CONFIDENCE evaluation.
-        P32: Caller is responsible for triggering this method (liveness).
+        P32: MUST consider ALL active intents at the resolution boundary.
+        P33: Winner MUST be identical to simultaneous HIGHEST_CONFIDENCE evaluation.
+        P34: Caller is responsible for triggering this method (liveness).
         """
         with self._lock:
             scope_def = self.space._get_scope(scope)
@@ -243,7 +243,7 @@ class Guard:
             if not all_intents:
                 return {}
 
-            # P30: Consider ALL active intents (get_intents already filters
+            # P32: Consider ALL active intents (get_intents already filters
             # by strength > 0 and respects TTL/supersession).
             winner_id = resolve_conflict(all_intents, scope_def.conflict_policy)
 

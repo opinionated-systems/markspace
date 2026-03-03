@@ -398,7 +398,7 @@ class TestConflictResolutionProperties:
 
 
 class TestWarningInvalidationProperties:
-    """P20-P21: Warning invalidation is floored at 0 and recovers as warnings decay."""
+    """P22-P23: Warning invalidation is floored at 0 and recovers as warnings decay."""
 
     @given(
         config=st_decay_config(),
@@ -408,7 +408,7 @@ class TestWarningInvalidationProperties:
         warning_strength=st_strength,
     )
     def test_floor_at_zero(self, config, now, obs_strength, n_warnings, warning_strength):
-        """P20: effective_strength_with_warnings >= 0, always."""
+        """P22: effective_strength_with_warnings >= 0, always."""
         obs = Observation(
             scope="test",
             topic="t",
@@ -434,7 +434,7 @@ class TestWarningInvalidationProperties:
 
     @given(config=st_decay_config())
     def test_recovery_as_warnings_decay(self, config):
-        """P21: As warning decays, invalidated mark's effective strength recovers."""
+        """P23: As warning decays, invalidated mark's effective strength recovers."""
         # Need meaningfully different decay rates so the warning decays away
         # while the observation retains significant strength
         assume(config.warning_half_life < config.observation_half_life * 0.5)
@@ -467,7 +467,7 @@ class TestWarningInvalidationProperties:
 
 
 class TestProjectionProperties:
-    """P27: Projection preserves identity fields, sets projected flag, is idempotent."""
+    """P29: Projection preserves identity fields, sets projected flag, is idempotent."""
 
     @given(mark=st_any_mark)
     def test_projection_sets_projected_flag(self, mark):

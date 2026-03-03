@@ -8,6 +8,7 @@
 - [Coordination Surfaces](#coordination-surfaces)
 - [Mark Space Architecture](#mark-space-architecture)
 - [Scopes](#scopes)
+- [Agent Composition](#agent-composition)
 - [Evaluation](#evaluation)
 - [Related Work](#related-work)
 - [References](#references)
@@ -415,7 +416,7 @@ Agents always read from Redis (low latency). The hybrid approach is standard: Re
 
 **Distributed storage.** The spec assumes a single-node mark space with in-process locking. A distributed deployment (multiple mark space nodes) would need to maintain the guard's atomicity guarantees across nodes. The CALM theorem (see [Theoretical Grounding](#theoretical-grounding)) suggests this is feasible for monotonic read/write operations, but the guard's lock-based conflict check is not monotonic. It requires reading the current state and making a decision atomically. A distributed guard would likely need a [Calvin](https://doi.org/10.1145/2213836.2213838)-style deterministic ordering layer (Thomson et al., 2012) or partitioning by scope (each scope assigned to exactly one node).
 
-**Deferred resolution.** Formalized in [spec.md Section 6.2](spec.md). The deferred resolution pattern (collect intents, resolve at batch boundary) is used in the stress test for parking and boardroom resources. It is the mechanism that makes HIGHEST_CONFIDENCE meaningful under lock-based serialization ([Section 6.3 of the stress test analysis](../experiments/stress_test/analysis.md#63-lock-based-guards-break-highest_confidence)). The spec defines three phases (claim collection, resolution boundary, batch resolution), three properties (P30-P32), and the relationship between deferred and immediate guard modes. Remaining open question: the resolution boundary trigger is "deployment-defined," so a production implementation would need to decide between timer-based, event-based, or principal-triggered boundaries.
+**Deferred resolution.** Formalized in [spec.md Section 6.2](spec.md). The deferred resolution pattern (collect intents, resolve at batch boundary) is used in the stress test for parking and boardroom resources. It is the mechanism that makes HIGHEST_CONFIDENCE meaningful under lock-based serialization ([Section 6.3 of the stress test analysis](../experiments/stress_test/analysis.md#63-lock-based-guards-break-highest_confidence)). The spec defines three phases (claim collection, resolution boundary, batch resolution), three properties (P32-P34), and the relationship between deferred and immediate guard modes. Remaining open question: the resolution boundary trigger is "deployment-defined," so a production implementation would need to decide between timer-based, event-based, or principal-triggered boundaries.
 
 **Need clustering for principal review.** The spec's [`aggregate_needs()` (Section 8.4)](spec.md#84-aggregate-needs) says needs with "similar questions" are clustered, but the similarity function is "implementation-defined." This is an intentional design boundary; the protocol delegates clustering semantics to the deployment rather than prescribing a single approach. When 12 agents write need marks about "Deal X," grouping them into one principal decision item is obvious. When 3 agents write needs about "vacation policy," "PTO balance," and "time-off request," whether those are one cluster or three separate items depends on semantic similarity, not string matching. Options: (1) scope-based grouping (all needs in the same scope cluster together, simple but misses cross-scope relationships), (2) embedding-based semantic similarity (compute embeddings of need `question` fields, cluster by cosine similarity above a threshold, accurate but adds an ML dependency to what should be a "zero intelligence" aggregator), (3) LLM-based clustering (ask an LLM to group needs, which defeats the purpose of keeping intelligence out of infrastructure). The right answer is probably scope-based grouping as the default with an optional semantic similarity layer for deployments that need it. The aggregator's design principle is "zero intelligence": it sorts, groups, and displays. Adding semantic clustering would violate that principle unless it's a clearly separated preprocessing step.
 
@@ -547,6 +548,186 @@ Each row can be developed and tested without the rows below it. Fleet coordinati
 
 In the committee model, individual algorithms (voting, aggregation) can be unit-tested with mock inputs, but their *interaction* under realistic conditions requires the full multi-agent setup. Testing whether a panel of agents reaches the right consensus requires the panel. Stigmergy decomposes more cleanly because the mark space is the only shared interface, and each component's contract is defined entirely by the marks it reads and writes.
 
+The previous section showed that each component can be tested in isolation. The next question is how those components compose into working agent fleets.
+
+
+## Agent Composition
+
+### The Unix Philosophy for Agent Fleets
+
+The Unix philosophy - small programs that do one thing well, composed through a universal interface - maps directly onto stigmergic coordination. The structural parallel:
+
+| Unix | markspace |
+|------|-----------|
+| Programs | Agents - small, single-purpose |
+| Text streams (stdin/stdout) | Marks - typed, universal interface |
+| Pipes | Mark space - environment as composition mechanism |
+| Filesystem | Scopes - hierarchical namespaces |
+| Shell | Principal - composes agents by defining scopes and permissions |
+
+The key property that makes Unix composition work is that **programs don't know about their neighbors in the pipeline.** `grep` doesn't know what produced its input or what will consume its output. It reads from stdin, writes to stdout, and the shell connects them. The same property holds here: agents don't know about each other. They read from the mark space and write to it. The environment connects them.
+
+This is the same architectural pattern: remove direct coupling between components, compose through a shared medium with a universal data format. The medium does the routing; the components do the work.
+
+### Why the Protocol Incentivizes Small Agents
+
+The protocol does not mandate small agents, but several features make them the natural design pattern.
+
+**Narrow scope permissions.** An agent authorized for one scope does one thing. An agent authorized for fifteen scopes does fifteen things. The permission model creates natural pressure toward focused agents - each additional scope widens the attack surface, increases the testing burden, and makes the agent harder to reason about.
+
+**Agent manifests.** An agent manifest ([spec Section 13.2](spec.md#132-agent-manifests)) declares what marks an agent reads (inputs) and what marks it writes (outputs). A manifest is the agent's type signature. A manifest listing two inputs and two outputs is clean. A manifest listing twenty inputs and thirty outputs is a monolith. Making interfaces explicit creates visibility into agent complexity.
+
+**Watch/subscribe for reactive composition.** Agents can subscribe to mark patterns ([spec Section 13.3](spec.md#133-subscription)) and activate when matching marks appear. This enables pipeline-style composition without a central orchestrator: agent A writes an observation, agent B wakes up and processes it, writes a refined observation, agent C wakes up and acts. No agent coordinates this chain. The mark space delivers the data; each agent processes what arrives. Source agents - those at the start of a pipeline with no upstream marks - use manifest-based scheduling ([spec Section 14](spec.md#14-scheduling)): the principal sets `schedule_interval` in the agent's manifest, and the Scheduler infrastructure activates the agent on that interval. Scheduling is a property of the agent, not a signal in the environment.
+
+**Need marks as escalation boundaries.** In Unix, a program that encounters something outside its scope writes to stderr and exits with an error code. In markspace, an agent that encounters something outside its scope writes a need mark. "I'm the availability-checker. I found a conflict I can't resolve. Here's the context. Human, decide." Small agents escalate at their boundary rather than growing to handle edge cases. The protocol makes escalation cheap (write a need mark) and effective (the principal sees it, aggregated with related needs).
+
+**The guard handles safety for all agents.** A small agent doesn't need to carry its own safety apparatus. The guard enforces scope authorization, conflict resolution, and visibility rules regardless of agent size or complexity. This lowers the barrier to making agents small - each agent doesn't need to reinvent coordination safety.
+
+### Composition Patterns
+
+The five mark types naturally support composition patterns.
+
+**Sense-Act chain.** Agent A observes the world and writes observation marks. Agent B reads observations and writes intents/actions. Separation of perception from action. Each agent is simpler than one that does both.
+
+```
+ScrapeAgent --[observation: financial_data]--> AnalystAgent --[intent: trade]--> Guard
+```
+
+**Filter chain.** Successive refinement through observations. Agent A writes raw observations. Agent B reads them, applies criteria, writes refined observations. Agent C reads refined observations and acts. Like `grep | sort | uniq` - each stage narrows the data.
+
+```
+SensorAgent --[observation: reading]--> FilterAgent --[observation: reading]--> AggregatorAgent
+```
+
+**Monitor chain.** Separate execution from quality monitoring. Agent A writes actions. Agent B reads actions and writes warnings when something looks wrong. Agent A never knows agent B exists. Add monitoring by subscribing a new agent - no changes to existing agents.
+
+```
+BookingAgent --[action: booked]--> AuditAgent --[warning: policy_violation]-->
+```
+
+**Fan-in / Fan-out.** Multiple writers, one reader (fan-in): 5 sensors write observations, 1 aggregator reads them all. One writer, multiple readers (fan-out): 1 aggregator writes summaries, 3 downstream agents each subscribe independently. The mark space handles routing.
+
+### Worked Example: Weather Polling Agent
+
+A single LLM-driven agent that polls a weather API and writes forecasts to the mark space. This shows all four infrastructure roles - principal, scheduler, agent, guard - working together.
+
+**Principal sets up the environment.** The principal defines scopes, creates agents with narrow permissions, and sets schedule intervals in agent manifests.
+
+```python
+from markspace import (
+    Agent, AgentManifest, ConflictPolicy, DecayConfig, Guard,
+    MarkSpace, MarkType, Observation, Scheduler, Scope, Source,
+    WatchPattern, hours, minutes,
+)
+
+space = MarkSpace(scopes=[
+    Scope(
+        name="weather",
+        observation_topics=("forecast", "current"),
+        intent_actions=("poll",),
+        action_actions=("polled",),
+        decay=DecayConfig(
+            observation_half_life=hours(3),    # forecasts go stale
+            warning_half_life=hours(1),
+            intent_ttl=minutes(10),
+        ),
+        conflict_policy=ConflictPolicy.FIRST_WRITER,
+    ),
+])
+guard = Guard(space)
+scheduler = Scheduler(space)
+
+weather_agent = Agent(
+    name="weather-poller",
+    scopes={"weather": ["observation", "intent", "action"]},
+    manifest=AgentManifest(
+        outputs=(
+            ("weather", MarkType.OBSERVATION),
+            ("weather", MarkType.ACTION),
+        ),
+        schedule_interval=minutes(5),  # principal sets the schedule
+    ),
+)
+scheduler.register(weather_agent)
+```
+
+**LLM drives tool calls; the guard wraps execution.** The agent's harness exposes tools to the LLM. When the LLM calls `poll_weather`, the guard writes an intent mark, checks for conflicts (is another agent already polling this city?), executes the API call only if allowed, then writes an action mark recording what happened.
+
+```python
+# LLM calls poll_weather("London") via tool use.
+# The harness routes it through the guard:
+
+decision, result = guard.execute(
+    agent=weather_agent,
+    scope="weather",
+    resource=f"poll-london-{tick}",  # unique per activation
+    intent_action="poll",
+    result_action="polled",
+    tool_fn=lambda: fetch_weather_api("London"),
+    confidence=0.9,
+)
+# guard.execute does: write intent -> check conflicts -> call fetch_weather_api -> write action
+# Resource key is unique per activation so repeated polls don't conflict with their own history.
+# If another agent claims the same resource, decision.verdict == CONFLICT and the API never fires.
+```
+
+**Agent writes observations; the scope enforces constraints.** After polling, the LLM writes an observation with what it learned. The scope validates the topic - if the LLM tries `topic="secret_data"`, the write is rejected because only `("forecast", "current")` are allowed.
+
+```python
+space.write(
+    weather_agent,
+    Observation(
+        scope="weather",
+        topic="forecast",
+        content={"city": "London", "high": 18, "low": 12, "summary": "Overcast, light rain PM"},
+        source=Source.FLEET,
+        confidence=0.8,
+    ),
+)
+```
+
+**Downstream agents compose without coupling.** A travel planning agent subscribes to weather observations. It does not know the weather agent exists - it reads marks from the environment.
+
+```python
+travel_agent = Agent(
+    name="travel-planner",
+    scopes={"travel": ["observation", "intent", "action"]},
+    manifest=AgentManifest(
+        inputs=(WatchPattern(scope="weather", mark_type=MarkType.OBSERVATION, topic="forecast"),),
+        outputs=(("travel", MarkType.INTENT),),
+    ),
+)
+space.subscribe(travel_agent, list(travel_agent.manifest.inputs))
+
+# When weather-poller writes a forecast, travel-planner's next call to
+# get_watched_marks() returns it. No agent addressing. No message passing.
+new_marks = space.get_watched_marks(travel_agent)
+```
+
+**Decay handles staleness.** The 3-hour observation half-life means yesterday's forecast has near-zero effective strength. Readers always see current strength at read time - no explicit cache invalidation, no TTL logic in the agent.
+
+The LLM chooses what to poll, what confidence to assign, what summary to write. The guard and mark space enforce what it is allowed to do and how long its output lasts. Agent quality affects forecast quality. Agent quality cannot compromise scope boundaries, conflict resolution, or decay semantics.
+
+### Biological Parallel
+
+Ant colonies don't have "general-purpose ants." Nurses nurse, and soldiers guard. Each caste has a narrow behavioral repertoire. Coordination happens through pheromone trails (marks), not through ants knowing about each other. Adding a new caste doesn't require retraining existing ants.
+
+The [division of labor in social insects](https://doi.org/10.1007/BF02223791) (Grasse, 1959) emerges from simple local rules, not from central assignment. Each individual responds to environmental signals (pheromone concentrations) according to its caste-specific thresholds. The colony-level behavior (efficient foraging, nest construction, defense) emerges from the composition of many narrow specialists through a shared chemical environment. [Bonabeau et al. (1999)](https://global.oup.com/academic/product/swarm-intelligence-9780195131598) formalize this: the complexity is in the composition, not in the individuals.
+
+The same principle applies here. A fleet of 20 narrow agents - each watching specific mark patterns, each writing specific mark types - can solve complex coordination problems that a single monolithic agent cannot. The complexity is in the pipeline topology (how agents compose through scopes), not in any single agent's logic.
+
+### Computational Parallel
+
+This extends the precedents listed in [Related Work](#related-work):
+
+**Kubernetes controllers** are small, single-purpose agents that compose through the API server (etcd). The replication controller watches pod counts. The scheduler watches unscheduled pods. The node controller watches node health. Each controller does one thing. Adding a new controller (e.g., a custom autoscaler) requires no changes to existing controllers. The API server is the mark space; resources are marks; controllers are agents.
+
+**Unix pipes** compose small programs through stdin/stdout. The shell (`|`) is the composition operator. Each program transforms its input stream and writes its output stream. The operating system handles buffering and flow control. Programs don't know about each other - `sort` works the same whether it's fed by `grep` or `cat` or `curl`.
+
+**Linda tuple spaces** ([Gelernter, 1985](https://doi.org/10.1145/2363.2433)) compose processes through a shared tuple space. Processes write tuples and pattern-match to read them. No process addresses another process directly. The tuple space is the composition mechanism. markspace's typed marks with scope-based routing are a descendant of this pattern, adapted for agent fleets with decay, trust, and conflict resolution.
+
+In all three cases, the pattern is the same: remove direct coupling between components, compose through a shared environment with a universal data format. The environment does the routing; the components do the work. markspace applies this pattern to LLM agent coordination, where the additional challenge is that components (LLMs) are non-deterministic - making the case for infrastructure-enforced composition even stronger.
+
 
 ## Evaluation
 
@@ -568,9 +749,9 @@ The protocol is a coordination primitive, not a complete agent safety system. It
 
 ### Coverage Against Intelligent Delegation
 
-[Intelligent Delegation](https://arxiv.org/html/2602.11865v1) frames the broader challenge of safe delegation and identifies nine technical components (trust management, permissions and access control, monitoring, adaptive coordination, verifiable completion, security, delegation chains, accountability, and human oversight). Markspace covers five of the nine.
+[Intelligent Delegation](https://arxiv.org/html/2602.11865v1) frames the broader challenge of safe delegation and identifies nine technical components (trust management, permissions and access control, monitoring, adaptive coordination, verifiable completion, security, delegation chains, accountability, and human oversight). markspace covers five of the nine.
 
-| Component | MarkSpace Coverage | Notes |
+| Component | markspace | Notes |
 |---|---|---|
 | 1. Trust management | Partial | Three static source levels (fleet, verified, unverified). No dynamic trust updating, reputation, or experience-based trust. Sufficient for LLM non-compliance; insufficient for rational adversaries. |
 | 2. Permissions and access control | Yes | Scope-based write authorization, hierarchical scope inheritance, three visibility levels (OPEN/PROTECTED/CLASSIFIED). Guard enforces mechanically. |
@@ -578,11 +759,11 @@ The protocol is a coordination primitive, not a complete agent safety system. It
 | 4. Adaptive coordination | Partial | Decay and reinforcement adapt signal strength over time. Conflict resolution adapts to mark state. No runtime adaptation of coordination strategy itself (e.g., switching conflict policies based on load). |
 | 5. Verifiable completion | Partial | Action marks record outcomes. Supersession chains track state transitions. No verification that the action's result is correct (the protocol records what happened, not whether it was right). |
 | 6. Security | Yes | Guard enforces authorization independent of LLM compliance. Scope visibility prevents information leakage. Trust weighting attenuates untrusted sources. Adversarial robustness validated (171 denied attempts). |
-| 7. Delegation chains | No | MarkSpace coordinates peer agents. It does not model agent-to-agent delegation, sub-task assignment, or hierarchical authority beyond the principal-fleet boundary. |
+| 7. Delegation chains | No | markspace coordinates peer agents. It does not model agent-to-agent delegation, sub-task assignment, or hierarchical authority beyond the principal-fleet boundary. |
 | 8. Accountability | Partial | Every mark has an `agent_id`. Actions are attributed. But there is no mechanism for post-hoc blame assignment, audit queries, or compliance reporting. |
 | 9. Human oversight | Yes | Need marks + `aggregate_needs()` + principal resolution. YIELD_ALL policy escalates contested resources to the principal. The principal interface is the protocol's primary human-in-the-loop mechanism. |
 
-The gaps (delegation chains, dynamic trust, agent-internal monitoring, verifiable correctness) are real but intentional. MarkSpace is a coordination primitive, not a complete delegation framework. The components it covers are the ones that can be enforced structurally through environment design. The components it omits require agent-internal mechanisms that operate at a different architectural level.
+The gaps (delegation chains, dynamic trust, agent-internal monitoring, verifiable correctness) are real but intentional. markspace is a coordination primitive, not a complete delegation framework. The components it covers are the ones that can be enforced structurally through environment design. The components it omits require agent-internal mechanisms that operate at a different architectural level.
 
 ### Theoretical Grounding
 
@@ -597,7 +778,7 @@ Stigmergy isn't new to computer science, though it has seen limited adoption for
 
 **Tuple spaces** ([Gelernter, 1985](https://doi.org/10.1145/2363.2433)): the Linda coordination language. Processes communicate by writing tuples to a shared space and pattern-matching to read them. No process addresses another process directly. Coordination through shared state, and a direct computational analogue of stigmergy.
 
-**Blackboard systems** ([Hayes-Roth, 1985](https://doi.org/10.1016/0004-3702(85)90016-6)): AI architecture where multiple knowledge sources write to a shared workspace. Each knowledge source monitors the blackboard for patterns that trigger its rules. No knowledge source communicates with any other. The blackboard itself provides the coordination. The [HEARSAY-II](https://doi.org/10.1016/0004-3702(80)90004-5) speech understanding system (Erman et al., 1980) is the canonical implementation: multiple knowledge sources (acoustic, phonetic, lexical, syntactic) coordinate exclusively through a shared blackboard, with no knowledge source aware of any other's existence. [Nii (1986)](https://doi.org/10.1609/aimag.v7i2.537) formalized the pattern. MarkSpace's typed marks, scoped namespaces, and strength-based reading are a direct descendant of this lineage, adapted for LLM agents.
+**Blackboard systems** ([Hayes-Roth, 1985](https://doi.org/10.1016/0004-3702(85)90016-6)): AI architecture where multiple knowledge sources write to a shared workspace. Each knowledge source monitors the blackboard for patterns that trigger its rules. No knowledge source communicates with any other. The blackboard itself provides the coordination. The [HEARSAY-II](https://doi.org/10.1016/0004-3702(80)90004-5) speech understanding system (Erman et al., 1980) is the canonical implementation: multiple knowledge sources (acoustic, phonetic, lexical, syntactic) coordinate exclusively through a shared blackboard, with no knowledge source aware of any other's existence. [Nii (1986)](https://doi.org/10.1609/aimag.v7i2.537) formalized the pattern. markspace's typed marks, scoped namespaces, and strength-based reading are a direct descendant of this lineage, adapted for LLM agents.
 
 **Hoare monitors** ([Hoare, 1974](https://doi.org/10.1145/355620.361161)): the guard layer ([Section 9 of the spec](spec.md#9-guard-deterministic-enforcement-layer)) is a descendant of Hoare's monitor concept. A monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. The guard wraps the mark space: every tool call passes through `pre_action` (precondition check) before execution, with a lock ensuring atomicity. The difference is that Hoare monitors enforce programmer-specified invariants, while the guard enforces protocol-specified invariants that the LLM agent cannot override.
 
@@ -631,7 +812,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 **LangGraph** ([langchain-ai/langgraph](https://github.com/langchain-ai/langgraph)): graph-based agent orchestration from LangChain. Coordination is defined as a state machine with explicit edges between nodes. Deterministic control flow; supports dynamic routing and conditional edges, but the graph topology must be defined upfront. Adding a new agent requires modifying the graph definition.
 
-**AgentSpec** ([Wang et al., ICSE 2026](https://arxiv.org/abs/2503.18666)): domain-specific language for specifying and enforcing runtime constraints on LLM agents. Closest to our guard layer in spirit: both aim to make safety properties independent of LLM compliance. AgentSpec specifies what tools an agent may call and under what conditions; the guard layer specifies what mark-space operations are permitted and enforces conflict resolution. AgentSpec operates at the individual agent level; MarkSpace operates at the fleet coordination level.
+**AgentSpec** ([Wang et al., ICSE 2026](https://arxiv.org/abs/2503.18666)): domain-specific language for specifying and enforcing runtime constraints on LLM agents. Closest to our guard layer in spirit: both aim to make safety properties independent of LLM compliance. AgentSpec specifies what tools an agent may call and under what conditions; the guard layer specifies what mark-space operations are permitted and enforces conflict resolution. AgentSpec operates at the individual agent level; markspace operates at the fleet coordination level.
 
 **MARTI** ([TsinghuaC3I/MARTI](https://github.com/TsinghuaC3I/MARTI), ICLR 2026): multi-agent reinforced training and inference with tree search. Focuses on training agents to coordinate, not on runtime coordination protocols. Different problem (how to learn coordination vs how to enforce it).
 

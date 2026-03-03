@@ -13,6 +13,7 @@ Usage:
 Spec: ../docs/spec.md
 """
 
+from markspace.compose import validate_manifest_permissions, validate_pipeline
 from markspace.core import (
     CONTENT_FIELDS,
     REINFORCEMENT_CAP,
@@ -20,6 +21,7 @@ from markspace.core import (
     TRUST_WEIGHTS,
     Action,
     Agent,
+    AgentManifest,
     AnyMark,
     ConflictPolicy,
     DecayConfig,
@@ -33,6 +35,7 @@ from markspace.core import (
     Severity,
     Source,
     Warning,
+    WatchPattern,
     compute_strength,
     effective_strength,
     effective_strength_with_warnings,
@@ -45,6 +48,7 @@ from markspace.core import (
 )
 from markspace.guard import Guard, GuardDecision, GuardVerdict
 from markspace.llm import LLMClient, LLMConfig
+from markspace.schedule import Scheduler
 from markspace.models import DEFAULT_MODELS, FIREWORKS_MODELS, resolve_model_id
 from markspace.space import MarkSpace, NeedCluster, ScopeError, ValidationError
 
@@ -52,6 +56,7 @@ __all__ = [
     # Types
     "Action",
     "Agent",
+    "AgentManifest",
     "AnyMark",
     "ConflictPolicy",
     "DecayConfig",
@@ -68,6 +73,7 @@ __all__ = [
     "Source",
     "ValidationError",
     "Warning",
+    "WatchPattern",
     # Functions
     "compute_strength",
     "effective_strength",
@@ -78,6 +84,8 @@ __all__ = [
     "reinforce",
     "resolve_conflict",
     "trust_weight",
+    "validate_manifest_permissions",
+    "validate_pipeline",
     # Constants
     "CONTENT_FIELDS",
     "REINFORCEMENT_CAP",
@@ -85,6 +93,8 @@ __all__ = [
     "TRUST_WEIGHTS",
     # Stateful
     "MarkSpace",
+    # Scheduler
+    "Scheduler",
     # Guard
     "Guard",
     "GuardDecision",

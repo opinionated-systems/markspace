@@ -56,10 +56,22 @@
 - [11. Agent](#11-agent)
   - [11.1 Agent Definition](#111-agent-definition)
   - [11.2 Agent-Local Rules](#112-agent-local-rules)
-- [12. Properties Summary](#12-properties-summary)
-- [13. Reference Implementation](#13-reference-implementation)
-  - [13.1 DSL Usage](#131-dsl-usage)
-- [14. Conformance](#14-conformance)
+  - [11.3 Agent Manifests](#113-agent-manifests)
+- [12. Reference Implementation](#12-reference-implementation)
+  - [12.1 DSL Usage](#121-dsl-usage)
+- [13. Agent Composition](#13-agent-composition)
+  - [13.1 Watch Patterns](#131-watch-patterns)
+  - [13.2 Agent Manifests](#132-agent-manifests)
+  - [13.3 Subscription](#133-subscription)
+  - [13.4 Watched Marks](#134-watched-marks)
+  - [13.5 Composition Validation](#135-composition-validation)
+  - [13.6 Formal Properties](#136-formal-properties)
+- [14. Scheduling](#14-scheduling)
+  - [14.1 Schedule Configuration](#141-schedule-configuration)
+  - [14.2 Scheduler](#142-scheduler)
+  - [14.3 Formal Properties](#143-formal-properties)
+- [15. Properties Summary](#15-properties-summary)
+- [16. Conformance](#16-conformance)
 
 ## Abstract
 
@@ -67,7 +79,7 @@ This document specifies a coordination protocol for autonomous agent fleets base
 
 The specification is accompanied by a Python reference implementation and property tests. Every normative statement (MUST, SHOULD, MAY) maps to an executable test. The reference implementation demonstrates that these properties hold together consistently; any language can reimplement it by satisfying the same test suite.
 
-**Verification level.** The 32 properties are verified empirically through Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)), not through formal model checking (e.g., [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47), or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests exercise each property across randomized inputs and edge cases, and the stress test validates them under realistic concurrent load (105 agents, 10 rounds). This provides high confidence that the properties hold in practice but does not constitute a formal proof. A formal verification effort would strengthen the safety guarantees, particularly for P11 (Determinism) and P12 (Progress), which make claims about all possible states.
+**Verification level.** The 34 mandatory properties are verified empirically through Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)), not through formal model checking (e.g., [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47), or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests exercise each property across randomized inputs and edge cases, and the stress test validates them under realistic concurrent load (105 agents, 10 rounds). This provides high confidence that the properties hold in practice but does not constitute a formal proof. A formal verification effort would strengthen the safety guarantees, particularly for P11 (Determinism) and P12 (Progress), which make claims about all possible states.
 
 ## 1. Terminology
 
@@ -277,7 +289,7 @@ Ref: [`markspace/core.py::compute_strength`](../markspace/core.py)
 
 **P2: Action Permanence**: Action mark strength MUST be constant. For all `t1, t2`: `strength(action_mark, t1) == strength(action_mark, t2)`.
 
-**P3: Convergence**: Given no new marks, the total strength of all transient marks (observations + warnings) in the space MUST converge to 0 as t → ∞.
+**P3: Convergence**: Given no new marks, the total strength of all transient marks (observations + warnings) in the space MUST converge to 0 as t -> infinity.
 
 **P4: Intent Expiry**: An intent mark's strength MUST be 0 for all `t > created_at + ttl`.
 
@@ -383,7 +395,7 @@ When an agent reads intent marks on a resource it also intends to modify:
 
 ### 6.2 Deferred Resolution
 
-Lock-based guards (Section 9) serialize access: at most one agent enters `pre_action` at a time per scope. Under serialization, HIGHEST_CONFIDENCE degenerates to FIRST_WRITER because the second agent finds an already-committed action, not a competing intent. The guard returns CONFLICT (resource taken), never performing the confidence comparison. This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html): a low-priority agent holding the lock blocks a higher-priority agent.
+Lock-based guards ([Section 9](#9-guard-deterministic-enforcement-layer)) serialize access: at most one agent enters `pre_action` at a time per scope. Under serialization, HIGHEST_CONFIDENCE degenerates to FIRST_WRITER because the second agent finds an already-committed action, not a competing intent. The guard returns CONFLICT (resource taken), never performing the confidence comparison. This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html): a low-priority agent holding the lock blocks a higher-priority agent.
 
 Deferred resolution fixes this by separating claim collection from allocation.
 
@@ -440,11 +452,11 @@ If two agents both write action marks on the same resource (race condition where
 
 **P13: Consistency**: If agent A yields to agent B's intent, and agent B later abandons (intent expires), agent A MAY re-enter its intent on the next read cycle.
 
-**P30: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL active intents on `(scope, resource)` at the resolution boundary. An intent written before the boundary and still within its TTL MUST NOT be excluded from the comparison.
+**P32: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL active intents on `(scope, resource)` at the resolution boundary. An intent written before the boundary and still within its TTL MUST NOT be excluded from the comparison.
 
-**P31: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent MUST be the one with the highest confidence among all candidates at the resolution boundary. The result MUST be identical to what HIGHEST_CONFIDENCE would produce if all intents were evaluated simultaneously (no serialization effects).
+**P33: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent MUST be the one with the highest confidence among all candidates at the resolution boundary. The result MUST be identical to what HIGHEST_CONFIDENCE would produce if all intents were evaluated simultaneously (no serialization effects).
 
-**P32: Deferred Liveness**: For any scope with `deferred: true` and at least one active intent, a resolution boundary MUST eventually occur. The protocol MUST NOT allow intents to accumulate indefinitely without resolution (intents still expire via TTL as a safety net, but the resolution mechanism SHOULD fire before TTL expiry under normal operation).
+**P34: Deferred Liveness**: For any scope with `deferred: true` and at least one active intent, a resolution boundary MUST eventually occur. The protocol MUST NOT allow intents to accumulate indefinitely without resolution (intents still expire via TTL as a safety net, but the resolution mechanism SHOULD fire before TTL expiry under normal operation).
 
 Ref: [`markspace/core.py::resolve_conflict`](../markspace/core.py), [`tests/test_properties.py::TestConflictProperties`](../tests/test_properties.py)
 
@@ -469,7 +481,7 @@ enum ConflictPolicy {
 
 message Scope {
   string          name               = 1;  // hierarchical namespace ("calendar", "research/topic/X")
-  ScopeVisibility visibility         = 2;  // default: OPEN (Section 7.4)
+  ScopeVisibility visibility         = 2;  // default: OPEN (Section [7.4](#74-scope-visibility))
   repeated string intent_actions     = 3;  // allowed intent action verbs
   repeated string action_actions     = 4;  // allowed action verbs
   repeated string observation_topics = 5;  // allowed observation topics ("*" for any)
@@ -554,19 +566,19 @@ Scope names MAY use `/` as a hierarchy separator. Authorization for a parent sco
 
 **P14: Scope Isolation**: An agent without authorization for scope S MUST be unable to write any mark to S. `write(unauthorized_agent, mark_in_S) → Error`.
 
-**P15a: Structural Visibility**: For OPEN scopes, any agent MUST be able to read full marks regardless of authorization. For PROTECTED scopes, any agent MUST be able to read projected marks (structural metadata preserved, content redacted). `reader=None` (infrastructure) MUST receive full marks regardless of visibility.
+**P15: Structural Visibility**: For OPEN scopes, any agent MUST be able to read full marks regardless of authorization. For PROTECTED scopes, any agent MUST be able to read projected marks (structural metadata preserved, content redacted). `reader=None` (infrastructure) MUST receive full marks regardless of visibility.
 
-**P15b: Content Access**: For PROTECTED scopes, an agent MUST have read authorization to access content fields. Without read authorization, an implementation MUST return projected marks with content fields redacted and `projected=true`.
+**P16: Content Access**: For PROTECTED scopes, an agent MUST have read authorization to access content fields. Without read authorization, an implementation MUST return projected marks with content fields redacted and `projected=true`.
 
-**P15c: Classified Opacity**: For CLASSIFIED scopes, an agent without read authorization MUST receive an empty result. CLASSIFIED scopes MUST NOT fall back to projected reads. It is all-or-nothing.
+**P17: Classified Opacity**: For CLASSIFIED scopes, an agent without read authorization MUST receive an empty result. CLASSIFIED scopes MUST NOT fall back to projected reads. It is all-or-nothing.
 
-**P16: Hierarchy**: Write authorization for scope `"a"` MUST imply write authorization for `"a/b"` and `"a/b/c"` for all b, c. Read authorization MUST follow the same rule.
+**P18: Hierarchy**: Write authorization for scope `"a"` MUST imply write authorization for `"a/b"` and `"a/b/c"` for all b, c. Read authorization MUST follow the same rule.
 
-**P27: Projection Preservation**: A projected mark MUST retain all structural and coordination metadata (id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes). Only content fields (result, content, reason, question, context) are redacted. `projected` MUST be `true`.
+**P29: Projection Preservation**: A projected mark MUST retain all structural and coordination metadata (id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes). Only content fields (result, content, reason, question, context) are redacted. `projected` MUST be `true`.
 
-**P28: Classified No Fallback**: CLASSIFIED scopes MUST NOT provide projected reads as a fallback. An unauthorized reader MUST receive an empty list, not projected marks. This prevents existence leakage.
+**P30: Classified No Fallback**: CLASSIFIED scopes MUST NOT provide projected reads as a fallback. An unauthorized reader MUST receive an empty list, not projected marks. This prevents existence leakage.
 
-**P29: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the parent scope's visibility level. Read authorization for a parent scope MUST imply read authorization for all child scopes.
+**P31: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the parent scope's visibility level. Read authorization for a parent scope MUST imply read authorization for all child scopes.
 
 Ref: [`markspace/core.py::Scope, Agent, ScopeVisibility, project_mark`](../markspace/core.py), [`tests/test_properties.py::TestScopeVisibility`](../tests/test_properties.py)
 
@@ -580,9 +592,9 @@ The mark space is the shared environment. It stores marks and provides read/writ
 write(agent, mark) → mark_id
 
 Preconditions:
-  - agent MUST be authorized for mark.scope (Section 7.3)
+  - agent MUST be authorized for mark.scope ([Section 7.3](#73-scope-authorization))
   - mark.action MUST be in scope's allowed actions for mark.mark_type (if applicable)
-  - mark MUST satisfy type-specific field requirements (Section 2)
+  - mark MUST satisfy type-specific field requirements ([Section 2](#2-mark-types))
 
 Postconditions:
   - mark is stored with a new unique id and created_at = now
@@ -640,11 +652,11 @@ The aggregator is deliberately simple. It groups, scores, and sorts. It has no i
 
 ### 8.5 Formal Properties
 
-**P17: Write Visibility**: A mark written at time t MUST be visible to reads at any time t' > t (within the mark's active lifetime).
+**P19: Write Visibility**: A mark written at time t MUST be visible to reads at any time t' > t (within the mark's active lifetime).
 
-**P18: Read Purity**: Reading marks MUST NOT change any mark's stored state.
+**P20: Read Purity**: Reading marks MUST NOT change any mark's stored state.
 
-**P19: Resolution Immediacy**: Resolving a need mark MUST immediately reduce its effective strength to 0 on the next read.
+**P21: Resolution Immediacy**: Resolving a need mark MUST immediately reduce its effective strength to 0 on the next read.
 
 Ref: [`markspace/space.py::MarkSpace`](../markspace/space.py), [`tests/test_properties.py::TestMarkSpaceProperties`](../tests/test_properties.py)
 
@@ -738,17 +750,17 @@ Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.p
 
 ### 9.6 Formal Properties
 
-**P20: Invalidation Bound**: A warning MUST NOT reduce a mark's effective strength below 0.
+**P22: Invalidation Bound**: A warning MUST NOT reduce a mark's effective strength below 0.
 
-**P21: Invalidation Decay**: As a warning decays, the invalidated mark's effective strength MUST recover (assuming the mark itself hasn't fully decayed).
+**P23: Invalidation Decay**: As a warning decays, the invalidated mark's effective strength MUST recover (assuming the mark itself hasn't fully decayed).
 
-**P22: Guard Determinism**: Given the same mark space state, `pre_action` MUST return the same verdict for the same inputs.
+**P24: Guard Determinism**: Given the same mark space state, `pre_action` MUST return the same verdict for the same inputs.
 
-**P23: Guard Atomicity**: If `pre_action` returns CONFLICT or BLOCKED, `tool_fn` MUST NOT be called. The tool function is never invoked unless the guard explicitly allows it.
+**P25: Guard Atomicity**: If `pre_action` returns CONFLICT or BLOCKED, `tool_fn` MUST NOT be called. The tool function is never invoked unless the guard explicitly allows it.
 
-**P24: Guard Transparency**: The `GuardDecision` MUST contain enough information for the agent to reason about why it was blocked and choose an alternative.
+**P26: Guard Transparency**: The `GuardDecision` MUST contain enough information for the agent to reason about why it was blocked and choose an alternative.
 
-**P26: Action Precedence**: If an action mark exists on a resource from agent X, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
+**P28: Action Precedence**: If an action mark exists on a resource from agent X, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
 
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_guard.py`](../tests/test_guard.py)
 
@@ -766,7 +778,7 @@ Any mark type MAY include an `optional string supersedes` field. When set, the r
 
 ### 10.1 Formal Properties
 
-**P25: Supersession Transitivity**: If mark C supersedes B, and B supersedes A, then A, B are both invisible and C is the only visible mark.
+**P27: Supersession Transitivity**: If mark C supersedes B, and B supersedes A, then A, B are both invisible and C is the only visible mark.
 
 Ref: [`tests/test_guard.py::TestGeneralizedSupersession`](../tests/test_guard.py)
 
@@ -787,6 +799,7 @@ message Agent {
   string                   name        = 2;
   repeated ScopePermission permissions = 3;  // write permissions
   repeated string          read_scopes = 4;  // scopes with full content read access
+  optional AgentManifest   manifest    = 5;  // composition contract ([Section 13](#13-agent-composition))
 }
 ```
 
@@ -802,69 +815,36 @@ The protocol does not prescribe agent-internal logic. An agent's behavior is def
 
 The decomposability guarantee follows from this. You can test an agent in isolation by mocking the mark space. You can add new agents without changing existing ones. The mark space is the only coupling point.
 
-## 12. Properties Summary
+### 11.3 Agent Manifests
 
-All normative properties, collected. A conforming implementation MUST satisfy all of these. The reference implementation's test suite verifies each one.
+An agent MAY carry an `AgentManifest` that declares its input/output contract. The manifest makes the agent's interface explicit - what marks it reads and what marks it writes - enabling composition validation without runtime state. See [Section 13](#13-agent-composition) for details.
 
-| ID | Property | Section |
-|----|----------|---------|
-| P1 | Decay Monotonicity | 3.2 |
-| P2 | Action Permanence | 3.2 |
-| P3 | Convergence | 3.2 |
-| P4 | Intent Expiry | 3.2 |
-| P5 | Need Persistence | 3.2 |
-| P6 | Trust Ordering | 4.3 |
-| P7 | Trust Bounds | 4.3 |
-| P8 | Sublinearity | 5.3 |
-| P9 | Boundedness | 5.3 |
-| P10 | Monotonic Addition | 5.3 |
-| P11 | Determinism | 6.3 |
-| P12 | Progress | 6.3 |
-| P13 | Consistency | 6.3 |
-| P14 | Scope Isolation | 7.6 |
-| P15a | Structural Visibility | 7.6 |
-| P15b | Content Access | 7.6 |
-| P15c | Classified Opacity | 7.6 |
-| P16 | Hierarchy | 7.6 |
-| P17 | Write Visibility | 8.5 |
-| P18 | Read Purity | 8.5 |
-| P19 | Resolution Immediacy | 8.5 |
-| P20 | Invalidation Bound | 9.6 |
-| P21 | Invalidation Decay | 9.6 |
-| P22 | Guard Determinism | 9.6 |
-| P23 | Guard Atomicity | 9.6 |
-| P24 | Guard Transparency | 9.6 |
-| P25 | Supersession Transitivity | 10.1 |
-| P26 | Action Precedence | 9.6 |
-| P27 | Projection Preservation | 7.4 |
-| P28 | Classified No Fallback | 7.4 |
-| P29 | Visibility Hierarchy | 7.4 |
-| P30 | Deferred Completeness | 6.4 |
-| P31 | Deferred Priority Fidelity | 6.4 |
-| P32 | Deferred Liveness | 6.4 |
-
-## 13. Reference Implementation
+## 12. Reference Implementation
 
 The reference implementation is in Python (3.11+), with pydantic and httpx as runtime dependencies. It is structured as:
 
 ```
 markspace/
   core.py          -- types, decay, trust, reinforcement, conflict resolution
-  space.py         -- MarkSpace (stateful read/write/query)
+  space.py         -- MarkSpace (stateful read/write/query, watch/subscribe)
   guard.py         -- Guard (deterministic enforcement layer)
+  compose.py       -- composition validation (pipeline, manifest-permission checks)
+  schedule.py      -- mark-driven scheduling (reads configs, writes activations)
   llm.py           -- provider-agnostic LLM client (OpenAI-compatible)
   models.py        -- model registry
   __init__.py      -- DSL re-exports
 
 tests/
-  test_properties.py  -- property tests (P1-P21, P27-P29)
-  test_guard.py       -- guard enforcement, supersession, deferred resolution (P22-P26, P30-P32)
-  test_scenarios.py   -- end-to-end coordination scenarios
-  test_concurrent.py  -- thread-safety tests
-  test_hypothesis.py  -- hypothesis property-based tests with randomized inputs
+  test_properties.py    -- property tests (P1-P23, P29-P31)
+  test_guard.py         -- guard enforcement, supersession, deferred resolution (P24-P28, P32-P34)
+  test_composition.py   -- composition property tests (P35-P42)
+  test_schedule.py      -- scheduling property tests (P43)
+  test_scenarios.py     -- end-to-end coordination scenarios
+  test_concurrent.py    -- thread-safety tests
+  test_hypothesis.py    -- hypothesis property-based tests with randomized inputs
 ```
 
-### 13.1 DSL Usage
+### 12.1 DSL Usage
 
 ```python
 from markspace import (
@@ -942,7 +922,215 @@ marks = space.read(scope="calendar", resource="thu-14:00")
 # Intent is gone (superseded)
 ```
 
-## 14. Conformance
+## 13. Agent Composition
+
+The protocol follows the Unix philosophy: small agents that do one thing well, composed through the shared mark space. Marks are the universal interface (like stdin/stdout), the mark space is the composition mechanism (like pipes), and scopes are the namespaces (like the filesystem). Agents don't know about each other - they read from the mark space and write to it. The principal composes them by defining scopes and permissions.
+
+This section defines two mechanisms that make composition explicit and reactive: **watch patterns** for declaring interest in marks, and **agent manifests** for declaring input/output contracts.
+
+### 13.1 Watch Patterns
+
+A watch pattern describes a set of marks an agent is interested in.
+
+```protobuf
+message WatchPattern {
+  string              scope     = 1;  // required. hierarchical matching (P18)
+  optional MarkType   mark_type = 2;  // optional filter
+  optional string     topic     = 3;  // optional filter (observations, warnings)
+  optional string     resource  = 4;  // optional filter (intents, actions)
+}
+```
+
+Pattern matching: a mark matches a WatchPattern if all specified fields match. Unspecified optional fields match any value. Scope matching is hierarchical: a pattern with scope "sensors" matches marks in "sensors", "sensors/temperature", "sensors/pressure", etc.
+
+### 13.2 Agent Manifests
+
+An agent manifest declares the agent's input/output contract.
+
+```protobuf
+message ManifestOutput {
+  string   scope     = 1;
+  MarkType mark_type = 2;
+}
+
+message AgentManifest {
+  repeated WatchPattern  inputs            = 1;  // marks this agent reads (triggers)
+  repeated ManifestOutput outputs          = 2;  // marks this agent writes
+  optional double        schedule_interval = 3;  // seconds between activations ([Section 14](#14-scheduling))
+}
+```
+
+The manifest is purely declarative. It does not execute anything. It is used by:
+- **Composition validation**: check that a sequence of agents forms a connected pipeline.
+- **Permission validation**: check that declared outputs are consistent with the agent's write permissions.
+- **Documentation**: understand what an agent does by reading its manifest, without reading its code.
+
+### 13.3 Subscription
+
+An agent registers interest in mark patterns via `subscribe()`.
+
+```
+subscribe(agent, patterns: list[WatchPattern]) -> void
+
+Preconditions:
+  - agent is a valid Agent
+  - patterns is a non-empty list of WatchPatterns
+
+Postconditions:
+  - Agent's subscription is set to the given patterns (P35: replaces any prior subscription)
+  - Marks written after this call that match any pattern will be queued for the agent (P36: not retroactive)
+```
+
+```
+unsubscribe(agent) -> void
+
+Postconditions:
+  - Agent's subscription and pending queue are removed
+  - No further marks are queued for this agent
+```
+
+### 13.4 Watched Marks
+
+An agent retrieves queued marks via polling.
+
+```
+get_watched_marks(agent, clear=true) -> list[Mark]
+
+Postconditions:
+  - Returns marks written since the last poll that match the agent's subscription patterns (P37)
+  - If clear=true: the queue is emptied; the same marks will not be returned again (P38)
+  - If clear=false: the queue is preserved for re-reading
+  - Marks are returned in write order (P39)
+```
+
+Agents are not notified about their own writes. If agent A writes a mark and agent A is subscribed to a matching pattern, the mark is not queued for A.
+
+### 13.5 Composition Validation
+
+Two validation functions operate on manifests without runtime state.
+
+**Pipeline validation**: given a sequence of agents `[A, B, C]`, check that A's outputs can feed B's inputs, and B's outputs can feed C's inputs. A connection exists when at least one output `(scope, mark_type)` matches an input WatchPattern (scope match, mark_type match or wildcard).
+
+**Manifest-permission validation**: check that every output `(scope, mark_type)` in an agent's manifest is covered by the agent's write permissions. This is a static check - if it fails, the agent's manifest promises something it cannot deliver.
+
+### 13.6 Formal Properties
+
+**P35: Subscription Idempotency**: Calling `subscribe(agent, patterns)` MUST replace any previous subscription for that agent. Re-subscribing MUST NOT cause duplicate deliveries.
+
+**P36: Subscription Prospective**: `subscribe()` MUST NOT retroactively deliver marks written before the subscription. Only marks written after `subscribe()` are candidates for delivery.
+
+**P37: Watch Subset**: `get_watched_marks()` MUST return only marks that match at least one of the agent's subscribed patterns. Marks that do not match any pattern MUST NOT be delivered.
+
+**P38: At-Most-Once Delivery**: When `get_watched_marks(agent, clear=true)` is called, each mark MUST be delivered at most once. Subsequent calls MUST NOT return the same marks.
+
+**P39: Write-Order Delivery**: Marks returned by `get_watched_marks()` MUST be ordered by write time (the order in which `write()` was called). Within a single poll, earlier writes appear before later writes.
+
+**P40: Pipeline Structural Validation**: Pipeline validation MUST depend only on agent manifests, not on runtime mark space state. It is a pure function of the agents' declared inputs and outputs.
+
+**P41: Manifest-Permission Consistency**: Every output declared in an agent's manifest MUST be a subset of the agent's write permissions. An agent MUST NOT declare an output it is not authorized to produce.
+
+**P42: Pattern Match Purity**: `WatchPattern.matches(mark)` MUST be a pure function. It MUST NOT modify the mark, the pattern, or any external state.
+
+Ref: [`markspace/core.py::WatchPattern, AgentManifest`](../markspace/core.py), [`markspace/space.py::subscribe, get_watched_marks`](../markspace/space.py), [`markspace/compose.py`](../markspace/compose.py), [`tests/test_composition.py`](../tests/test_composition.py)
+
+**Note on source agents.** The subscription mechanism activates downstream agents reactively when upstream marks appear. Source agents - those at the start of a pipeline with no upstream marks - need a different trigger. [Section 14 (Scheduling)](#14-scheduling) provides this through the agent manifest: the principal sets `schedule_interval` on the agent's manifest, and the Scheduler infrastructure determines when the agent is due for activation. No marks are involved - scheduling is a property of the agent, not a signal in the environment.
+
+
+## 14. Scheduling
+
+Downstream agents activate reactively through subscription ([Section 13.3](#133-subscription)). Source agents - agents with no upstream marks - need an external trigger. Scheduling provides this trigger through the agent manifest: the principal sets `schedule_interval` when creating or configuring an agent, and the Scheduler infrastructure determines when each agent is due.
+
+### 14.1 Schedule Configuration
+
+A schedule is a property of the agent manifest. The principal sets `schedule_interval` (in seconds) when creating or updating an agent:
+
+```python
+agent = Agent(
+    name="weather-poller",
+    scopes={"weather": ["observation"]},
+    manifest=AgentManifest(
+        outputs=(("weather", MarkType.OBSERVATION),),
+        schedule_interval=minutes(5),  # principal sets this
+    ),
+)
+```
+
+- `schedule_interval` (float, > 0, or None): seconds between activations.
+- The principal can change the schedule by creating a new agent configuration with a different interval.
+- Agents without `schedule_interval` (or with None) are not scheduled.
+
+### 14.2 Scheduler
+
+The Scheduler is infrastructure, like the Guard. It reads agent manifests and tracks activation timing. No marks are involved - scheduling is a property of the agent, not a signal in the environment.
+
+**`register(agent)`**: Register an agent for scheduling. Reads `schedule_interval` from the agent's manifest. Agents without a manifest or interval are ignored.
+
+**`due()`**: Return agents whose `schedule_interval` has elapsed since their last activation. Newly registered agents (never activated) are immediately due.
+
+**`tick_all()`**: Return due agents and mark them all as activated. Convenience method combining `due()` + `mark_activated()`.
+
+**`update(agent)`**: Update an existing schedule with a new manifest. Preserves last activation time so the agent is not prematurely re-triggered.
+
+**`start(poll_interval)` / `stop()`**: Background thread that calls `tick_all()` periodically. The timer is the only non-deterministic component; all other methods are testable without real time.
+
+### 14.3 Formal Properties
+
+**P43: Schedule Interval**: For each scheduled agent, the minimum time between consecutive activations MUST be at least `schedule_interval`. If activation A occurs at time `t1` and the next activation B occurs at time `t2`, then `t2 - t1 >= schedule_interval`.
+
+Ref: [`markspace/schedule.py`](../markspace/schedule.py), [`tests/test_schedule.py`](../tests/test_schedule.py)
+
+
+## 15. Properties Summary
+
+All normative properties, collected. A conforming implementation MUST satisfy P1-P34. Properties P35-P42 (composition) and P43 (scheduling) are OPTIONAL. The reference implementation's test suite verifies each one.
+
+| ID | Property | Section |
+|----|----------|---------|
+| P1 | Decay Monotonicity | 3.2 |
+| P2 | Action Permanence | 3.2 |
+| P3 | Convergence | 3.2 |
+| P4 | Intent Expiry | 3.2 |
+| P5 | Need Persistence | 3.2 |
+| P6 | Trust Ordering | 4.3 |
+| P7 | Trust Bounds | 4.3 |
+| P8 | Sublinearity | 5.3 |
+| P9 | Boundedness | 5.3 |
+| P10 | Monotonic Addition | 5.3 |
+| P11 | Determinism | 6.3 |
+| P12 | Progress | 6.3 |
+| P13 | Consistency | 6.3 |
+| P14 | Scope Isolation | 7.6 |
+| P15 | Structural Visibility | 7.6 |
+| P16 | Content Access | 7.6 |
+| P17 | Classified Opacity | 7.6 |
+| P18 | Hierarchy | 7.6 |
+| P19 | Write Visibility | 8.5 |
+| P20 | Read Purity | 8.5 |
+| P21 | Resolution Immediacy | 8.5 |
+| P22 | Invalidation Bound | 9.6 |
+| P23 | Invalidation Decay | 9.6 |
+| P24 | Guard Determinism | 9.6 |
+| P25 | Guard Atomicity | 9.6 |
+| P26 | Guard Transparency | 9.6 |
+| P27 | Supersession Transitivity | 10.1 |
+| P28 | Action Precedence | 9.6 |
+| P29 | Projection Preservation | 7.4 |
+| P30 | Classified No Fallback | 7.4 |
+| P31 | Visibility Hierarchy | 7.4 |
+| P32 | Deferred Completeness | 6.4 |
+| P33 | Deferred Priority Fidelity | 6.4 |
+| P34 | Deferred Liveness | 6.4 |
+| P35 | Subscription Idempotency | 13.6 |
+| P36 | Subscription Prospective | 13.6 |
+| P37 | Watch Subset | 13.6 |
+| P38 | At-Most-Once Delivery | 13.6 |
+| P39 | Write-Order Delivery | 13.6 |
+| P40 | Pipeline Structural Validation | 13.6 |
+| P41 | Manifest-Permission Consistency | 13.6 |
+| P42 | Pattern Match Purity | 13.6 |
+| P43 | Schedule Monotonicity | 14.3 |
+
+## 16. Conformance
 
 An implementation is conformant if:
 
@@ -955,6 +1143,10 @@ An implementation is conformant if:
 7. It provides a deterministic guard layer that enforces coordination without depending on agent compliance ([Section 9](#9-guard-deterministic-enforcement-layer)).
 8. It supports generalized supersession across all mark types ([Section 10](#10-generalized-supersession)).
 9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projected reads and content redaction ([Section 7.4](#74-scope-visibility)).
-10. It satisfies all 32 formal properties ([Section 12](#12-properties-summary)).
+10. It satisfies all 34 formal properties P1-P34 ([Section 15](#15-properties-summary)).
 
 An implementation MAY differ from the reference implementation in storage backend, concurrency model, garbage collection strategy, or internal data structures, provided the properties hold.
+
+An implementation MAY additionally support agent composition ([Section 13](#13-agent-composition)). If it does, it MUST satisfy P35-P42. Composition support is OPTIONAL for conformance.
+
+An implementation MAY additionally support manifest-based scheduling ([Section 14](#14-scheduling)). If it does, it MUST satisfy P43. Scheduling support is OPTIONAL for conformance.

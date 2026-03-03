@@ -162,6 +162,8 @@ class Agent(BaseModel):
     scopes: dict[str, list[str]] = Field(default_factory=dict)
     read_scopes: frozenset[str] = Field(default_factory=frozenset)
 
+    manifest: AgentManifest | None = None  # optional composition contract (Section 14)
+
     def can_write(self, scope_name: str, mark_type: MarkType) -> bool:
         """Check if this agent is authorized to write mark_type in scope_name."""
         for authorized_scope, allowed_types in self.scopes.items():
@@ -175,7 +177,7 @@ class Agent(BaseModel):
     def can_read_content(self, scope_name: str) -> bool:
         """Check if this agent has full content read access for a scope.
 
-        For OPEN scopes, this doesn't matter — everyone sees everything.
+        For OPEN scopes, this doesn't matter - everyone sees everything.
         For PROTECTED scopes, this controls content vs projected reads.
         For CLASSIFIED scopes, this controls any read access at all.
         Hierarchical: read access for "hr" implies access for "hr/compensation".
@@ -186,6 +188,75 @@ class Agent(BaseModel):
             ):
                 return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Watch patterns and agent manifests (composition)
+# ---------------------------------------------------------------------------
+
+
+class WatchPattern(BaseModel):
+    """
+    A pattern describing marks an agent is interested in.
+    Used for subscription-based reactive activation.
+
+    Spec Section 14.1.
+    P42: matches() is a pure function with no side effects.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    scope: str  # required - which scope to watch (hierarchical matching)
+    mark_type: MarkType | None = None  # optional - filter by mark type
+    topic: str | None = None  # optional - filter observations/warnings by topic
+    resource: str | None = None  # optional - filter intents/actions by resource
+
+    def matches(self, mark: AnyMark) -> bool:
+        """Check if a mark matches this pattern. Pure function (P42)."""
+        # Scope: exact or hierarchical (consistent with P18)
+        if mark.scope != self.scope and not mark.scope.startswith(self.scope + "/"):
+            return False
+        if self.mark_type is not None and mark.mark_type != self.mark_type:
+            return False
+        if self.topic is not None:
+            if not hasattr(mark, "topic") or getattr(mark, "topic") != self.topic:
+                return False
+        if self.resource is not None:
+            if not hasattr(mark, "resource") or getattr(mark, "resource") != self.resource:
+                return False
+        return True
+
+
+class AgentManifest(BaseModel):
+    """
+    Declared input/output contract for an agent.
+
+    Makes agent interfaces explicit, enabling composition validation.
+    inputs:  WatchPatterns describing marks this agent reads.
+    outputs: (scope, MarkType) pairs this agent writes.
+    schedule_interval: seconds between activations (set by principal).
+                       None means the agent is not scheduled.
+
+    Spec Sections 13.2 and 14.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    inputs: tuple[WatchPattern, ...] = ()
+    outputs: tuple[tuple[str, MarkType], ...] = ()
+    schedule_interval: float | None = None  # seconds; set by principal
+
+    def produces(self, scope: str, mark_type: MarkType) -> bool:
+        """Check if this manifest declares production of a mark type in a scope."""
+        return (scope, mark_type) in self.outputs
+
+    def consumes_pattern(self, pattern: WatchPattern) -> bool:
+        """Check if this manifest declares consumption matching a pattern."""
+        return pattern in self.inputs
+
+
+# Resolve forward reference: Agent.manifest -> AgentManifest
+Agent.model_rebuild()
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +435,7 @@ def compute_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> fl
 def effective_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> float:
     """
     Effective strength = decay strength * trust weight.
-    Only observation and warning marks carry a source field.
+    Observation and warning marks carry a source field.
     All other mark types are fleet-internal (trust = 1.0).
 
     Spec Section 4.2.
@@ -386,8 +457,8 @@ def effective_strength_with_warnings(
     Warnings targeting this mark reduce its effective strength.
 
     Spec Section 9.5.
-    P20: Result MUST NOT be < 0.
-    P21: As warnings decay, invalidated mark's strength recovers.
+    P22: Result MUST NOT be < 0.
+    P23: As warnings decay, invalidated mark's strength recovers.
     """
     base = effective_strength(mark, now, decay_config)
     total_warning_strength = sum(

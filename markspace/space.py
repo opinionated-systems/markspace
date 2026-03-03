@@ -32,6 +32,7 @@ from markspace.core import (
     Scope,
     ScopeVisibility,
     Warning,
+    WatchPattern,
     compute_strength,
     effective_strength,
     effective_strength_with_warnings,
@@ -72,7 +73,7 @@ class MarkSpace:
 
     This reference implementation uses in-memory storage. A production
     implementation would use a database, Redis, or similar. The properties
-    (P17-P19) must hold regardless of storage backend.
+    (P19-P21) must hold regardless of storage backend.
     """
 
     def __init__(
@@ -82,6 +83,9 @@ class MarkSpace:
         self._marks: dict[uuid.UUID, AnyMark] = {}
         self._scopes: dict[str, Scope] = {}
         self._clock: float | None = clock  # None = use real time
+        # Subscription state for watch/subscribe (Section 14)
+        self._subscriptions: dict[uuid.UUID, list[WatchPattern]] = {}
+        self._pending_notifications: dict[uuid.UUID, list[uuid.UUID]] = {}
         if scopes:
             for scope in scopes:
                 self._scopes[scope.name] = scope
@@ -148,12 +152,13 @@ class MarkSpace:
                     f"Warning topic '{mark.topic}' not allowed in scope '{scope.name}'."
                 )
 
+
     def write(self, agent: Agent, mark: AnyMark) -> uuid.UUID:
         """
         Write a mark to the space.
 
         Spec Section 8.1.
-        P17: mark is immediately visible to subsequent reads.
+        P19: mark is immediately visible to subsequent reads.
 
         Returns the mark's id.
         """
@@ -170,6 +175,7 @@ class MarkSpace:
             # The superseded mark stays in storage but will be filtered at read time
 
             self._marks[mark.id] = mark
+            self._notify_subscribers(mark)
             return mark.id
 
     def read(
@@ -185,7 +191,7 @@ class MarkSpace:
         Read marks from the space, filtered and with effective strength computed.
 
         Spec Section 8.2.
-        P18: Read purity — no side effects on stored marks.
+        P20: Read purity — no side effects on stored marks.
 
         reader: The agent performing the read. Controls visibility:
           - None: full access (used by guard, internal infrastructure).
@@ -274,7 +280,7 @@ class MarkSpace:
         Resolve a need mark by linking it to a decision mark.
 
         Spec Section 8.3.
-        P19: effective strength immediately becomes 0.
+        P21: effective strength immediately becomes 0.
         """
         with self._lock:
             mark = self._marks.get(need_mark_id)
@@ -364,3 +370,68 @@ class MarkSpace:
             if len(intents) <= 1:
                 return intents[0].id if intents else None
             return resolve_conflict(intents, scope_def.conflict_policy)
+
+    # ------------------------------------------------------------------
+    # Watch / Subscribe (Section 14)
+    # ------------------------------------------------------------------
+
+    def subscribe(self, agent: Agent, patterns: list[WatchPattern]) -> None:
+        """
+        Register an agent's interest in mark patterns.
+
+        Subsequent writes matching any pattern will queue the mark
+        for retrieval via get_watched_marks().
+
+        Spec Section 14.3.
+        P35: Idempotent - re-subscribing replaces patterns.
+        P36: Prospective - does not retroactively deliver existing marks.
+        """
+        with self._lock:
+            self._subscriptions[agent.id] = list(patterns)
+            if agent.id not in self._pending_notifications:
+                self._pending_notifications[agent.id] = []
+
+    def unsubscribe(self, agent: Agent) -> None:
+        """Remove all subscriptions for an agent."""
+        with self._lock:
+            self._subscriptions.pop(agent.id, None)
+            self._pending_notifications.pop(agent.id, None)
+
+    def get_watched_marks(
+        self, agent: Agent, clear: bool = True
+    ) -> list[AnyMark]:
+        """
+        Retrieve marks matching an agent's subscriptions since the last poll.
+
+        Spec Section 14.4.
+        P37: Returns only marks matching subscription patterns.
+        P38: At-most-once delivery when clear=True.
+        P39: Marks returned in write order.
+        """
+        with self._lock:
+            pending_ids = self._pending_notifications.get(agent.id, [])
+            marks: list[AnyMark] = []
+            for mark_id in pending_ids:
+                mark = self._marks.get(mark_id)
+                if mark is not None:
+                    marks.append(mark)
+            if clear:
+                self._pending_notifications[agent.id] = []
+            return marks
+
+    def _notify_subscribers(self, mark: AnyMark) -> None:
+        """
+        Check all subscriptions and queue the mark for matching agents.
+        Called internally by write() after storing a mark.
+
+        Agents are not notified about their own writes.
+        """
+        for agent_id, patterns in self._subscriptions.items():
+            if mark.agent_id == agent_id:
+                continue  # don't notify the writer about their own marks
+            for pattern in patterns:
+                if pattern.matches(mark):
+                    self._pending_notifications.setdefault(agent_id, []).append(
+                        mark.id
+                    )
+                    break  # one notification per agent per mark

@@ -2,7 +2,7 @@
 """
 Stigmergic Coordination Protocol — Property Tests
 
-One test per formal property (P1-P21, P27-P29) from the spec.
+One test per formal property (P1-P23, P29-P31) from the spec.
 These tests ARE the spec validation. If they pass, the implementation conforms.
 
 Run: python -m pytest tests/test_properties.py -v
@@ -572,12 +572,12 @@ class TestP15ReadOpenness:
 
 
 # ---------------------------------------------------------------------------
-# P16 — Hierarchy
+# P18 — Hierarchy
 # Authorization for "a" implies authorization for "a/b".
 # ---------------------------------------------------------------------------
 
 
-class TestP16Hierarchy:
+class TestP18Hierarchy:
     def test_parent_scope_covers_children(self) -> None:
         agent = Agent(name="researcher", scopes={"research": ["observation"]})
         assert agent.can_write("research", MarkType.OBSERVATION)
@@ -593,12 +593,12 @@ class TestP16Hierarchy:
 
 
 # ---------------------------------------------------------------------------
-# P17 — Write Visibility
+# P19 — Write Visibility
 # A mark written at t is visible to reads at t' > t.
 # ---------------------------------------------------------------------------
 
 
-class TestP17WriteVisibility:
+class TestP19WriteVisibility:
     def test_written_mark_immediately_visible(
         self, space: MarkSpace, agent: Agent
     ) -> None:
@@ -616,12 +616,12 @@ class TestP17WriteVisibility:
 
 
 # ---------------------------------------------------------------------------
-# P18 — Read Purity
+# P20 — Read Purity
 # Reading does not change any mark's stored state.
 # ---------------------------------------------------------------------------
 
 
-class TestP18ReadPurity:
+class TestP20ReadPurity:
     def test_read_does_not_mutate(self, space: MarkSpace, agent: Agent) -> None:
         mid = space.write(
             agent,
@@ -648,12 +648,12 @@ class TestP18ReadPurity:
 
 
 # ---------------------------------------------------------------------------
-# P19 — Resolution Immediacy
+# P21 — Resolution Immediacy
 # Resolving a need mark immediately reduces strength to 0.
 # ---------------------------------------------------------------------------
 
 
-class TestP19ResolutionImmediacy:
+class TestP21ResolutionImmediacy:
     def test_resolved_need_invisible(self, space: MarkSpace, agent: Agent) -> None:
         need_id = space.write(
             agent,
@@ -679,12 +679,12 @@ class TestP19ResolutionImmediacy:
 
 
 # ---------------------------------------------------------------------------
-# P20 — Invalidation Bound
+# P22 — Invalidation Bound
 # Warning cannot reduce mark strength below 0.
 # ---------------------------------------------------------------------------
 
 
-class TestP20InvalidationBound:
+class TestP22InvalidationBound:
     def test_invalidation_floor_at_zero(self, space: MarkSpace, agent: Agent) -> None:
         obs_id = space.write(
             agent,
@@ -728,15 +728,15 @@ class TestP20InvalidationBound:
 
 
 # ---------------------------------------------------------------------------
-# P21 — Invalidation Decay
+# P23 — Invalidation Decay
 # As warning decays, invalidated mark's strength recovers.
 # ---------------------------------------------------------------------------
 
 
-class TestP21InvalidationDecay:
+class TestP23InvalidationDecay:
     def test_invalidated_mark_recovers_as_warning_decays(self) -> None:
         """
-        P21: As the warning decays, the suppression it causes shrinks.
+        P23: As the warning decays, the suppression it causes shrinks.
         The observation still has its own decay, so NET strength may decrease.
         What must increase is: the FRACTION of the observation's base strength
         that survives the warning. i.e., the warning's bite gets smaller.
@@ -789,7 +789,7 @@ class TestP21InvalidationDecay:
 
 
 # ---------------------------------------------------------------------------
-# Scope Visibility — P15a, P15b, P15c, P27, P28, P29
+# Scope Visibility — P15, P16, P17, P29, P30, P31
 # ---------------------------------------------------------------------------
 
 
@@ -866,12 +866,12 @@ class TestScopeVisibility:
         s.set_clock(1000000.0)
         return s
 
-    # -- P15a: Structural Visibility (OPEN scopes) --
+    # -- P15: Structural Visibility (OPEN scopes) --
 
     def test_p15a_open_scope_full_read_any_agent(
         self, visibility_space: MarkSpace, agent: Agent
     ) -> None:
-        """P15a: Any agent reads full marks from OPEN scopes."""
+        """P15: Any agent reads full marks from OPEN scopes."""
         visibility_space.write(
             agent,
             Observation(
@@ -890,7 +890,7 @@ class TestScopeVisibility:
     def test_p15a_open_scope_no_reader_full_access(
         self, visibility_space: MarkSpace, agent: Agent
     ) -> None:
-        """P15a: reader=None gives full access (backward compatible)."""
+        """P15: reader=None gives full access (backward compatible)."""
         visibility_space.write(
             agent,
             Observation(
@@ -904,12 +904,12 @@ class TestScopeVisibility:
         assert len(marks) == 1
         assert marks[0].projected is False
 
-    # -- P15b: Content Access (PROTECTED scopes) --
+    # -- P16: Content Access (PROTECTED scopes) --
 
     def test_p15b_protected_unauthorized_gets_projected(
         self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
     ) -> None:
-        """P15b: Unauthorized reader of PROTECTED scope gets projected marks."""
+        """P16: Unauthorized reader of PROTECTED scope gets projected marks."""
         visibility_space.write(
             writer,
             Observation(
@@ -932,7 +932,7 @@ class TestScopeVisibility:
     def test_p15b_protected_authorized_gets_full(
         self, visibility_space: MarkSpace, writer: Agent, authorized_reader: Agent
     ) -> None:
-        """P15b: Authorized reader of PROTECTED scope sees full content."""
+        """P16: Authorized reader of PROTECTED scope sees full content."""
         visibility_space.write(
             writer,
             Observation(
@@ -950,7 +950,7 @@ class TestScopeVisibility:
     def test_p15b_protected_no_reader_full_access(
         self, visibility_space: MarkSpace, writer: Agent
     ) -> None:
-        """P15b: reader=None gives full access even for PROTECTED scopes (infrastructure use)."""
+        """P16: reader=None gives full access even for PROTECTED scopes (infrastructure use)."""
         visibility_space.write(
             writer,
             Observation(
@@ -965,12 +965,12 @@ class TestScopeVisibility:
         assert marks[0].projected is False
         assert marks[0].content == {"amount": 150000}  # type: ignore[union-attr]
 
-    # -- P15c: Classified Opacity --
+    # -- P17: Classified Opacity --
 
     def test_p15c_classified_unauthorized_sees_nothing(
         self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
     ) -> None:
-        """P15c: Unauthorized reader of CLASSIFIED scope gets empty list."""
+        """P17: Unauthorized reader of CLASSIFIED scope gets empty list."""
         visibility_space.write(
             writer,
             Observation(
@@ -986,7 +986,7 @@ class TestScopeVisibility:
     def test_p15c_classified_authorized_sees_full(
         self, visibility_space: MarkSpace, writer: Agent, authorized_reader: Agent
     ) -> None:
-        """P15c: Authorized reader of CLASSIFIED scope sees full marks."""
+        """P17: Authorized reader of CLASSIFIED scope sees full marks."""
         visibility_space.write(
             writer,
             Observation(
@@ -1001,10 +1001,10 @@ class TestScopeVisibility:
         assert marks[0].projected is False
         assert marks[0].content == "details"  # type: ignore[union-attr]
 
-    # -- P27: Projection Preserves Coordination Metadata --
+    # -- P29: Projection Preserves Coordination Metadata --
 
     def test_p27_projection_preserves_structural_fields(self) -> None:
-        """P27: Projected marks retain all coordination-relevant metadata."""
+        """P29: Projected marks retain all coordination-relevant metadata."""
         obs = Observation(
             scope="hr",
             topic="performance",
@@ -1029,7 +1029,7 @@ class TestScopeVisibility:
         assert projected.agent_id == obs.agent_id
 
     def test_p27_projection_all_mark_types(self) -> None:
-        """P27: Projection works correctly for every mark type."""
+        """P29: Projection works correctly for every mark type."""
         action = Action(scope="hr", action="reviewed", result={"score": 95})
         p_action = project_mark(action)
         assert p_action.projected is True
@@ -1064,12 +1064,12 @@ class TestScopeVisibility:
         assert p_intent.resource == "review-123"  # type: ignore[union-attr]
         assert p_intent.confidence == 0.7  # type: ignore[union-attr]
 
-    # -- P28: Classified Opacity (stronger guarantee) --
+    # -- P30: Classified Opacity (stronger guarantee) --
 
     def test_p28_classified_no_projected_reads(
         self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
     ) -> None:
-        """P28: CLASSIFIED scopes don't fall back to projected reads — it's all or nothing."""
+        """P30: CLASSIFIED scopes don't fall back to projected reads — it's all or nothing."""
         visibility_space.write(
             writer,
             Action(
@@ -1082,10 +1082,10 @@ class TestScopeVisibility:
         marks = visibility_space.read(scope="legal", reader=unauthorized_reader)
         assert marks == []  # not projected, not partial — nothing
 
-    # -- P29: Visibility Hierarchy --
+    # -- P31: Visibility Hierarchy --
 
     def test_p29_read_scope_hierarchy(self) -> None:
-        """P29: Read authorization for 'hr' implies read authorization for 'hr/compensation'."""
+        """P31: Read authorization for 'hr' implies read authorization for 'hr/compensation'."""
         agent = Agent(name="mgr", scopes={}, read_scopes=frozenset({"hr"}))
         assert agent.can_read_content("hr") is True
         assert agent.can_read_content("hr/compensation") is True
@@ -1093,7 +1093,7 @@ class TestScopeVisibility:
         assert agent.can_read_content("legal") is False
 
     def test_p29_child_read_scope_no_parent(self) -> None:
-        """P29: Read authorization for 'hr/compensation' does NOT cover 'hr'."""
+        """P31: Read authorization for 'hr/compensation' does NOT cover 'hr'."""
         agent = Agent(
             name="payroll", scopes={}, read_scopes=frozenset({"hr/compensation"})
         )
@@ -1105,7 +1105,7 @@ class TestScopeVisibility:
     def test_p29_protected_child_inherits_from_parent(
         self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
     ) -> None:
-        """P29: Child scope without its own definition inherits parent's visibility."""
+        """P31: Child scope without its own definition inherits parent's visibility."""
         # Write to child scope — inherits hr's PROTECTED visibility
         visibility_space.write(
             writer,

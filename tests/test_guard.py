@@ -153,12 +153,12 @@ class TestGuardPreventsConflicts:
 
 
 # ---------------------------------------------------------------------------
-# P26: Action precedence — completed actions block new intents
+# P28: Action precedence — completed actions block new intents
 # ---------------------------------------------------------------------------
 
 
 class TestActionPrecedence:
-    """P26: An existing action mark on a resource MUST block new intents from other agents."""
+    """P28: An existing action mark on a resource MUST block new intents from other agents."""
 
     def test_completed_action_blocks_new_intent(
         self,
@@ -462,7 +462,7 @@ class TestGeneralizedSupersession:
 
 
 # ---------------------------------------------------------------------------
-# Deferred Resolution — P30, P31, P32
+# Deferred Resolution — P32, P33, P34
 # Spec Section 6.2
 # ---------------------------------------------------------------------------
 
@@ -516,7 +516,7 @@ class TestDeferredResolution:
             scopes={"parking": ["intent", "action", "need"]},
         )
 
-    # -- P30: Deferred Completeness --
+    # -- P32: Deferred Completeness --
 
     def test_p30_all_intents_considered(
         self,
@@ -526,7 +526,7 @@ class TestDeferredResolution:
         agent_mid: Agent,
         agent_high: Agent,
     ) -> None:
-        """P30: Batch resolution MUST consider ALL active intents at the boundary."""
+        """P32: Batch resolution MUST consider ALL active intents at the boundary."""
         # Phase 1: All three agents write intents (all get BLOCKED)
         d1 = deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.3
@@ -559,7 +559,7 @@ class TestDeferredResolution:
         agent_low: Agent,
         agent_high: Agent,
     ) -> None:
-        """P30: An intent written just before the boundary is included."""
+        """P32: An intent written just before the boundary is included."""
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.3
         )
@@ -584,7 +584,7 @@ class TestDeferredResolution:
         agent_low: Agent,
         agent_high: Agent,
     ) -> None:
-        """P30: An intent past its TTL is NOT considered (correctly excluded)."""
+        """P32: An intent past its TTL is NOT considered (correctly excluded)."""
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.3
         )
@@ -601,7 +601,7 @@ class TestDeferredResolution:
         assert len(results) == 1
         assert agent_high.id in results
 
-    # -- P31: Deferred Priority Fidelity --
+    # -- P33: Deferred Priority Fidelity --
 
     def test_p31_highest_confidence_wins(
         self,
@@ -610,7 +610,7 @@ class TestDeferredResolution:
         agent_mid: Agent,
         agent_high: Agent,
     ) -> None:
-        """P31: Winner MUST be the highest-confidence intent, regardless of write order."""
+        """P33: Winner MUST be the highest-confidence intent, regardless of write order."""
         # Low-confidence agent writes first
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.3
@@ -638,7 +638,7 @@ class TestDeferredResolution:
         agent_low: Agent,
         agent_high: Agent,
     ) -> None:
-        """P31: Result identical to simultaneous evaluation — no first-writer advantage."""
+        """P33: Result identical to simultaneous evaluation — no first-writer advantage."""
         from markspace.core import resolve_conflict
 
         # Write intents to deferred guard
@@ -673,7 +673,7 @@ class TestDeferredResolution:
         agent_low: Agent,
         agent_high: Agent,
     ) -> None:
-        """P31: Ties in confidence are broken by created_at (earliest wins)."""
+        """P33: Ties in confidence are broken by created_at (earliest wins)."""
         # Both agents write with same confidence
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.8
@@ -689,7 +689,7 @@ class TestDeferredResolution:
         assert results[agent_low.id].verdict == GuardVerdict.ALLOW
         assert results[agent_high.id].verdict == GuardVerdict.CONFLICT
 
-    # -- P32: Deferred Liveness --
+    # -- P34: Deferred Liveness --
 
     def test_p32_resolution_produces_exactly_one_winner(
         self,
@@ -698,7 +698,7 @@ class TestDeferredResolution:
         agent_mid: Agent,
         agent_high: Agent,
     ) -> None:
-        """P32: Resolution boundary produces exactly one ALLOW verdict (progress)."""
+        """P34: Resolution boundary produces exactly one ALLOW verdict (progress)."""
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.3
         )
@@ -720,7 +720,7 @@ class TestDeferredResolution:
         self,
         deferred_guard: Guard,
     ) -> None:
-        """P32: No intents → empty result (no deadlock, no phantom decisions)."""
+        """P34: No intents → empty result (no deadlock, no phantom decisions)."""
         results = deferred_guard.resolve_deferred("parking", "nonexistent-spot")
         assert results == {}
 
@@ -730,7 +730,7 @@ class TestDeferredResolution:
         deferred_space: MarkSpace,
         agent_low: Agent,
     ) -> None:
-        """P32: Even without resolve_deferred, TTL expiry prevents indefinite accumulation."""
+        """P34: Even without resolve_deferred, TTL expiry prevents indefinite accumulation."""
         deferred_guard.pre_action(
             agent_low, "parking", "spot-A", "reserve", confidence=0.5
         )
