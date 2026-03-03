@@ -690,7 +690,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 ### Information theory and decay
 
 - Kaul, S., Yates, R., & Gruteser, M. (2012). "Real-time status: How often should one update?" *IEEE ISIT 2012*. [doi:10.1109/ISIT.2012.6283535](https://doi.org/10.1109/ISIT.2012.6283535). [Age of Information: freshness functions for status-update systems.]
-- Acemoglu, D., Makhdoumi, A., Malekian, A., & Ozdaglar, A. (2018). "Informational Braess' Paradox: The Effect of Information on Traffic Congestion." *American Economic Review*, 108(6), 1578-1617. [doi:10.1257/aer.20171898](https://doi.org/10.1257/aer.20171898). [More information can increase congestion in games with shared resources.]
+- Acemoglu, D., Makhdoumi, A., Malekian, A., & Ozdaglar, A. (2018). "Informational Braess' Paradox: The Effect of Information on Traffic Congestion." *Operations Research*, 66(4), 893-917. [doi:10.1287/opre.2017.1712](https://doi.org/10.1287/opre.2017.1712). [More information can increase congestion in games with shared resources.]
 
 ### Concurrency and priority
 
