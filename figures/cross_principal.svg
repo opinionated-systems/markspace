@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" width="700" height="250" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .bg { fill: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .bg { fill: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+  </defs>
+
+  <!-- Their mark space -->
+  <rect x="10" y="10" width="180" height="160" rx="6" class="bg" opacity="0.04"/>
+  <rect x="10" y="10" width="180" height="160" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="100" y="30" font-size="10" font-weight="500" class="fg" text-anchor="middle">THEIR MARK SPACE</text>
+
+  <rect x="22" y="42" width="156" height="20" rx="2" class="bg" opacity="0.06"/>
+  <text x="28" y="56" font-size="8" class="fg" opacity="0.6">"Y revenue +20%"  FLEET</text>
+
+  <rect x="22" y="68" width="156" height="20" rx="2" class="bg" opacity="0.06"/>
+  <text x="28" y="82" font-size="8" class="fg" opacity="0.6">"Y expanding EU"  FLEET</text>
+
+  <text x="100" y="112" font-size="7" class="fg" opacity="0.3" text-anchor="middle">closer to source than you</text>
+  <text x="100" y="126" font-size="7" class="fg" opacity="0.3" text-anchor="middle">incentive to mislead</text>
+
+  <!-- Boundary: dashed line with label -->
+  <line x1="222" y1="10" x2="222" y2="170" class="accent-stroke" stroke-width="2" stroke-dasharray="6,4" opacity="0.5"/>
+  <text x="222" y="186" font-size="7" class="accent" opacity="0.6" text-anchor="middle">observations only</text>
+  <text x="222" y="196" font-size="7" class="accent" opacity="0.6" text-anchor="middle">re-tag EXTERNAL</text>
+
+  <!-- Arrows crossing boundary -->
+  <line x1="190" y1="52" x2="254" y2="52" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="190" y1="78" x2="254" y2="78" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Your mark space -->
+  <rect x="254" y="10" width="296" height="160" rx="6" class="bg" opacity="0.04"/>
+  <rect x="254" y="10" width="296" height="160" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="402" y="30" font-size="10" font-weight="500" class="fg" text-anchor="middle">YOUR MARK SPACE</text>
+
+  <!-- Same marks, re-tagged -->
+  <rect x="266" y="42" width="272" height="20" rx="2" class="accent" opacity="0.06"/>
+  <rect x="266" y="42" width="272" height="20" rx="2" fill="none" class="accent-stroke" stroke-width="0.5" opacity="0.2"/>
+  <text x="272" y="56" font-size="8" class="accent" opacity="0.6">"Y revenue +20%"  EXTERNAL_UNVERIFIED</text>
+
+  <rect x="266" y="68" width="272" height="20" rx="2" class="accent" opacity="0.06"/>
+  <rect x="266" y="68" width="272" height="20" rx="2" fill="none" class="accent-stroke" stroke-width="0.5" opacity="0.2"/>
+  <text x="272" y="82" font-size="8" class="accent" opacity="0.6">"Y expanding EU"  EXTERNAL_UNVERIFIED</text>
+
+  <!-- Your own fleet mark for comparison -->
+  <rect x="266" y="96" width="272" height="20" rx="2" class="bg" opacity="0.06"/>
+  <text x="272" y="110" font-size="8" class="fg" opacity="0.6">"Y revenue +18%"  FLEET</text>
+
+  <text x="402" y="140" font-size="7" class="fg" opacity="0.3" text-anchor="middle">consensus mechanisms apply here only:</text>
+  <text x="402" y="154" font-size="7" class="fg" opacity="0.3" text-anchor="middle">median aggregation, peer-agreement drift, per-item metrics</text>
+</svg>

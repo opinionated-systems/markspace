@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 440" width="825" height="550" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    .card-bg { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+      .card-bg { fill: #1a1a2e; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+  </defs>
+
+  <text x="100" y="24" font-size="12" font-weight="500" class="fg" text-anchor="middle">Agent A</text>
+  <text x="100" y="40" font-size="10" class="fg" text-anchor="middle" opacity="0.5">(flight booking)</text>
+  <text x="330" y="24" font-size="12" font-weight="500" class="fg" text-anchor="middle">Mark Space</text>
+  <text x="560" y="24" font-size="12" font-weight="500" class="fg" text-anchor="middle">Agent B</text>
+  <text x="560" y="40" font-size="10" class="fg" text-anchor="middle" opacity="0.5">(calendar optimizer)</text>
+
+  <!-- Lifelines -->
+  <line x1="100" y1="52" x2="100" y2="420" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+  <line x1="330" y1="52" x2="330" y2="420" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+  <line x1="560" y1="52" x2="560" y2="420" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+
+  <!-- 1. B writes INTENT for THU meeting -->
+  <line x1="555" y1="72" x2="335" y2="72" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="445" y="65" font-size="10" class="fg" text-anchor="middle">write INTENT</text>
+  <text x="445" y="89" font-size="9" class="fg" text-anchor="middle" opacity="0.5">"schedule THU meeting" conf=0.5</text>
+
+  <!-- 2. A writes INTENT for THU flight -->
+  <line x1="100" y1="120" x2="325" y2="120" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="212" y="113" font-size="10" class="fg" text-anchor="middle">write INTENT</text>
+  <text x="212" y="137" font-size="9" class="fg" text-anchor="middle" opacity="0.5">"book THU flight" conf=0.9</text>
+
+  <!-- 3. B reads, sees A's competing intent -->
+  <line x1="335" y1="168" x2="555" y2="168" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="445" y="161" font-size="10" class="fg" text-anchor="middle">read</text>
+  <text x="445" y="185" font-size="9" class="fg" text-anchor="middle" opacity="0.5">A also intends THU, conf=0.9</text>
+
+  <!-- 4. B detects conflict locally -->
+  <rect x="480" y="198" width="160" height="44" rx="3" class="card-bg"/>
+  <rect x="480" y="198" width="160" height="44" rx="3" class="accent" opacity="0.12"/>
+  <rect x="480" y="198" width="160" height="44" rx="3" fill="none" class="accent-stroke" stroke-width="1" opacity="0.3"/>
+  <text x="560" y="215" font-size="9" class="accent" text-anchor="middle">conflict: both want THU</text>
+  <text x="560" y="231" font-size="9" class="accent" text-anchor="middle">A conf 0.9 > my 0.5, yield</text>
+
+  <!-- 5. A writes ACTION (executes) -->
+  <line x1="100" y1="268" x2="325" y2="268" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="212" y="261" font-size="10" class="fg" text-anchor="middle">write ACTION</text>
+  <text x="212" y="285" font-size="9" class="fg" text-anchor="middle" opacity="0.5">"booked flight DL413 THU"</text>
+
+  <!-- 6. B reads action, confirms THU taken -->
+  <line x1="335" y1="310" x2="555" y2="310" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="445" y="303" font-size="10" class="fg" text-anchor="middle">read</text>
+  <text x="445" y="327" font-size="9" class="fg" text-anchor="middle" opacity="0.5">THU confirmed taken</text>
+
+  <!-- 7. B writes INTENT for FRI instead -->
+  <line x1="555" y1="352" x2="335" y2="352" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="445" y="345" font-size="10" class="fg" text-anchor="middle">write INTENT</text>
+  <text x="445" y="369" font-size="9" class="fg" text-anchor="middle" opacity="0.5">"schedule FRI meeting"</text>
+
+  <!-- 8. B writes ACTION -->
+  <line x1="555" y1="396" x2="335" y2="396" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="445" y="389" font-size="10" class="fg" text-anchor="middle">write ACTION</text>
+  <text x="445" y="413" font-size="9" class="fg" text-anchor="middle" opacity="0.5">"scheduled meeting FRI"</text>
+</svg>

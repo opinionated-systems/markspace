@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 340" width="750" height="425" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .bg { fill: #1a1a2e; }
+    .arr-fill { fill: #1a1a2e; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .bg { fill: #d4d4dc; }
+      .arr-fill { fill: #d4d4dc; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+  </defs>
+
+  <!-- === CENTER: MARK SPACE === -->
+  <rect x="210" y="30" width="150" height="250" rx="6" class="bg" opacity="0.06"/>
+  <rect x="210" y="30" width="150" height="250" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="285" y="52" font-size="11" font-weight="500" class="fg" text-anchor="middle">MARK SPACE</text>
+
+  <!-- NEED marks in space -->
+  <text x="222" y="76" font-size="8" class="fg" opacity="0.4">NEED marks</text>
+  <rect x="222" y="82" width="128" height="24" rx="2" class="bg" opacity="0.06"/>
+  <text x="228" y="94" font-size="8" class="fg" opacity="0.6">scope=email  pri=0.8</text>
+  <text x="228" y="103" font-size="7" class="fg" opacity="0.35">"Approve email to client?"</text>
+  <rect x="222" y="110" width="128" height="24" rx="2" class="bg" opacity="0.06"/>
+  <text x="228" y="122" font-size="8" class="fg" opacity="0.6">scope=deal-x  pri=0.5</text>
+  <text x="228" y="131" font-size="7" class="fg" opacity="0.35">"Continue research?"</text>
+  <rect x="222" y="138" width="128" height="24" rx="2" class="bg" opacity="0.06"/>
+  <text x="228" y="150" font-size="8" class="fg" opacity="0.6">scope=deal-x  pri=0.7</text>
+  <text x="228" y="159" font-size="7" class="fg" opacity="0.35">"Merger, still relevant?"</text>
+  <rect x="222" y="166" width="128" height="24" rx="2" class="bg" opacity="0.06"/>
+  <text x="228" y="178" font-size="8" class="fg" opacity="0.6">scope=deal-x  pri=0.6</text>
+  <text x="228" y="187" font-size="7" class="fg" opacity="0.35">"Valuation outdated?"</text>
+
+  <!-- Separator -->
+  <line x1="226" y1="200" x2="348" y2="200" class="fg-stroke" stroke-width="0.5" opacity="0.2"/>
+
+  <!-- Resolving ACTION marks in space -->
+  <text x="222" y="218" font-size="9" class="fg" opacity="0.5">ACTION marks</text>
+  <rect x="222" y="224" width="128" height="22" rx="2" class="bg" opacity="0.08"/>
+  <rect x="222" y="224" width="128" height="22" rx="2" fill="none" class="fg-stroke" stroke-width="0.5" opacity="0.3"/>
+  <text x="228" y="238" font-size="8" class="fg" opacity="0.7">scope=deal-x  pause</text>
+  <rect x="222" y="250" width="128" height="22" rx="2" class="bg" opacity="0.08"/>
+  <rect x="222" y="250" width="128" height="22" rx="2" fill="none" class="fg-stroke" stroke-width="0.5" opacity="0.3"/>
+  <text x="228" y="264" font-size="8" class="fg" opacity="0.7">scope=email  approved</text>
+
+  <!-- === LEFT: AGENTS === -->
+  <text x="78" y="20" font-size="11" font-weight="500" class="fg" text-anchor="middle">Agents</text>
+
+  <!-- Agents write NEED marks -->
+  <rect x="20" y="72" width="116" height="82" rx="4" class="bg" opacity="0.04"/>
+  <rect x="20" y="72" width="116" height="82" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="36" y="88" font-size="9" class="fg">A  email</text>
+  <text x="36" y="106" font-size="9" class="fg">B  research</text>
+  <text x="36" y="124" font-size="9" class="fg">C  merger</text>
+  <text x="36" y="142" font-size="9" class="fg">D  valuation</text>
+
+  <!-- Arrow: agents write NEED -->
+  <line x1="136" y1="113" x2="210" y2="113" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="173" y="107" font-size="8" class="fg" opacity="0.5" text-anchor="middle">write</text>
+
+  <!-- Agents read resolving ACTION marks -->
+  <rect x="20" y="224" width="116" height="54" rx="4" class="bg" opacity="0.04"/>
+  <rect x="20" y="224" width="116" height="54" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="32" y="242" font-size="8" class="fg" opacity="0.6">B,C,D -> pausing</text>
+  <text x="32" y="258" font-size="8" class="fg" opacity="0.6">A -> sends email</text>
+  <text x="78" y="272" font-size="7" class="fg" opacity="0.3" text-anchor="middle">no direct message</text>
+
+  <!-- Arrow: agents read resolving ACTION -->
+  <line x1="210" y1="250" x2="136" y2="250" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="173" y="244" font-size="8" class="fg" opacity="0.5" text-anchor="middle">read</text>
+
+  <!-- === AGGREGATOR (system component, between mark space and principal) === -->
+  <rect x="400" y="72" width="106" height="36" rx="4" class="bg" opacity="0.06"/>
+  <rect x="400" y="72" width="106" height="36" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="453" y="88" font-size="9" font-weight="500" class="fg" text-anchor="middle">Aggregator</text>
+  <text x="453" y="100" font-size="7" class="fg" opacity="0.4" text-anchor="middle">group by scope, sort</text>
+
+  <!-- Arrow: mark space -> aggregator -->
+  <line x1="364" y1="90" x2="396" y2="90" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="82" font-size="8" class="fg" opacity="0.5" text-anchor="middle">read</text>
+
+  <!-- === RIGHT: PRINCIPAL === -->
+  <text x="520" y="20" font-size="11" font-weight="500" class="fg" text-anchor="middle">Principal</text>
+
+  <!-- Principal view -->
+  <rect x="460" y="130" width="120" height="72" rx="4" class="bg" opacity="0.06"/>
+  <rect x="460" y="130" width="120" height="72" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="470" y="148" font-size="9" font-weight="500" class="fg">1. scope=deal-x</text>
+  <text x="470" y="162" font-size="7" class="fg" opacity="0.4">3 needs, priority=0.81</text>
+  <text x="470" y="178" font-size="9" font-weight="500" class="fg">2. scope=email</text>
+  <text x="470" y="192" font-size="7" class="fg" opacity="0.4">1 need, priority=0.80</text>
+
+  <!-- Arrow: aggregator -> view -->
+  <line x1="470" y1="108" x2="490" y2="126" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Principal decisions -->
+  <rect x="460" y="224" width="120" height="54" rx="4" class="bg" opacity="0.08"/>
+  <rect x="460" y="224" width="120" height="54" rx="4" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="470" y="246" font-size="8" font-weight="500" class="fg">Deal X -> pause</text>
+  <text x="470" y="262" font-size="8" font-weight="500" class="fg">Email -> approved</text>
+
+  <!-- Arrow: view -> decisions -->
+  <line x1="520" y1="202" x2="520" y2="222" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Arrow: decisions write back to mark space -->
+  <text x="412" y="244" font-size="8" class="fg" opacity="0.5" text-anchor="middle">write</text>
+  <line x1="460" y1="250" x2="364" y2="250" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+</svg>

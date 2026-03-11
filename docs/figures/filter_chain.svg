@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 88" font-family="Inter, -apple-system, system-ui, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto-start-auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#999"/>
+    </marker>
+  </defs>
+
+  <!-- SensorAgent -->
+  <rect x="16" y="20" width="120" height="44" rx="7" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="76" y="47" text-anchor="middle" font-size="11" font-weight="600" fill="#2c3e50">SensorAgent</text>
+
+  <!-- w -> obs mark -->
+  <line x1="136" y1="42" x2="168" y2="42" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="152" y="37" text-anchor="middle" font-size="7" font-weight="600" fill="#999">w</text>
+
+  <!-- observation mark node (raw) -->
+  <circle cx="184" cy="42" r="12" fill="#4a90d9" opacity="0.15" stroke="#4a90d9" stroke-width="1"/>
+  <circle cx="184" cy="42" r="4" fill="#4a90d9" opacity="0.5"/>
+  <text x="184" y="25" text-anchor="middle" font-size="7" fill="#4a90d9">observation</text>
+  <text x="184" y="65" text-anchor="middle" font-size="7" fill="#aaa" font-style="italic">reading</text>
+
+  <!-- r -> FilterAgent -->
+  <line x1="200" y1="42" x2="228" y2="42" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="214" y="37" text-anchor="middle" font-size="7" font-weight="600" fill="#999">r</text>
+
+  <!-- FilterAgent -->
+  <rect x="232" y="20" width="120" height="44" rx="7" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="292" y="47" text-anchor="middle" font-size="11" font-weight="600" fill="#2c3e50">FilterAgent</text>
+
+  <!-- w -> obs mark -->
+  <line x1="352" y1="42" x2="384" y2="42" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="368" y="37" text-anchor="middle" font-size="7" font-weight="600" fill="#999">w</text>
+
+  <!-- observation mark node (filtered) -->
+  <circle cx="400" cy="42" r="12" fill="#4a90d9" opacity="0.15" stroke="#4a90d9" stroke-width="1"/>
+  <circle cx="400" cy="42" r="4" fill="#4a90d9" opacity="0.5"/>
+  <text x="400" y="25" text-anchor="middle" font-size="7" fill="#4a90d9">observation</text>
+  <text x="400" y="65" text-anchor="middle" font-size="7" fill="#aaa" font-style="italic">filtered</text>
+
+  <!-- r -> AggregatorAgent -->
+  <line x1="416" y1="42" x2="444" y2="42" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="430" y="37" text-anchor="middle" font-size="7" font-weight="600" fill="#999">r</text>
+
+  <!-- AggregatorAgent -->
+  <rect x="448" y="20" width="120" height="44" rx="7" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="508" y="47" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">AggregatorAgent</text>
+
+  <!-- w -> output marks -->
+  <line x1="568" y1="42" x2="596" y2="42" stroke="#888" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="582" y="37" text-anchor="middle" font-size="7" font-weight="600" fill="#999">w</text>
+
+  <!-- observation mark -->
+  <circle cx="612" cy="42" r="12" fill="#4a90d9" opacity="0.15" stroke="#4a90d9" stroke-width="1"/>
+  <circle cx="612" cy="42" r="4" fill="#4a90d9" opacity="0.5"/>
+  <text x="612" y="25" text-anchor="middle" font-size="7" fill="#4a90d9">observation</text>
+
+  <!-- or -->
+  <text x="640" y="46" text-anchor="middle" font-size="7" fill="#bbb">or</text>
+
+  <!-- warning mark -->
+  <polygon points="664,26 680,54 648,54" fill="#e74c3c" opacity="0.12" stroke="#e74c3c" stroke-width="1"/>
+  <polygon points="664,37 670,48 658,48" fill="#e74c3c" opacity="0.4"/>
+  <text x="664" y="18" text-anchor="middle" font-size="7" fill="#c0392b">warning</text>
+</svg>

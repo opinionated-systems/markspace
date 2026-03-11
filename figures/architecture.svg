@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 340" width="775" height="425" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    .arr-accent { fill: #c23616; }
+    .muted { opacity: 0.4; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+      .arr-accent { fill: #e8664a; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-accent"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="310" y="22" font-size="13" font-weight="500" class="fg" text-anchor="middle">PROTOCOL ARCHITECTURE</text>
+
+  <!-- Agents (left column) -->
+  <rect x="20" y="50" width="130" height="44" rx="6" class="fg" opacity="0.04"/>
+  <rect x="20" y="50" width="130" height="44" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="85" y="70" font-size="11" font-weight="500" class="fg" text-anchor="middle">Agent A</text>
+  <text x="85" y="84" font-size="8" class="fg muted" text-anchor="middle">manifest: calendar/*</text>
+
+  <rect x="20" y="110" width="130" height="44" rx="6" class="fg" opacity="0.04"/>
+  <rect x="20" y="110" width="130" height="44" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="85" y="130" font-size="11" font-weight="500" class="fg" text-anchor="middle">Agent B</text>
+  <text x="85" y="144" font-size="8" class="fg muted" text-anchor="middle">manifest: calendar/*</text>
+
+  <rect x="20" y="170" width="130" height="44" rx="6" class="fg" opacity="0.04"/>
+  <rect x="20" y="170" width="130" height="44" rx="6" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="85" y="190" font-size="11" font-weight="500" class="fg" text-anchor="middle">Agent C</text>
+  <text x="85" y="204" font-size="8" class="fg muted" text-anchor="middle">manifest: tasks/*</text>
+
+  <text x="85" y="230" font-size="14" class="fg muted" text-anchor="middle">...</text>
+
+  <!-- Guard (center) -->
+  <rect x="200" y="50" width="160" height="210" rx="8" class="accent" opacity="0.06"/>
+  <rect x="200" y="50" width="160" height="210" rx="8" fill="none" class="accent-stroke" stroke-width="2"/>
+  <text x="280" y="74" font-size="12" font-weight="600" class="accent" text-anchor="middle">GUARD</text>
+  <text x="280" y="92" font-size="8" class="accent" opacity="0.6" text-anchor="middle">deterministic enforcement</text>
+
+  <!-- Guard checks -->
+  <text x="218" y="118" font-size="9" class="fg">identity</text>
+  <text x="218" y="134" font-size="8" class="fg muted">infrastructure-injected</text>
+
+  <line x1="214" y1="144" x2="346" y2="144" class="fg-stroke" stroke-width="0.5" opacity="0.2"/>
+
+  <text x="218" y="160" font-size="9" class="fg">authority</text>
+  <text x="218" y="176" font-size="8" class="fg muted">scope + mark type checks</text>
+
+  <line x1="214" y1="186" x2="346" y2="186" class="fg-stroke" stroke-width="0.5" opacity="0.2"/>
+
+  <text x="218" y="202" font-size="9" class="fg">conflict</text>
+  <text x="218" y="218" font-size="8" class="fg muted">FIRST_WRITER / HIGHEST</text>
+  <text x="218" y="230" font-size="8" class="fg muted">/ YIELD_ALL</text>
+
+  <line x1="214" y1="240" x2="346" y2="240" class="fg-stroke" stroke-width="0.5" opacity="0.2"/>
+
+  <text x="218" y="252" font-size="9" class="fg">validation</text>
+
+  <!-- Mark Space (right) -->
+  <rect x="410" y="50" width="190" height="230" rx="8" class="fg" opacity="0.04"/>
+  <rect x="410" y="50" width="190" height="230" rx="8" fill="none" class="fg-stroke" stroke-width="1.5"/>
+  <text x="505" y="74" font-size="12" font-weight="500" class="fg" text-anchor="middle">MARK SPACE</text>
+  <text x="505" y="92" font-size="8" class="fg muted" text-anchor="middle">shared environment</text>
+
+  <!-- Scopes -->
+  <rect x="426" y="106" width="158" height="36" rx="4" class="fg" opacity="0.06"/>
+  <rect x="426" y="106" width="158" height="36" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="505" y="122" font-size="9" font-weight="500" class="fg" text-anchor="middle">calendar/rooms</text>
+  <text x="505" y="134" font-size="8" class="fg muted" text-anchor="middle">FIRST_WRITER, OPEN</text>
+
+  <rect x="426" y="152" width="158" height="36" rx="4" class="fg" opacity="0.06"/>
+  <rect x="426" y="152" width="158" height="36" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="505" y="168" font-size="9" font-weight="500" class="fg" text-anchor="middle">tasks/eng</text>
+  <text x="505" y="180" font-size="8" class="fg muted" text-anchor="middle">HIGHEST, CLASSIFIED</text>
+
+  <rect x="426" y="198" width="158" height="36" rx="4" class="fg" opacity="0.06"/>
+  <rect x="426" y="198" width="158" height="36" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="505" y="214" font-size="9" font-weight="500" class="fg" text-anchor="middle">boardroom</text>
+  <text x="505" y="226" font-size="8" class="fg muted" text-anchor="middle">YIELD_ALL, PROTECTED</text>
+
+  <!-- Arrows: agents -> guard -->
+  <line x1="150" y1="72" x2="200" y2="72" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="150" y1="132" x2="200" y2="132" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="150" y1="192" x2="200" y2="192" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+
+  <!-- Arrow: guard -> mark space (write) -->
+  <line x1="360" y1="130" x2="410" y2="130" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="385" y="122" font-size="8" class="fg" text-anchor="middle">write</text>
+
+  <!-- Arrow: mark space -> guard (read) -->
+  <line x1="410" y1="180" x2="360" y2="180" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="385" y="172" font-size="8" class="fg" text-anchor="middle">read</text>
+
+  <!-- Rejection arrow -->
+  <line x1="280" y1="260" x2="280" y2="286" class="accent-stroke" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <text x="280" y="302" font-size="9" class="accent" text-anchor="middle">DENIED / CONFLICT</text>
+  <text x="280" y="314" font-size="8" class="accent" opacity="0.6" text-anchor="middle">tool never executes</text>
+
+  <!-- Mark types legend -->
+  <text x="505" y="252" font-size="8" class="fg muted" text-anchor="middle">intent / action / observation</text>
+  <text x="505" y="264" font-size="8" class="fg muted" text-anchor="middle">warning / need</text>
+</svg>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 185 44" width="185" height="44">
+  <style>
+    .cell { fill: #1a1a2e; }
+    .accent { fill: #ff7832; }
+    .label { fill: #1a1a2e; }
+    @media (prefers-color-scheme: dark) {
+      .cell { fill: #d4d4dc; }
+      .accent { fill: #ff7832; }
+      .label { fill: #d4d4dc; }
+    }
+  </style>
+  <rect x="2"  y="2"  width="11" height="11" rx="2" class="cell" opacity="0.9"/>
+  <rect x="16" y="2"  width="11" height="11" rx="2" class="cell" opacity="0.06"/>
+  <rect x="30" y="2"  width="11" height="11" rx="2" class="cell" opacity="0.15"/>
+
+  <rect x="2"  y="16" width="11" height="11" rx="2" class="cell" opacity="0.06"/>
+  <rect x="16" y="16" width="11" height="11" rx="2" class="accent" opacity="0.8"/>
+  <rect x="30" y="16" width="11" height="11" rx="2" class="cell" opacity="0.4"/>
+
+  <rect x="2"  y="30" width="11" height="11" rx="2" class="cell" opacity="0.06"/>
+  <rect x="16" y="30" width="11" height="11" rx="2" class="cell" opacity="0.06"/>
+  <rect x="30" y="30" width="11" height="11" rx="2" class="cell" opacity="0.9"/>
+
+  <text x="52" y="30" font-family="'IBM Plex Mono', monospace" font-size="24" font-weight="500" class="label">markspace</text>
+</svg>

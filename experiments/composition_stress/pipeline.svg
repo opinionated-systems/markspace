@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 878 280" font-family="Inter, -apple-system, system-ui, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto-start-auto">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#999"/>
+    </marker>
+  </defs>
+
+  <!-- Stage 1: 5 Sensors -->
+  <rect x="16" y="30" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="70" y="50" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">sensor-0</text>
+  <rect x="16" y="68" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="70" y="88" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">sensor-1</text>
+  <rect x="16" y="106" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="70" y="126" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">sensor-2</text>
+  <rect x="16" y="144" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="70" y="164" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">sensor-3</text>
+  <rect x="16" y="182" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="70" y="202" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">sensor-4</text>
+
+  <!-- Fan-in arrows: all 5 sensors -> all 3 filters (shared scope) -->
+  <!-- sensor-0 (y=46) -> filter-0,1,2 -->
+  <line x1="124" y1="46" x2="196" y2="66" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="124" y1="46" x2="196" y2="122" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="46" x2="196" y2="178" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <!-- sensor-1 (y=84) -> filter-0,1,2 -->
+  <line x1="124" y1="84" x2="196" y2="66" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="124" y1="84" x2="196" y2="122" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="124" y1="84" x2="196" y2="178" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <!-- sensor-2 (y=122) -> filter-0,1,2 -->
+  <line x1="124" y1="122" x2="196" y2="66" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="122" x2="196" y2="122" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="124" y1="122" x2="196" y2="178" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <!-- sensor-3 (y=160) -> filter-0,1,2 -->
+  <line x1="124" y1="160" x2="196" y2="66" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="160" x2="196" y2="122" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="160" x2="196" y2="178" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <!-- sensor-4 (y=198) -> filter-0,1,2 -->
+  <line x1="124" y1="198" x2="196" y2="66" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="198" x2="196" y2="122" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.35"/>
+  <line x1="124" y1="198" x2="196" y2="178" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Fan-in label -->
+  <text x="160" y="24" text-anchor="middle" font-size="8" fill="#aaa">fan-in 5:3</text>
+
+  <!-- Stage 2: 3 Filters -->
+  <rect x="196" y="50" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="250" y="70" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">filter-0</text>
+  <rect x="196" y="106" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="250" y="126" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">filter-1</text>
+  <rect x="196" y="162" width="108" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="250" y="182" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">filter-2</text>
+
+  <!-- Arrows: 3 filters -> 2 aggregators -->
+  <line x1="304" y1="66" x2="376" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="304" y1="122" x2="376" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="304" y1="122" x2="376" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="304" y1="178" x2="376" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="304" y1="66" x2="376" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.4"/>
+  <line x1="304" y1="178" x2="376" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)" opacity="0.4"/>
+
+  <!-- Stage 3: 2 Aggregators -->
+  <rect x="376" y="72" width="126" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="439" y="92" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">aggregator-0</text>
+  <rect x="376" y="140" width="126" height="32" rx="6" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.2"/>
+  <text x="439" y="160" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">aggregator-1</text>
+
+  <!-- Fan-out arrows: 2 aggregators -> 2 alerters (both read same scope) -->
+  <line x1="502" y1="88" x2="574" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="502" y1="88" x2="574" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="502" y1="156" x2="574" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="502" y1="156" x2="574" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Fan-out label -->
+  <text x="538" y="24" text-anchor="middle" font-size="8" fill="#aaa">fan-out</text>
+
+  <!-- Stage 4: 2 Alerters -->
+  <rect x="574" y="72" width="108" height="32" rx="6" fill="#fdf2e8" stroke="#d9904a" stroke-width="1.2"/>
+  <text x="628" y="92" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">alerter-0</text>
+  <rect x="574" y="140" width="108" height="32" rx="6" fill="#fdf2e8" stroke="#d9904a" stroke-width="1.2"/>
+  <text x="628" y="160" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">alerter-1</text>
+
+  <!-- Arrows: 2 alerters -> 2 actors -->
+  <line x1="682" y1="88" x2="754" y2="88" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="682" y1="156" x2="754" y2="156" stroke="#bbb" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Stage 5: 2 Actors -->
+  <rect x="754" y="72" width="108" height="32" rx="6" fill="#e8fde8" stroke="#4ad94a" stroke-width="1.2"/>
+  <text x="808" y="92" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">actor-0</text>
+  <rect x="754" y="140" width="108" height="32" rx="6" fill="#e8fde8" stroke="#4ad94a" stroke-width="1.2"/>
+  <text x="808" y="160" text-anchor="middle" font-size="10" font-weight="600" fill="#2c3e50">actor-1</text>
+
+  <!-- Mark type labels on arrows -->
+  <text x="160" y="244" text-anchor="middle" font-size="9" fill="#999">obs</text>
+  <text x="340" y="244" text-anchor="middle" font-size="9" fill="#999">obs</text>
+  <text x="538" y="244" text-anchor="middle" font-size="9" fill="#999">obs</text>
+  <text x="718" y="244" text-anchor="middle" font-size="9" fill="#c0392b">warn</text>
+
+  <!-- Scope labels bottom -->
+  <text x="70" y="260" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">sensors</text>
+  <text x="250" y="260" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">filtered</text>
+  <text x="439" y="260" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">aggregated</text>
+  <text x="628" y="260" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">alerts</text>
+  <text x="808" y="260" text-anchor="middle" font-size="9" fill="#aaa" font-style="italic">responses</text>
+
+  <!-- Scope bracket lines -->
+  <line x1="70" y1="220" x2="70" y2="250" stroke="#ddd" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="250" y1="220" x2="250" y2="250" stroke="#ddd" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="439" y1="220" x2="439" y2="250" stroke="#ddd" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="628" y1="220" x2="628" y2="250" stroke="#ddd" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="808" y1="220" x2="808" y2="250" stroke="#ddd" stroke-width="1" stroke-dasharray="3,2"/>
+</svg>
