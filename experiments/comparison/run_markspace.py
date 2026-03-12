@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from random import Random
-from typing import Any
+from typing import Any, cast
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -161,11 +161,14 @@ class BookingEnv:
         """Read current bookings from the mark space."""
         lines = []
         for slot in SLOTS:
-            actions = self.space.read(
-                scope=RESOURCE_SCOPE,
-                resource=slot,
-                mark_type=MarkType.ACTION,
-                reader=agent,
+            actions = cast(
+                list[Action],
+                self.space.read(
+                    scope=RESOURCE_SCOPE,
+                    resource=slot,
+                    mark_type=MarkType.ACTION,
+                    reader=agent,
+                ),
             )
             booked = [a for a in actions if not a.failed]
             if booked:
@@ -177,10 +180,13 @@ class BookingEnv:
     def _agent_has_booking(self, agent: Agent) -> bool:
         """Check if agent already has a successful booking in any slot."""
         for slot in SLOTS:
-            actions = self.space.read(
-                scope=RESOURCE_SCOPE,
-                resource=slot,
-                mark_type=MarkType.ACTION,
+            actions = cast(
+                list[Action],
+                self.space.read(
+                    scope=RESOURCE_SCOPE,
+                    resource=slot,
+                    mark_type=MarkType.ACTION,
+                ),
             )
             if any(not a.failed and a.agent_id == agent.id for a in actions):
                 return True
@@ -421,10 +427,13 @@ def run_trial(
     # Extract final schedule from mark space
     final_schedule: dict[str, str] = {}
     for slot in SLOTS:
-        actions = env.space.read(
-            scope=RESOURCE_SCOPE,
-            resource=slot,
-            mark_type=MarkType.ACTION,
+        actions = cast(
+            list[Action],
+            env.space.read(
+                scope=RESOURCE_SCOPE,
+                resource=slot,
+                mark_type=MarkType.ACTION,
+            ),
         )
         booked = [a for a in actions if not a.failed]
         if booked:
