@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+title: markspace
+message: "If you use this work, please cite it using the metadata below."
+type: software
+version: 0.1.0
+date-released: 2026-03-12
+doi: 10.5281/zenodo.18990236
+url: https://github.com/opinionated-systems/markspace
+abstract: >
+  A stigmergic coordination protocol for LLM agent fleets.
+  Enforces safety and coordination constraints in a deterministic
+  guard layer outside the agents, so guarantees hold independent
+  of agent behavior.
+license:
+  - MIT
+  - CC-BY-4.0
