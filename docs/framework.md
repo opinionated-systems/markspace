@@ -212,7 +212,7 @@ An agent's local rules weight observations by `source * freshness * confidence`.
 
 **What**: "X is no longer true" or "X failed."
 
-**Biological analog**: Ant marking a depleted food source with repellent pheromone. Bees "stop signal" vibrating against a waggle dancer to suppress recruitment to a dangerous source.
+**Biological analog**: Ant marking a depleted food source with repellent pheromone. Bees "stop signal" vibrating against a waggle dancer to suppress recruitment to a dangerous source. (The stop signal is direct contact between individuals rather than environment modification; it is included here as a functional analog - suppressing an artifact already written into the shared space - rather than a structural one.)
 
 **Purpose**: Invalidation. An agent discovers that a previously observed fact has changed, a previously successful action has been reversed, or a resource previously considered safe is now compromised.
 
