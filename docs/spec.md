@@ -3,6 +3,8 @@
 **Version**: 2026-03-10-draft
 **Status**: Working draft
 
+This document is the formal specification for the markspace protocol. For the ideas and motivation behind it, see [framework.md](framework.md).
+
 ## Contents
 
 - [Abstract](#abstract)
