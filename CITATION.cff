@@ -11,6 +11,11 @@ abstract: >
   Enforces safety and coordination constraints in a deterministic
   guard layer outside the agents, so guarantees hold independent
   of agent behavior.
+authors:
+  - family-names: Loose
+    given-names: Andre
+    affiliation: Opinionated Systems, Inc.
+    email: andre@opinionated.systems
 license:
   - MIT
   - CC-BY-4.0
