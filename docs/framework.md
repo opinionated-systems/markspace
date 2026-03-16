@@ -383,7 +383,8 @@ At this boundary, and only at this boundary, consensus mechanisms apply:
 - **Median aggregation** of claims from multiple external agents (robust below honest majority)
 - **Peer-Agreement Drift (PAD) detection** to identify consistently deviating external agents
 - **Per-item metrics** over distributional ones (resists adaptive evasion)
-- **Cross-referencing** against fleet observations can upgrade to `EXTERNAL_VERIFIED`
+
+Incoming marks can be upgraded from `EXTERNAL_UNVERIFIED` to `EXTERNAL_VERIFIED` - for example through cross-referencing against fleet observations (manual), or cryptographic attestation via a shared trust root infrastructure (e.g., the `agent://` URI scheme, [Rodriguez, 2026](https://arxiv.org/abs/2601.14567)). The latter also enables capability-based discovery - locating cross-fleet collaborators by capability path rather than pre-configured identity - at the cost of requiring both fleets to participate in the same naming infrastructure.
 
 Stigmergy handles coordination within a fleet. Consensus applies at exactly one boundary: between fleets, where you cannot trust the other party's marks.
 
@@ -995,6 +996,8 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 **dfki-asr/stigmergy-demo** ([dfki-asr/stigmergy-demo](https://github.com/dfki-asr/stigmergy-demo)): stigmergic coordination in cyber-physical production scenarios, using linked data and semantic web agents to coordinate shared factory machinery. Not LLM-related but demonstrates the pattern in industrial multi-agent settings.
 
+**Agent Identity URI Scheme** ([Rodriguez, 2026](https://arxiv.org/abs/2601.14567)): proposes `agent://` as a stable, topology-independent naming scheme for multi-agent systems, combining an organizational trust root, a hierarchical capability path for semantic discovery, and a sortable unique identifier. The capability path (e.g., `/workflow/approval`) enables agents to locate collaborators by what they can do rather than by pre-configured identity - complementing markspace's static fleet composition with a dynamic discovery layer. Cryptographic attestation via PASETO tokens tied to the trust root provides a structural basis for cross-fleet identity verification. Most directly relevant to the cross-principal surface: attestation could upgrade incoming external marks to `EXTERNAL_VERIFIED` without manual cross-referencing, and capability paths enable runtime discovery of external fleet agents. The scheme assumes the attestation layer is the threat boundary and does not address adversarial agents operating within a legitimate trust root.
+
 **Gap this work addresses.** Shared-state coordination is well-established (blackboard systems, tuple spaces, shared databases). Stigmergic decay and reinforcement have been studied in swarm intelligence since the 1990s. The specific gap is the combination, adapted for LLM agents: (1) a typed mark taxonomy with formal decay/trust semantics designed for probabilistic, exploitable agents, (2) a deterministic enforcement layer independent of LLM compliance, (3) systematic experimental validation across adversarial, concurrent, and multi-resource conditions, and (4) a formal specification with property tests covering normative guarantees. Several of these components draw directly from prior work - decay from pheromone evaporation (Dorigo et al., 1996), trust weighting from reputation models (Granatyr et al., 2015), the enforcement layer from Hoare monitors (1974), visibility from Bell-LaPadula (1973). The mark taxonomy (the specific 5-type decomposition oriented around coordination failure modes), projected reads (structure-visible, content-redacted access that Bell-LaPadula has no analogue for), and the empirical validation at scale under adversarial pressure are new contributions. The broader contribution is their integration into a protocol adapted for agents that are probabilistic, exploitable, and operating in environments where information goes stale - properties that prior shared-state systems did not design for.
 
 
@@ -1002,6 +1005,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 ### Multi-agent coordination and failure analysis
 
+- Rodriguez, R.R. (2026). "Agent Identity URI Scheme: Topology-Independent Naming and Capability-Based Discovery for Multi-Agent Systems." [arXiv:2601.14567](https://arxiv.org/abs/2601.14567). [Proposes `agent://` URI scheme with organizational trust root, hierarchical capability paths for semantic discovery, and cryptographic attestation. Relevant to cross-principal interaction: attestation upgrades external marks structurally; capability paths enable cross-fleet agent discovery by capability.]
 - Shapira, N. et al. (2026). [Agents of Chaos](https://agentsofchaos.baulab.info/report.html). Bau Lab, Feb 2026. Red-teaming study of 6 autonomous agents documenting 16 failure case studies.
 - Kim, Y. et al. (2025). "Towards a Science of Scaling Agent Systems." [arXiv:2512.08296](https://arxiv.org/abs/2512.08296). [180 configurations, up to 4 agents, 4 benchmarks. Architecture-task alignment principle.]
 - Tomasev, N., Franklin, M., & Osindero, S. (2026). "Intelligent AI Delegation." [arXiv:2602.11865](https://arxiv.org/abs/2602.11865). [5 core requirements, 9 technical implementation areas for intelligent agent delegation.]
