@@ -4,7 +4,7 @@
   <img src="logo.svg" alt="markspace" width="280"/>
 </p>
 
-Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy), the mechanism by which biological systems coordinate at scale through continuous progress and adaptation. Agents coordinate through typed marks in a shared environment rather than direct messaging, and a deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution. Constraints live in infrastructure the agent cannot influence. Coordination is not pre-defined; it emerges from the marks agents leave, and decay ensures fresh marks dominate stale ones.
+Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy), the mechanism by which biological systems coordinate at scale: agents leave traces in the environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution - constraints that live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes.
 
 The protocol defines five mark types, three visibility levels, three conflict policies, trust-weighted decay, and [56 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
