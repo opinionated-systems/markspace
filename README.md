@@ -4,7 +4,7 @@
   <img src="logo.svg" alt="markspace" width="280"/>
 </p>
 
-Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets that enforces this. A deterministic guard layer at the environment boundary controls identity, scope, and conflict resolution. Constraints live in infrastructure the agent cannot influence - unlike message-passing frameworks, where safety depends on each agent correctly implementing checks. Agents coordinate through typed marks in a shared environment rather than direct messaging - inspired by [stigmergy](https://en.wikipedia.org/wiki/Stigmergy), the biological principle where coordination emerges from environmental traces.
+Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets that enforces this. A deterministic guard layer at the environment boundary controls identity, scope, and conflict resolution. Constraints live in infrastructure the agent cannot influence - unlike message-passing frameworks, where safety depends on each agent correctly implementing checks. Agents coordinate through typed marks in a shared environment rather than direct messaging. Natural systems that coordinate at scale do so through environment modification rather than message passing - [stigmergy](https://en.wikipedia.org/wiki/Stigmergy), the biological principle where coordination emerges from environmental traces, is the organizing idea here.
 
 The protocol defines five mark types, three visibility levels, three conflict policies, trust-weighted decay, and [56 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
@@ -47,7 +47,7 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 **Trust weighting:** Marks carry a source tag (fleet, external verified, external unverified). Trust weights attenuate effective strength. Fleet marks dominate external ones, and unverified sources are discounted further. Weights are configurable per deployment.
 
-**Decay:** Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
+**Decay:** Coordination is a dynamical process - the goal is stability against continuous change, not a fixed solution reached once. Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
 
 Full protocol design in [`framework.md`](docs/framework.md). Formal specification (56 properties, conformance checklist) in [`spec.md`](docs/spec.md).
 
