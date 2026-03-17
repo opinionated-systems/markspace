@@ -170,23 +170,35 @@ alice = Agent(name="alice", scopes={"calendar": ["intent", "action"]})
 bob = Agent(name="bob", scopes={"calendar": ["intent", "action", "observation"]})
 
 # Bob writes an observation (non-contested)
-guard.write_mark(bob, Observation(
-    scope="calendar", topic="availability",
-    content="Thu 2pm is open", confidence=0.9, source=Source.FLEET,
-))
+guard.write_mark(
+    bob,
+    Observation(
+        scope="calendar",
+        topic="availability",
+        content="Thu 2pm is open",
+        confidence=0.9,
+        source=Source.FLEET,
+    ),
+)
 
 # Alice books Thu 2pm - guard checks conflicts and records the action
 decision, result = guard.execute(
-    alice, scope="calendar", resource="thu-14:00",
-    intent_action="book", result_action="booked",
+    alice,
+    scope="calendar",
+    resource="thu-14:00",
+    intent_action="book",
+    result_action="booked",
     tool_fn=lambda: {"booked": "thu-14:00"},
 )
 assert decision.verdict == GuardVerdict.ALLOW
 
 # Bob tries the same slot - guard rejects (FIRST_WRITER)
 decision, _ = guard.execute(
-    bob, scope="calendar", resource="thu-14:00",
-    intent_action="book", result_action="booked",
+    bob,
+    scope="calendar",
+    resource="thu-14:00",
+    intent_action="book",
+    result_action="booked",
     tool_fn=lambda: {"booked": "thu-14:00"},
 )
 assert decision.verdict == GuardVerdict.CONFLICT
