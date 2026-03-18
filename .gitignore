@@ -39,4 +39,6 @@ htmlcov/
 .ipynb_checkpoints/
 
 review/
+demo/
 markspace-ts/
+distill/

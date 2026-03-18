@@ -4,6 +4,16 @@
   <img src="logo.svg" alt="markspace" width="280"/>
 </p>
 
+If you're coordinating multiple LLM agents, you've likely hit some of these:
+
+- **Prompt injection exposure** - agent identity and permissions are controlled by the LLM, so a compromised prompt can escalate privileges or impersonate other agents
+- **Implicit permissions** - you find out what an agent shouldn't have done after it already did it
+- **Blind trust** - no standard way to distinguish your fleet's data from API responses or crawled content
+- **Context drift** - long-running agents lose track of what happened 200 steps ago and repeat or contradict earlier actions
+- **Stale information** - observations are never superseded, even when newer ones exist
+- **No isolation boundary** - agents are coupled by their conversations, making them hard to test, swap, or reason about independently
+- **No escalation path** - when an agent needs a human decision, there's no structured way to surface it
+
 Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy), the mechanism by which biological systems coordinate at scale: agents leave traces in the environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution - constraints that live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes.
 
 The protocol defines five mark types, three visibility levels, three conflict policies, trust-weighted decay, and [56 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
@@ -80,7 +90,7 @@ validate_pipeline([sensor, alerter])  # guard rejects anything outside declared 
 
 ## Verification
 
-The reference implementation and experiments verify that the protocol's properties hold under realistic conditions.
+The reference implementation and experiments verify that the protocol's properties hold under realistic conditions. The animation below shows a week of coordination in a large office where every employee has a personal AI assistant - a natural scenario that exercises all protocol features at scale.
 
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
