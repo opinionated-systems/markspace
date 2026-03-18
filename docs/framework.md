@@ -1009,13 +1009,30 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 ## References
 
-### Multi-agent coordination and failure analysis
+### LLM multi-agent coordination
 
 - Rodriguez, R.R. (2026). "Agent Identity URI Scheme: Topology-Independent Naming and Capability-Based Discovery for Multi-Agent Systems." [arXiv:2601.14567](https://arxiv.org/abs/2601.14567). [Proposes `agent://` URI scheme with organizational trust root, hierarchical capability paths for semantic discovery, and cryptographic attestation. Relevant to cross-principal interaction: attestation upgrades external marks structurally; capability paths enable cross-fleet agent discovery by capability.]
 - Shapira, N. et al. (2026). [Agents of Chaos](https://agentsofchaos.baulab.info/report.html). Bau Lab, Feb 2026. Red-teaming study of 6 autonomous agents documenting 16 failure case studies.
 - Kim, Y. et al. (2025). "Towards a Science of Scaling Agent Systems." [arXiv:2512.08296](https://arxiv.org/abs/2512.08296). [180 configurations, up to 4 agents, 4 benchmarks. Architecture-task alignment principle.]
 - Tomasev, N., Franklin, M., & Osindero, S. (2026). "Intelligent AI Delegation." [arXiv:2602.11865](https://arxiv.org/abs/2602.11865). [5 core requirements, 9 technical implementation areas for intelligent agent delegation.]
 - Cemri, M., Pan, M., Yang, S. et al. (2025). "Why Do Multi-Agent LLM Systems Fail?" [arXiv:2503.13657](https://arxiv.org/abs/2503.13657). [MAST taxonomy: 14 failure modes, 1,600+ annotated traces across 7 MAS frameworks.]
+- Wang, G., Xie, Y., Jiang, Y., et al. (2023). "Voyager: An Open-Ended Embodied Agent with Large Language Models." [arXiv:2305.16291](https://arxiv.org/abs/2305.16291). [LLM agent building shared skill library through environment interaction.]
+- Park, J.S., O'Brien, J.C., Cai, C.J., et al. (2023). "Generative Agents: Interactive Simulacra of Human Behavior." [arXiv:2304.03442](https://arxiv.org/abs/2304.03442). [25 LLM agents coordinating through shared persistent environment.]
+- Qian, C., Cong, X., Yang, C., et al. (2023). "Communicative Agents for Software Development." [arXiv:2307.07924](https://arxiv.org/abs/2307.07924). [ChatDev: LLM agents collaborating through shared documents.]
+- Li, G., Hammoud, H.A.A.K., Itani, H., Khizbullin, D., & Ghanem, B. (2023). "CAMEL: Communicative Agents for 'Mind' Exploration of Large Language Model Society." [arXiv:2310.03903](https://arxiv.org/abs/2310.03903). [eric-ai-lab/llm_coordination](https://github.com/eric-ai-lab/llm_coordination). [LLM coordination benchmark and Cognitive Architecture for Coordination.]
+- Ju, Y. et al. (2025). "TAMAS: Benchmarking Adversarial Risks in Multi-Agent LLM Systems." [arXiv:2511.05269](https://arxiv.org/abs/2511.05269). ICML 2025. [Benchmark for multi-agent adversarial risks; identifies attack classes (collusion, contradiction, compromise) with no analog in single-agent setups.]
+- He, P., Lin, Y., Dong, S., Xu, H., Xing, Y., & Liu, H. (2025). "Red-Teaming LLM Multi-Agent Systems via Communication Attacks." [arXiv:2502.14847](https://arxiv.org/abs/2502.14847). Findings of ACL 2025. [Agent-in-the-Middle attack: compromises entire multi-agent systems by manipulating inter-agent messages, without compromising any individual agent.]
+- [AdviceNXT/sbp](https://github.com/AdviceNXT/sbp). Stigmergic Blackboard Protocol. [Digital pheromones with intensity decay for agent coordination.]
+- [KeepALifeUS/autonomous-agents](https://github.com/KeepALifeUS/autonomous-agents). 4 Claude agents coordinating via file-based markspace. [File-based mark space with queue.json/active.json.]
+- [langroid/langroid](https://github.com/langroid/langroid). Multi-agent LLM framework using hierarchical task-delegation inspired by the Actor model.
+- [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI). Role-based multi-agent orchestration with sequential/hierarchical process definitions.
+- [microsoft/autogen](https://github.com/microsoft/autogen). Multi-agent framework with group chat coordination and tool-use constraints.
+- [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph). Graph-based agent orchestration with explicit state-graph edges.
+- [microsoft/agent-framework](https://github.com/microsoft/agent-framework). Lightweight agent framework with opt-in runtime context injection via FunctionTool. Used in the comparison experiment.
+- [pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai). Type-safe LLM agent framework with dependency injection via RunContext.
+- [fastmcp](https://gofastmcp.com). FastMCP server framework for the Model Context Protocol.
+- [TsinghuaC3I/MARTI](https://github.com/TsinghuaC3I/MARTI). Multi-agent reinforced training and inference (ICLR 2026).
+- [dfki-asr/stigmergy-demo](https://github.com/dfki-asr/stigmergy-demo). Stigmergic coordination in cyber-physical production with linked data agents.
 
 ### Agent-level safety enforcement
 
@@ -1028,7 +1045,28 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Shi, G., Du, H., Wang, Z., Liang, X., Liu, W., Bian, S., & Guan, Z. (2025). "SoK: Trust-Authorization Mismatch in LLM Agent Interactions." [arXiv:2512.06914](https://arxiv.org/abs/2512.06914). [Systematization of knowledge across the agent security landscape. Static permissions decouple from runtime trustworthiness; prompt injection and tool poisoning share a common root cause. Proposes Belief-Intention-Permission (B-I-P) framework.]
 - Brodt, O., Feldman, E., Schneier, B., & Nassi, B. (2026). "The Promptware Kill Chain: How Prompt Injections Gradually Evolved Into a Multistep Malware Delivery Mechanism." [arXiv:2601.09625](https://arxiv.org/abs/2601.09625). [Seven-stage kill chain from initial access through privilege escalation, persistence, lateral movement, and actions on objective. Analyzes 36 studies.]
 - Xu, Z., Qi, M., Wu, S., Zhang, L., Wei, Q., He, H., & Li, N. (2025). "The Trust Paradox in LLM-Based Multi-Agent Systems: When Collaboration Becomes a Security Vulnerability." [arXiv:2510.18563](https://arxiv.org/abs/2510.18563). [Higher inter-agent trust improves task success but increases over-exposure and authorization drift. Proposes Over-Exposure Rate (OER) and Authorization Drift (AD) metrics.]
-- Lupinacci, M., Pironti, F.A., Blefari, F., Romeo, F., Arena, L., & Furfaro, A. (2025). "The Dark Side of LLMs: Agent-based Attacks for Complete Computer Takeover." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [LLMs that resist direct malicious commands execute identical payloads when requested by peer agents. 94.4% succumb to direct prompt injection; 83.3% to RAG backdoor.]
+- Lupinacci, M., Pironti, F.A., Blefari, F., Romeo, F., Arena, L., & Furfaro, A. (2025). "The Dark Side of LLMs: Agent-based Attacks for Complete Computer Takeover." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [94.4% of 18 tested LLMs succumb to direct prompt injection; 83.3% to RAG backdoor; 100% to inter-agent trust exploitation, where LLMs execute payloads from peer agents with no jailbreak required.]
+
+### Agent context management
+
+- Lindenbauer, T., Slinko, I., Felder, L., Bogomolov, E., & Zharov, Y. (2025). "The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization for Agent Context Management." [arXiv:2508.21433](https://arxiv.org/abs/2508.21433). DL4Code Workshop, NeurIPS 2025. [Observation masking halves cost and matches LLM summarization on SWE-bench Verified.]
+- Hu, M., Chen, T., Chen, Q., Mu, Y., Shao, W., & Luo, P. (2024). "HiAgent: Hierarchical Working Memory Management for Solving Long-Horizon Agent Tasks with Large Language Model." [arXiv:2408.09559](https://arxiv.org/abs/2408.09559). ACL 2025. [Subgoal-based memory chunking: summarize completed subgoals, retain active subgoal in full detail. 2x success rate on long-horizon tasks.]
+- Hu, Y., Liu, S., Yue, Y. et al. (2025). "Memory in the Age of AI Agents: A Survey." [arXiv:2512.13564](https://arxiv.org/abs/2512.13564). [Comprehensive survey of agent memory: forms (textual, parametric, structured), functions (factual, experiential, working), and lifecycle (formation, evolution, retrieval).]
+- Labate, A.B., de Sousa, V.M., Fiorini, S.R., Azevedo, L.G., Thiago, R.M., & da Silva, V.T. (2025). "Solving Context Window Overflow in AI Agents." [arXiv:2511.22729](https://arxiv.org/abs/2511.22729). [Memory pointers for arbitrarily large tool outputs without truncation or summarization.]
+- Bach, D. (2025). "PBFT-Backed Semantic Voting for Multi-Agent Memory Pruning." [arXiv:2506.17338](https://arxiv.org/abs/2506.17338). [Co-Forgetting Protocol: consensus-based synchronized memory pruning with multi-scale temporal decay for multi-agent systems.]
+
+### Governance and safety
+
+- Shavit, Y., Agarwal, S., et al. (2023). "Practices for Governing Agentic AI Systems." OpenAI. [PDF](https://cdn.openai.com/papers/practices-for-governing-agentic-ai-systems.pdf). [Governance framework for agentic AI: oversight, monitoring, alignment.]
+- Rose, S., Borchert, O., Mitchell, S., & Connelly, S. (2020). "Zero Trust Architecture." NIST Special Publication 800-207. [doi:10.6028/NIST.SP.800-207](https://doi.org/10.6028/NIST.SP.800-207). [Per-session, least-privilege access control - no implicit trust between resources.]
+- Hsueh, M.-C., Tsai, T.K., & Iyer, R.K. (1997). "Fault Injection Techniques and Tools." *IEEE Computer*, 30(4), 75-82. [doi:10.1109/2.585157](https://doi.org/10.1109/2.585157). [Canonical survey on injecting synthetic faults to verify system response - the basis for diagnostic probing.]
+- Scheurer, J., Balesni, M., & Hobbhahn, M. (2024). "Large Language Models can Strategically Deceive their Users when Put Under Pressure." [arXiv:2311.07590](https://arxiv.org/abs/2311.07590). [First demonstration of strategic deception in LLMs without explicit training for it.]
+- Hubinger, E., Denison, C., Mu, J., Lambert, M., et al. (2024). "Sleeper Agents: Training Deceptive LLMs that Persist Through Safety Training." [arXiv:2401.05566](https://arxiv.org/abs/2401.05566). [Deceptive behavior persists through safety training; models behave differently when they believe they are unmonitored.]
+- NIST Center for AI Standards and Innovation (2026). ["AI Agent Standards Initiative."](https://www.nist.gov/news-events/news/2026/02/announcing-ai-agent-standards-initiative-interoperable-and-secure) [Industry-led standards for secure, interoperable AI agents: security controls, risk management, identity and authorization, with an open [RFI on AI agent security](https://www.nist.gov/news-events/news/2026/01/caisi-issues-request-information-about-securing-ai-agent-systems).]
+- Bhatt, U. et al. (2025). "ETDI: Mitigating Tool Squatting and Rug Pull Attacks in Model Context Protocol (MCP) by using OAuth-Enhanced Tool Definitions and Policy-Based Access Control." [arXiv:2506.01333](https://arxiv.org/abs/2506.01333). [Identifies that MCP has no built-in mechanism to cryptographically verify tool origin or authenticity; proposes OAuth-enhanced tool definitions.]
+- Huang, Y., Ma, B., Yan, B., Dai, X., Zhang, Y., Xu, M., Xu, K., & Zhang, Y. (2026). "Give Them an Inch and They Will Take a Mile: Understanding and Measuring Caller Identity Confusion in MCP-Based AI Systems." [arXiv:2603.07473](https://arxiv.org/abs/2603.07473). [MCP servers cannot distinguish who invokes a request; session-scoped authorization without per-tool re-authentication expands the attack surface in multi-agent MCP deployments.]
+- Zhang, Y. et al. (2026). "Taming Various Privilege Escalation in LLM-Based Agent Systems: A Mandatory Access Control Framework." [arXiv:2601.11893](https://arxiv.org/abs/2601.11893). [Identifies privilege escalation scenarios in multi-agent LLM systems, including a variant of the confused deputy problem arising from absent inter-agent authentication.]
+- Triedman, H., Jha, R., & Shmatikov, V. (2025). "Multi-Agent Systems Execute Arbitrary Malicious Code." [arXiv:2503.12188](https://arxiv.org/abs/2503.12188). [Adversarial content hijacks control across multi-agent systems with 58-90% success; attacks succeed even when individual agents refuse harmful actions and are not susceptible to direct prompt injection.]
 
 ### Biology
 
@@ -1063,7 +1101,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Marsh, S.P. (1994). "Formalising Trust as a Computational Concept." PhD Thesis, University of Stirling. [STORRE:1893/2010](https://dspace.stir.ac.uk/handle/1893/2010). [First formalization of computational trust.]
 - Granatyr, J., Botelho, V., Lessing, O.R., Scalabrin, E.E., Barthès, J.-P., & Enembreck, F. (2015). "Trust and Reputation Models for Multiagent Systems." *ACM Computing Surveys*, 48(2), 27:1-27:42. [doi:10.1145/2816826](https://doi.org/10.1145/2816826). [Comprehensive survey of trust and reputation models across two decades.]
 
-
 ### Multi-agent environments
 
 - Weyns, D., Omicini, A., & Odell, J. (2007). "Environment as a first class abstraction in multiagent systems." *Autonomous Agents and Multi-Agent Systems*, 14(1), 5-30. [doi:10.1007/s10458-006-0012-0](https://doi.org/10.1007/s10458-006-0012-0). [Environment as active architectural element, not passive container.]
@@ -1082,49 +1119,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 - Lamport, L., Shostak, R., & Pease, M. (1982). "The Byzantine Generals Problem." *ACM TOPLAS*, 4(3), 382-401. [doi:10.1145/357172.357176](https://doi.org/10.1145/357172.357176).
 - Hampel, F.R. (1971). "A general qualitative definition of robustness." *Annals of Mathematical Statistics*, 42(6), 1887-1896. [doi:10.1214/aoms/1177693054](https://doi.org/10.1214/aoms/1177693054).
-
-### Governance and safety
-
-- Shavit, Y., Agarwal, S., et al. (2023). "Practices for Governing Agentic AI Systems." OpenAI. [PDF](https://cdn.openai.com/papers/practices-for-governing-agentic-ai-systems.pdf). [Governance framework for agentic AI: oversight, monitoring, alignment.]
-- Rose, S., Borchert, O., Mitchell, S., & Connelly, S. (2020). "Zero Trust Architecture." NIST Special Publication 800-207. [doi:10.6028/NIST.SP.800-207](https://doi.org/10.6028/NIST.SP.800-207). [Per-session, least-privilege access control - no implicit trust between resources.]
-- Hsueh, M.-C., Tsai, T.K., & Iyer, R.K. (1997). "Fault Injection Techniques and Tools." *IEEE Computer*, 30(4), 75-82. [doi:10.1109/2.585157](https://doi.org/10.1109/2.585157). [Canonical survey on injecting synthetic faults to verify system response - the basis for diagnostic probing.]
-- Scheurer, J., Balesni, M., & Hobbhahn, M. (2024). "Large Language Models can Strategically Deceive their Users when Put Under Pressure." [arXiv:2311.07590](https://arxiv.org/abs/2311.07590). [First demonstration of strategic deception in LLMs without explicit training for it.]
-- Hubinger, E., Denison, C., Mu, J., Lambert, M., et al. (2024). "Sleeper Agents: Training Deceptive LLMs that Persist Through Safety Training." [arXiv:2401.05566](https://arxiv.org/abs/2401.05566). [Deceptive behavior persists through safety training; models behave differently when they believe they are unmonitored.]
-- NIST Center for AI Standards and Innovation (2026). ["AI Agent Standards Initiative."](https://www.nist.gov/news-events/news/2026/02/announcing-ai-agent-standards-initiative-interoperable-and-secure) [Industry-led standards for secure, interoperable AI agents: security controls, risk management, identity and authorization, with an open [RFI on AI agent security](https://www.nist.gov/news-events/news/2026/01/caisi-issues-request-information-about-securing-ai-agent-systems).]
-- Bhatt, U. et al. (2025). "ETDI: Mitigating Tool Squatting and Rug Pull Attacks in Model Context Protocol (MCP) by using OAuth-Enhanced Tool Definitions and Policy-Based Access Control." [arXiv:2506.01333](https://arxiv.org/abs/2506.01333). [Identifies that MCP has no built-in mechanism to cryptographically verify tool origin or authenticity; proposes OAuth-enhanced tool definitions.]
-- Huang, Y., Ma, B., Yan, B., Dai, X., Zhang, Y., Xu, M., Xu, K., & Zhang, Y. (2026). "Give Them an Inch and They Will Take a Mile: Understanding and Measuring Caller Identity Confusion in MCP-Based AI Systems." [arXiv:2603.07473](https://arxiv.org/abs/2603.07473). [MCP servers cannot distinguish who invokes a request; session-scoped authorization without per-tool re-authentication expands the attack surface in multi-agent MCP deployments.]
-- Zhang, Y. et al. (2026). "Taming Various Privilege Escalation in LLM-Based Agent Systems: A Mandatory Access Control Framework." [arXiv:2601.11893](https://arxiv.org/abs/2601.11893). [Identifies privilege escalation scenarios in multi-agent LLM systems, including a variant of the confused deputy problem arising from absent inter-agent authentication.]
-- Triedman, H., Jha, R., & Shmatikov, V. (2025). "Multi-Agent Systems Execute Arbitrary Malicious Code." [arXiv:2503.12188](https://arxiv.org/abs/2503.12188). [Adversarial content hijacks control across multi-agent systems with 58-90% success; attacks succeed even when individual agents refuse harmful actions and are not susceptible to direct prompt injection.]
-- Triedman, H. et al. (2025). "The Dark Side of LLMs: Agent-based Attacks for Complete Computer Takeover." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [100% of 18 tested LLMs execute malicious payloads when requested by a peer agent, with no jailbreak required; safety training primarily addresses human-AI rather than AI-AI interactions.]
-
-### Agent context management
-
-- Lindenbauer, T., Slinko, I., Felder, L., Bogomolov, E., & Zharov, Y. (2025). "The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization for Agent Context Management." [arXiv:2508.21433](https://arxiv.org/abs/2508.21433). DL4Code Workshop, NeurIPS 2025. [Observation masking halves cost and matches LLM summarization on SWE-bench Verified.]
-- Hu, M., Chen, T., Chen, Q., Mu, Y., Shao, W., & Luo, P. (2024). "HiAgent: Hierarchical Working Memory Management for Solving Long-Horizon Agent Tasks with Large Language Model." [arXiv:2408.09559](https://arxiv.org/abs/2408.09559). ACL 2025. [Subgoal-based memory chunking: summarize completed subgoals, retain active subgoal in full detail. 2x success rate on long-horizon tasks.]
-- Hu, Y., Liu, S., Yue, Y. et al. (2025). "Memory in the Age of AI Agents: A Survey." [arXiv:2512.13564](https://arxiv.org/abs/2512.13564). [Comprehensive survey of agent memory: forms (textual, parametric, structured), functions (factual, experiential, working), and lifecycle (formation, evolution, retrieval).]
-- Labate, A.B., de Sousa, V.M., Fiorini, S.R., Azevedo, L.G., Thiago, R.M., & da Silva, V.T. (2025). "Solving Context Window Overflow in AI Agents." [arXiv:2511.22729](https://arxiv.org/abs/2511.22729). [Memory pointers for arbitrarily large tool outputs without truncation or summarization.]
-- Bach, D. (2025). "PBFT-Backed Semantic Voting for Multi-Agent Memory Pruning." [arXiv:2506.17338](https://arxiv.org/abs/2506.17338). [Co-Forgetting Protocol: consensus-based synchronized memory pruning with multi-scale temporal decay for multi-agent systems.]
-
-### LLM multi-agent coordination
-
-- Wang, G., Xie, Y., Jiang, Y., et al. (2023). "Voyager: An Open-Ended Embodied Agent with Large Language Models." [arXiv:2305.16291](https://arxiv.org/abs/2305.16291). [LLM agent building shared skill library through environment interaction.]
-- Park, J.S., O'Brien, J.C., Cai, C.J., et al. (2023). "Generative Agents: Interactive Simulacra of Human Behavior." [arXiv:2304.03442](https://arxiv.org/abs/2304.03442). [25 LLM agents coordinating through shared persistent environment.]
-- Qian, C., Cong, X., Yang, C., et al. (2023). "Communicative Agents for Software Development." [arXiv:2307.07924](https://arxiv.org/abs/2307.07924). [ChatDev: LLM agents collaborating through shared documents.]
-- Li, G., Hammoud, H.A.A.K., Itani, H., Khizbullin, D., & Ghanem, B. (2023). "CAMEL: Communicative Agents for 'Mind' Exploration of Large Language Model Society." [arXiv:2310.03903](https://arxiv.org/abs/2310.03903). [eric-ai-lab/llm_coordination](https://github.com/eric-ai-lab/llm_coordination). [LLM coordination benchmark and Cognitive Architecture for Coordination.]
-- Wang, M., Marro, S., Bhatt, U., & Weller, A. (2026). "AgentSpec: Customizable Runtime Enforcement for Safe and Reliable LLM Agents." [arXiv:2503.18666](https://arxiv.org/abs/2503.18666). [Domain-specific language for runtime constraints on LLM agents.]
-- Ju, Y. et al. (2025). "TAMAS: Benchmarking Adversarial Risks in Multi-Agent LLM Systems." [arXiv:2511.05269](https://arxiv.org/abs/2511.05269). ICML 2025. [Benchmark for multi-agent adversarial risks; identifies attack classes (collusion, contradiction, compromise) with no analog in single-agent setups.]
-- He, P., Lin, Y., Dong, S., Xu, H., Xing, Y., & Liu, H. (2025). "Red-Teaming LLM Multi-Agent Systems via Communication Attacks." [arXiv:2502.14847](https://arxiv.org/abs/2502.14847). Findings of ACL 2025. [Agent-in-the-Middle attack: compromises entire multi-agent systems by manipulating inter-agent messages, without compromising any individual agent.]
-- [AdviceNXT/sbp](https://github.com/AdviceNXT/sbp). Stigmergic Blackboard Protocol. [Digital pheromones with intensity decay for agent coordination.]
-- [KeepALifeUS/autonomous-agents](https://github.com/KeepALifeUS/autonomous-agents). 4 Claude agents coordinating via file-based markspace. [File-based mark space with queue.json/active.json.]
-- [langroid/langroid](https://github.com/langroid/langroid). Multi-agent LLM framework using hierarchical task-delegation inspired by the Actor model.
-- [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI). Role-based multi-agent orchestration with sequential/hierarchical process definitions.
-- [microsoft/autogen](https://github.com/microsoft/autogen). Multi-agent framework with group chat coordination and tool-use constraints.
-- [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph). Graph-based agent orchestration with explicit state-graph edges.
-- [microsoft/agent-framework](https://github.com/microsoft/agent-framework). Lightweight agent framework with opt-in runtime context injection via FunctionTool. Used in the comparison experiment.
-- [pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai). Type-safe LLM agent framework with dependency injection via RunContext.
-- [fastmcp](https://gofastmcp.com). FastMCP server framework for the Model Context Protocol.
-- [TsinghuaC3I/MARTI](https://github.com/TsinghuaC3I/MARTI). Multi-agent reinforced training and inference (ICLR 2026).
-- [dfki-asr/stigmergy-demo](https://github.com/dfki-asr/stigmergy-demo). Stigmergic coordination in cyber-physical production with linked data agents.
 
 ### Formal verification
 
