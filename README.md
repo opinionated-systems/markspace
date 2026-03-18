@@ -61,7 +61,7 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 Full protocol design in [`framework.md`](docs/framework.md). Formal specification (56 properties, conformance checklist) in [`spec.md`](docs/spec.md).
 
-## Composition
+## Composition and isolation
 
 Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent declares what it can read and write in a manifest, and the guard rejects everything else. Capabilities you didn't grant don't exist.
 
