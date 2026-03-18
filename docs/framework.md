@@ -1009,6 +1009,14 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 ## References
 
+### Agent-level safety enforcement
+
+- Wang, H., Poskitt, C.M., & Sun, J. (2026). "AgentSpec: Customizable Runtime Enforcement for Safe and Reliable LLM Agents." [arXiv:2503.18666](https://arxiv.org/abs/2503.18666). ICSE 2026. [DSL for runtime constraints on individual agents: triggers, predicates, enforcement actions. Complementary to markspace - covers the agent-internal layer markspace deliberately leaves out.]
+
+### Multi-agent environments
+
+- Weyns, D., Omicini, A., & Odell, J. (2007). "Environment as a first class abstraction in multiagent systems." *Autonomous Agents and Multi-Agent Systems*, 14(1), 5-30. [doi:10.1007/s10458-006-0012-0](https://doi.org/10.1007/s10458-006-0012-0). [Environment as active architectural element, not passive container.]
+
 ### LLM multi-agent coordination
 
 - Rodriguez, R.R. (2026). "Agent Identity URI Scheme: Topology-Independent Naming and Capability-Based Discovery for Multi-Agent Systems." [arXiv:2601.14567](https://arxiv.org/abs/2601.14567). [Proposes `agent://` URI scheme with organizational trust root, hierarchical capability paths for semantic discovery, and cryptographic attestation. Relevant to cross-principal interaction: attestation upgrades external marks structurally; capability paths enable cross-fleet agent discovery by capability.]
@@ -1020,8 +1028,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Park, J.S., O'Brien, J.C., Cai, C.J., et al. (2023). "Generative Agents: Interactive Simulacra of Human Behavior." [arXiv:2304.03442](https://arxiv.org/abs/2304.03442). [25 LLM agents coordinating through shared persistent environment.]
 - Qian, C., Cong, X., Yang, C., et al. (2023). "Communicative Agents for Software Development." [arXiv:2307.07924](https://arxiv.org/abs/2307.07924). [ChatDev: LLM agents collaborating through shared documents.]
 - Li, G., Hammoud, H.A.A.K., Itani, H., Khizbullin, D., & Ghanem, B. (2023). "CAMEL: Communicative Agents for 'Mind' Exploration of Large Language Model Society." [arXiv:2310.03903](https://arxiv.org/abs/2310.03903). [eric-ai-lab/llm_coordination](https://github.com/eric-ai-lab/llm_coordination). [LLM coordination benchmark and Cognitive Architecture for Coordination.]
-- Ju, Y. et al. (2025). "TAMAS: Benchmarking Adversarial Risks in Multi-Agent LLM Systems." [arXiv:2511.05269](https://arxiv.org/abs/2511.05269). ICML 2025. [Benchmark for multi-agent adversarial risks; identifies attack classes (collusion, contradiction, compromise) with no analog in single-agent setups.]
-- He, P., Lin, Y., Dong, S., Xu, H., Xing, Y., & Liu, H. (2025). "Red-Teaming LLM Multi-Agent Systems via Communication Attacks." [arXiv:2502.14847](https://arxiv.org/abs/2502.14847). Findings of ACL 2025. [Agent-in-the-Middle attack: compromises entire multi-agent systems by manipulating inter-agent messages, without compromising any individual agent.]
 - [AdviceNXT/sbp](https://github.com/AdviceNXT/sbp). Stigmergic Blackboard Protocol. [Digital pheromones with intensity decay for agent coordination.]
 - [KeepALifeUS/autonomous-agents](https://github.com/KeepALifeUS/autonomous-agents). 4 Claude agents coordinating via file-based markspace. [File-based mark space with queue.json/active.json.]
 - [langroid/langroid](https://github.com/langroid/langroid). Multi-agent LLM framework using hierarchical task-delegation inspired by the Actor model.
@@ -1034,10 +1040,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - [TsinghuaC3I/MARTI](https://github.com/TsinghuaC3I/MARTI). Multi-agent reinforced training and inference (ICLR 2026).
 - [dfki-asr/stigmergy-demo](https://github.com/dfki-asr/stigmergy-demo). Stigmergic coordination in cyber-physical production with linked data agents.
 
-### Agent-level safety enforcement
-
-- Wang, H., Poskitt, C.M., & Sun, J. (2026). "AgentSpec: Customizable Runtime Enforcement for Safe and Reliable LLM Agents." [arXiv:2503.18666](https://arxiv.org/abs/2503.18666). ICSE 2026. [DSL for runtime constraints on individual agents: triggers, predicates, enforcement actions. Complementary to markspace - covers the agent-internal layer markspace deliberately leaves out.]
-
 ### Adversarial robustness in multi-agent systems
 
 - Standen, M., Kim, J., & Szabo, C. (2025). "Adversarial Machine Learning Attacks and Defences in Multi-Agent Reinforcement Learning." *ACM Computing Surveys*. [doi:10.1145/3708320](https://doi.org/10.1145/3708320).
@@ -1046,6 +1048,12 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Brodt, O., Feldman, E., Schneier, B., & Nassi, B. (2026). "The Promptware Kill Chain: How Prompt Injections Gradually Evolved Into a Multistep Malware Delivery Mechanism." [arXiv:2601.09625](https://arxiv.org/abs/2601.09625). [Seven-stage kill chain from initial access through privilege escalation, persistence, lateral movement, and actions on objective. Analyzes 36 studies.]
 - Xu, Z., Qi, M., Wu, S., Zhang, L., Wei, Q., He, H., & Li, N. (2025). "The Trust Paradox in LLM-Based Multi-Agent Systems: When Collaboration Becomes a Security Vulnerability." [arXiv:2510.18563](https://arxiv.org/abs/2510.18563). [Higher inter-agent trust improves task success but increases over-exposure and authorization drift. Proposes Over-Exposure Rate (OER) and Authorization Drift (AD) metrics.]
 - Lupinacci, M., Pironti, F.A., Blefari, F., Romeo, F., Arena, L., & Furfaro, A. (2025). "The Dark Side of LLMs: Agent-based Attacks for Complete Computer Takeover." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [94.4% of 18 tested LLMs succumb to direct prompt injection; 83.3% to RAG backdoor; 100% to inter-agent trust exploitation, where LLMs execute payloads from peer agents with no jailbreak required.]
+- Ju, Y. et al. (2025). "TAMAS: Benchmarking Adversarial Risks in Multi-Agent LLM Systems." [arXiv:2511.05269](https://arxiv.org/abs/2511.05269). ICML 2025. [Benchmark for multi-agent adversarial risks; identifies attack classes (collusion, contradiction, compromise) with no analog in single-agent setups.]
+- He, P., Lin, Y., Dong, S., Xu, H., Xing, Y., & Liu, H. (2025). "Red-Teaming LLM Multi-Agent Systems via Communication Attacks." [arXiv:2502.14847](https://arxiv.org/abs/2502.14847). Findings of ACL 2025. [Agent-in-the-Middle attack: compromises entire multi-agent systems by manipulating inter-agent messages, without compromising any individual agent.]
+- Triedman, H., Jha, R., & Shmatikov, V. (2025). "Multi-Agent Systems Execute Arbitrary Malicious Code." [arXiv:2503.12188](https://arxiv.org/abs/2503.12188). [Adversarial content hijacks control across multi-agent systems with 58-90% success; attacks succeed even when individual agents refuse harmful actions and are not susceptible to direct prompt injection.]
+- Zhang, Y. et al. (2026). "Taming Various Privilege Escalation in LLM-Based Agent Systems: A Mandatory Access Control Framework." [arXiv:2601.11893](https://arxiv.org/abs/2601.11893). [Identifies privilege escalation scenarios in multi-agent LLM systems, including a variant of the confused deputy problem arising from absent inter-agent authentication.]
+- Huang, Y., Ma, B., Yan, B., Dai, X., Zhang, Y., Xu, M., Xu, K., & Zhang, Y. (2026). "Give Them an Inch and They Will Take a Mile: Understanding and Measuring Caller Identity Confusion in MCP-Based AI Systems." [arXiv:2603.07473](https://arxiv.org/abs/2603.07473). [MCP servers cannot distinguish who invokes a request; session-scoped authorization without per-tool re-authentication expands the attack surface in multi-agent MCP deployments.]
+- Bhatt, U. et al. (2025). "ETDI: Mitigating Tool Squatting and Rug Pull Attacks in Model Context Protocol (MCP) by using OAuth-Enhanced Tool Definitions and Policy-Based Access Control." [arXiv:2506.01333](https://arxiv.org/abs/2506.01333). [Identifies that MCP has no built-in mechanism to cryptographically verify tool origin or authenticity; proposes OAuth-enhanced tool definitions.]
 
 ### Agent context management
 
@@ -1063,10 +1071,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Scheurer, J., Balesni, M., & Hobbhahn, M. (2024). "Large Language Models can Strategically Deceive their Users when Put Under Pressure." [arXiv:2311.07590](https://arxiv.org/abs/2311.07590). [First demonstration of strategic deception in LLMs without explicit training for it.]
 - Hubinger, E., Denison, C., Mu, J., Lambert, M., et al. (2024). "Sleeper Agents: Training Deceptive LLMs that Persist Through Safety Training." [arXiv:2401.05566](https://arxiv.org/abs/2401.05566). [Deceptive behavior persists through safety training; models behave differently when they believe they are unmonitored.]
 - NIST Center for AI Standards and Innovation (2026). ["AI Agent Standards Initiative."](https://www.nist.gov/news-events/news/2026/02/announcing-ai-agent-standards-initiative-interoperable-and-secure) [Industry-led standards for secure, interoperable AI agents: security controls, risk management, identity and authorization, with an open [RFI on AI agent security](https://www.nist.gov/news-events/news/2026/01/caisi-issues-request-information-about-securing-ai-agent-systems).]
-- Bhatt, U. et al. (2025). "ETDI: Mitigating Tool Squatting and Rug Pull Attacks in Model Context Protocol (MCP) by using OAuth-Enhanced Tool Definitions and Policy-Based Access Control." [arXiv:2506.01333](https://arxiv.org/abs/2506.01333). [Identifies that MCP has no built-in mechanism to cryptographically verify tool origin or authenticity; proposes OAuth-enhanced tool definitions.]
-- Huang, Y., Ma, B., Yan, B., Dai, X., Zhang, Y., Xu, M., Xu, K., & Zhang, Y. (2026). "Give Them an Inch and They Will Take a Mile: Understanding and Measuring Caller Identity Confusion in MCP-Based AI Systems." [arXiv:2603.07473](https://arxiv.org/abs/2603.07473). [MCP servers cannot distinguish who invokes a request; session-scoped authorization without per-tool re-authentication expands the attack surface in multi-agent MCP deployments.]
-- Zhang, Y. et al. (2026). "Taming Various Privilege Escalation in LLM-Based Agent Systems: A Mandatory Access Control Framework." [arXiv:2601.11893](https://arxiv.org/abs/2601.11893). [Identifies privilege escalation scenarios in multi-agent LLM systems, including a variant of the confused deputy problem arising from absent inter-agent authentication.]
-- Triedman, H., Jha, R., & Shmatikov, V. (2025). "Multi-Agent Systems Execute Arbitrary Malicious Code." [arXiv:2503.12188](https://arxiv.org/abs/2503.12188). [Adversarial content hijacks control across multi-agent systems with 58-90% success; attacks succeed even when individual agents refuse harmful actions and are not susceptible to direct prompt injection.]
 
 ### Biology
 
@@ -1101,10 +1105,6 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Marsh, S.P. (1994). "Formalising Trust as a Computational Concept." PhD Thesis, University of Stirling. [STORRE:1893/2010](https://dspace.stir.ac.uk/handle/1893/2010). [First formalization of computational trust.]
 - Granatyr, J., Botelho, V., Lessing, O.R., Scalabrin, E.E., Barthès, J.-P., & Enembreck, F. (2015). "Trust and Reputation Models for Multiagent Systems." *ACM Computing Surveys*, 48(2), 27:1-27:42. [doi:10.1145/2816826](https://doi.org/10.1145/2816826). [Comprehensive survey of trust and reputation models across two decades.]
 
-### Multi-agent environments
-
-- Weyns, D., Omicini, A., & Odell, J. (2007). "Environment as a first class abstraction in multiagent systems." *Autonomous Agents and Multi-Agent Systems*, 14(1), 5-30. [doi:10.1007/s10458-006-0012-0](https://doi.org/10.1007/s10458-006-0012-0). [Environment as active architectural element, not passive container.]
-
 ### Information theory and decay
 
 - Acemoglu, D., Makhdoumi, A., Malekian, A., & Ozdaglar, A. (2018). "Informational Braess' Paradox: The Effect of Information on Traffic Congestion." *Operations Research*, 66(4), 893-917. [doi:10.1287/opre.2017.1712](https://doi.org/10.1287/opre.2017.1712). [More information can increase congestion in games with shared resources.]
@@ -1118,6 +1118,9 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 ### Consistency and distributed systems
 
 - Lamport, L., Shostak, R., & Pease, M. (1982). "The Byzantine Generals Problem." *ACM TOPLAS*, 4(3), 382-401. [doi:10.1145/357172.357176](https://doi.org/10.1145/357172.357176).
+
+### Robust estimation
+
 - Hampel, F.R. (1971). "A general qualitative definition of robustness." *Annals of Mathematical Statistics*, 42(6), 1887-1896. [doi:10.1214/aoms/1177693054](https://doi.org/10.1214/aoms/1177693054).
 
 ### Formal verification
