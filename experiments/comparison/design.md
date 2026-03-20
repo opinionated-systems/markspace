@@ -152,7 +152,7 @@ For every safety violation, classify the root cause: race condition, impersonati
 
 ### Why this generalizes beyond any single framework
 
-The impersonation gap is not specific to any one framework. The standard LLM tool-calling interface (OpenAI function calling) passes tool arguments as LLM-generated JSON. No framework built on this spec injects authenticated caller identity into tool functions, because the spec has no mechanism for it. The tool receives whatever the model chose to pass.
+The impersonation gap is not specific to any one framework. The standard LLM tool-calling interface (OpenAI function calling) passes tool arguments as LLM-generated JSON. No framework built on this spec injects authenticated caller identity into tool functions, because the spec has no mechanism for it. The tool receives whatever the model chose to pass. Field observations from enterprise MCP deployment confirm that identity propagation and structured error semantics are required for production but not yet addressed by the specification ([Srinivasan, 2026](https://arxiv.org/abs/2603.13417)).
 
 Verified empirically: `verify_agentframework.py` runs the same scenario using `agent-framework` 1.0.0rc4 (`Agent`, `OpenAIChatClient`). The adversarial agent discovers and exploits impersonation identically - the SDK does not inject caller identity into tool functions.
 
