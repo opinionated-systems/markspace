@@ -1,4 +1,4 @@
-# Coordination through marks, not messages
+# Environment-mediated Coordination
 
 This document describes the ideas and motivation behind the markspace protocol. For the formal specification, see [spec.md](spec.md).
 
