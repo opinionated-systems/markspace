@@ -962,7 +962,7 @@ Stigmergy isn't new to computer science, though it has seen limited adoption for
 
 **Swarm robotics** ([Brambilla et al., 2013](https://doi.org/10.1007/s11721-012-0075-2)): decades of computational stigmergy applied to physical robot coordination. Key lessons: stigmergic coordination works well for spatially distributed tasks with simple local rules, but struggles with tasks requiring global consistency or complex sequential dependencies - exactly the pattern our stress test confirms (32-34% utilization on sequential work). Known limitations include sensitivity to parameter tuning (decay rates, sensing ranges) and difficulty analyzing emergent behavior formally.
 
-### LLM Multi-Agent Coordination (2024-2026)
+### LLM Multi-Agent Coordination (~2023-2026)
 
 Recent work has applied coordination protocols to LLM agent fleets, though most rely on direct messaging or centralized orchestration rather than environment-based coordination.
 
