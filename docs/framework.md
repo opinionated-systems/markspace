@@ -966,6 +966,8 @@ Stigmergy isn't new to computer science, though it has seen limited adoption for
 
 Recent work has applied coordination protocols to LLM agent fleets, though most rely on direct messaging or centralized orchestration rather than environment-based coordination.
 
+**Designing Multi-Agent Systems** ([Dibia, 2025](https://buy.multiagentbook.com/)): practical treatment of multi-agent design principles, architectural patterns, and production deployment. Covers agent composition, evaluation, and optimization across frameworks. Representative of the message-passing orchestration paradigm where agents coordinate through structured conversations.
+
 **Voyager** ([Wang et al., 2023](https://arxiv.org/abs/2305.16291)): LLM agent that builds a shared skill library through environment interaction. Skills are stored as executable code in a persistent environment that the agent (or future agents) can retrieve and compose. The skill library is a form of environment-mediated coordination - agents coordinate through shared artifacts rather than direct communication.
 
 **Generative Agents** ([Park et al., 2023](https://arxiv.org/abs/2304.03442)): 25 LLM agents sharing a persistent virtual environment. Agents coordinate indirectly through the environment - they observe each other's actions, locations, and environmental state rather than exchanging messages. The shared persistent environment is the coordination mechanism, making this a form of computational stigmergy (though the paper does not use the term).
@@ -1033,6 +1035,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - [langroid/langroid](https://github.com/langroid/langroid). Multi-agent LLM framework using hierarchical task-delegation inspired by the Actor model.
 - [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI). Role-based multi-agent orchestration with sequential/hierarchical process definitions.
 - [microsoft/autogen](https://github.com/microsoft/autogen). Multi-agent framework with group chat coordination and tool-use constraints.
+- Dibia, V. (2025). *Designing Multi-Agent Systems: Principles, Patterns, and Implementation for AI Agents.* [buy.multiagentbook.com](https://buy.multiagentbook.com/). [Code: [victordibia/designing-multiagent-systems](https://github.com/victordibia/designing-multiagent-systems)]. [Practical multi-agent design patterns, composition, evaluation, and production deployment.]
 - [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph). Graph-based agent orchestration with explicit state-graph edges.
 - [microsoft/agent-framework](https://github.com/microsoft/agent-framework). Lightweight agent framework with opt-in runtime context injection via FunctionTool. Used in the comparison experiment.
 - [pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai). Type-safe LLM agent framework with dependency injection via RunContext.
