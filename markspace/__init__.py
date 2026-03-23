@@ -10,8 +10,15 @@ Usage:
         hours, minutes,
     )
 
-Spec: ../docs/spec.md
+Spec: https://github.com/opinionated-systems/markspace/blob/main/docs/spec.md
 """
+
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("markspace")
+except PackageNotFoundError:
+    __version__ = "0.1.3-beta"
 
 from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.compose import validate_manifest_permissions, validate_pipeline
