@@ -54,7 +54,6 @@ from markspace import (
     hours,
     minutes,
 )
-from markspace.barrier import AgentBarrier
 from markspace.envelope import (
     EnvelopeConfig,
     EnvelopeVerdict,
@@ -2316,13 +2315,7 @@ def run_trial(
                     )
                     # 2. Global barrier: revoke observations and actions,
                     #    require Need before any write.
-                    barrier = env.guard.get_barrier(r.agent_id)
-                    if barrier is None:
-                        barrier = AgentBarrier(
-                            agent_id=r.agent_id,
-                            _principal_token=env.guard._principal_token,
-                        )
-                        env.guard.set_barrier(r.agent_id, barrier)
+                    barrier = env.guard.get_or_create_barrier(r.agent_id)
                     barrier.narrow_all(MarkType.OBSERVATION.value)
                     barrier.narrow_all(MarkType.ACTION.value)
                     barrier.require_need_all()

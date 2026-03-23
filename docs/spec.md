@@ -1,6 +1,6 @@
 # Markspace Coordination Protocol: Specification
 
-**Version**: 2026-03-10-draft
+**Version**: 2026-03-23-draft
 **Status**: Working draft
 
 This document is the formal specification for the markspace protocol. For the ideas and motivation behind it, see [framework.md](framework.md).
@@ -56,6 +56,9 @@ This document is the formal specification for the markspace protocol. For the id
   - [9.7 Statistical Envelope](#97-statistical-envelope)
   - [9.8 Absorbing Barrier](#98-absorbing-barrier)
   - [9.9 Diagnostic Probe](#99-diagnostic-probe)
+  - [9.10 Token Budgets](#910-token-budgets)
+  - [9.11 Telemetry](#911-telemetry)
+  - [9.12 Scope Rate Limits](#912-scope-rate-limits)
 - [10. Generalized Supersession](#10-generalized-supersession)
   - [10.1 Formal Properties](#101-formal-properties)
 - [11. Agent](#11-agent)
@@ -921,6 +924,99 @@ The diagnostic probe verifies agent health through canary injection and acknowle
 
 Ref: [`markspace/probe.py::DiagnosticProbe`](../markspace/probe.py), [`tests/test_probe.py`](../tests/test_probe.py)
 
+### 9.10 Token Budgets
+
+An agent MAY carry a `TokenBudget` in its manifest that limits token consumption. All fields are optional - omitted fields mean no limit. The guard tracks cumulative usage and enforces limits at activation time.
+
+```protobuf
+message TokenBudget {
+  optional uint64 max_input_tokens_per_round  = 1;  // read budget per activation
+  optional uint64 max_output_tokens_per_round = 2;  // generation budget per activation
+  optional uint64 max_input_tokens_total      = 3;  // lifetime input budget
+  optional uint64 max_output_tokens_total     = 4;  // lifetime output budget
+  double warning_fraction = 5;                       // default 4/5; see derivation below
+}
+
+message AgentManifest {
+  // ... existing fields ...
+  optional TokenBudget budget = 5;
+}
+```
+
+**Enforcement rules:**
+
+1. **Per-round input budget.** When `max_input_tokens_per_round` is set, the mark space returns marks ranked by effective strength (which incorporates recency through decay) and truncates at the token limit.
+2. **Per-round output budget.** When `max_output_tokens_per_round` is set, the LLM call is configured with a matching `max_tokens` parameter.
+3. **Lifetime tracking.** The guard maintains running totals for input and output tokens across all rounds. Usage is monotonically non-decreasing (P63).
+4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking Need mark (`blocking=False`). Exactly one warning per dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where R is the expected rounds before the principal responds, T is tokens per round, and B is the total budget. Default 4/5 assumes approximately one round of runway.
+5. **Hard stop at limit.** When lifetime usage reaches the total budget in either dimension, the guard rejects all further activations (P61). The agent's existing marks persist.
+6. **Principal resumption.** The principal MAY increase the budget by updating the manifest. If the new total exceeds consumption, the agent resumes (P62).
+
+Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor and are driven by mark space size. Output tokens reflect agent verbosity and model choice. The protocol controls tokens - the measurable quantity at the guard boundary. Cost depends on model pricing, which varies across providers and changes over time. Operators derive cost externally from telemetry using their own pricing tables.
+
+**P57: Telemetry Non-Interference**: Telemetry emission MUST NOT affect guard verdicts, mark storage, or coordination semantics. A telemetry sink failure MUST NOT block writes or reads.
+
+**P58: Telemetry Completeness**: Every `write_mark()` and `execute()` call that passes through the guard MUST emit a structured log event, regardless of whether the operation was accepted or rejected.
+
+**P59: Budget Backward Compatibility**: An AgentManifest with no `budget` field MUST behave identically to the pre-budget protocol. No enforcement, no tracking.
+
+**P60: Budget Warning Threshold**: When lifetime token usage crosses `warning_fraction` of the total budget in any dimension, the guard MUST write exactly one non-blocking Need mark for that dimension. The Need mark MUST have `blocking=False`.
+
+**P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. Once stopped, the agent stays stopped until the principal increases the budget.
+
+**P62: Budget Resumption**: A principal MAY increase an agent's budget by updating the manifest. After a budget increase that makes the new total exceed cumulative usage, the agent MUST be eligible for activation again.
+
+**P63: Budget Tracking Accuracy**: The guard's cumulative token tracking MUST be monotonically non-decreasing. Token usage once recorded MUST NOT be decremented. A principal increases the budget ceiling, not resets consumption - the agent resumes with its full history intact.
+
+Ref: [`markspace/budget.py`](../markspace/budget.py), [`markspace/guard.py::record_round_tokens`](../markspace/guard.py), [`tests/test_budget.py`](../tests/test_budget.py)
+
+### 9.11 Telemetry
+
+The guard MAY emit structured telemetry on every decision. The telemetry interface is [OpenTelemetry](https://opentelemetry.io/)-compatible: metrics as instruments, structured logs as log records, optional trace context propagation.
+
+Telemetry goes to a configurable sink - not into the mark space. Marks are coordination signals between agents; telemetry is operational data for humans.
+
+**Metrics:**
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` |
+| `markspace.marks.read` | Counter | `agent_id`, `scope` |
+| `markspace.tokens.input` | Counter | `agent_id` |
+| `markspace.tokens.output` | Counter | `agent_id` |
+| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` |
+| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` |
+| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` |
+| `markspace.agent.round.duration` | Histogram | `agent_id` |
+| `markspace.needs.pending` | Gauge | `scope` |
+
+**Sink implementations:** `NullSink` (no-op, default), `StructuredLogSink` (JSON via Python logging), `InMemorySink` (testing), `FailingSink` (P57 verification). Deployments MAY provide custom sinks (e.g., OTel SDK wrapper).
+
+Ref: [`markspace/telemetry.py`](../markspace/telemetry.py), [`tests/test_telemetry.py`](../tests/test_telemetry.py)
+
+### 9.12 Scope Rate Limits
+
+A scope MAY define per-agent and fleet-wide write rate limits. The guard enforces these at write time, independently of the statistical envelope and token budgets (P66).
+
+```protobuf
+message ScopeRateLimit {
+  optional uint32 max_writes_per_agent_per_window = 1;
+  optional uint32 max_total_writes_per_window = 2;
+  double window_seconds = 3;  // MUST be > 0
+}
+```
+
+The `rate_limit` field is added to the Scope definition. When omitted, no rate limiting applies.
+
+**P64: Rate Limit Enforcement**: When a scope has a rate limit and an agent exceeds `max_writes_per_agent_per_window`, the write MUST be rejected. The rejection MUST be visible to the envelope via `record_attempt()`.
+
+**P65: Rate Limit Fleet Cap**: When total writes to a scope exceed `max_total_writes_per_window`, ALL further writes MUST be rejected until the window rotates, regardless of per-agent usage.
+
+**P66: Rate Limit Independence**: Rate limits operate independently of the statistical envelope and token budgets. An agent within its rate limit but flagged by the envelope is still subject to envelope restrictions; an agent within its envelope baseline but exceeding its rate limit is still rejected.
+
+Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.py::_check_rate_limit`](../markspace/guard.py), [`tests/test_rate_limit.py`](../tests/test_rate_limit.py)
+
 ## 10. Generalized Supersession
 
 All mark types MAY carry a `supersedes` field. An observation can supersede a prior observation on the same topic. An intent can supersede the same agent's prior intent on the same resource. This provides explicit versioning alongside continuous decay.
@@ -1122,6 +1218,7 @@ message AgentManifest {
   repeated ManifestOutput outputs          = 2;  // marks this agent writes
   optional double        schedule_interval = 3;  // seconds between activations ([Section 14](#14-scheduling))
   map<string, double>    expected_activity = 4;  // MarkType.value -> expected marks per hour ([Section 9.7](#97-statistical-envelope))
+  optional TokenBudget   budget            = 5;  // token budget ([Section 9.10](#910-token-budgets))
 }
 ```
 
@@ -1248,7 +1345,7 @@ Ref: [`markspace/schedule.py`](../markspace/schedule.py), [`tests/test_schedule.
 
 ## 15. Properties Summary
 
-All normative properties, collected. A conforming implementation MUST satisfy P1-P39 and P47. Properties P40-P45 (adaptive layer), P46 (diagnostic probe), P48-P55 (composition), P56 (scheduling) are OPTIONAL - required only if the implementation supports that feature. The reference implementation's test suite verifies each one.
+All normative properties, collected. A conforming implementation MUST satisfy P1-P39 and P47. Properties P40-P45 (adaptive layer), P46 (diagnostic probe), P48-P55 (composition), P56 (scheduling), P57-P58 (telemetry), P59-P63 (token budgets), and P64-P66 (scope rate limits) are OPTIONAL - required only if the implementation supports that feature. The reference implementation's test suite verifies each one.
 
 Properties are numbered sequentially by section.
 
@@ -1323,6 +1420,19 @@ Properties are numbered sequentially by section.
 | P55 | Pattern Match Purity | 13.6 |
 | | **Scheduling** (optional) | |
 | P56 | Schedule Interval | 14.3 |
+| | **Telemetry** (optional) | |
+| P57 | Telemetry Non-Interference | 9.11 |
+| P58 | Telemetry Completeness | 9.11 |
+| | **Token Budgets** (optional) | |
+| P59 | Budget Backward Compatibility | 9.10 |
+| P60 | Budget Warning Threshold | 9.10 |
+| P61 | Budget Hard Stop | 9.10 |
+| P62 | Budget Resumption | 9.10 |
+| P63 | Budget Tracking Accuracy | 9.10 |
+| | **Scope Rate Limits** (optional) | |
+| P64 | Rate Limit Enforcement | 9.12 |
+| P65 | Rate Limit Fleet Cap | 9.12 |
+| P66 | Rate Limit Independence | 9.12 |
 
 ## 16. Conformance
 
@@ -1345,6 +1455,12 @@ An implementation MAY differ from the reference implementation in storage backen
 An implementation MAY additionally support the adaptive monitoring layer: statistical envelope ([Section 9.7](#97-statistical-envelope)) and absorbing barrier ([Section 9.8](#98-absorbing-barrier)). If it does, it MUST satisfy P40-P45. Adaptive layer support is OPTIONAL for conformance.
 
 An implementation MAY additionally support diagnostic probes ([Section 9.9](#99-diagnostic-probe)). If it does, it MUST satisfy P46. Probe support is OPTIONAL for conformance.
+
+An implementation MAY additionally support telemetry ([Section 9.11](#911-telemetry)). If it does, it MUST satisfy P57-P58. Telemetry support is OPTIONAL for conformance.
+
+An implementation MAY additionally support token budgets ([Section 9.10](#910-token-budgets)). If it does, it MUST satisfy P59-P63. Token budget support is OPTIONAL for conformance.
+
+An implementation MAY additionally support scope rate limits ([Section 9.12](#912-scope-rate-limits)). If it does, it MUST satisfy P64-P66. Rate limit support is OPTIONAL for conformance.
 
 An implementation MAY additionally support agent composition ([Section 13](#13-agent-composition)). If it does, it MUST satisfy P48-P55. Composition support is OPTIONAL for conformance.
 

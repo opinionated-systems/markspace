@@ -17,6 +17,29 @@ from dataclasses import dataclass, field
 from markspace.core import scope_contains
 
 
+@dataclass(frozen=True)
+class BarrierSnapshot:
+    """Immutable snapshot of barrier state for external inspection.
+
+    Returned by Guard.get_barrier() so callers cannot mutate internal state.
+    """
+
+    agent_id: uuid.UUID
+    flag_count: int
+    flagged_scopes: frozenset[str]
+    revoked: frozenset[tuple[str, str]]
+    require_need_scopes: frozenset[str]
+
+    def is_allowed_checked(self, scope: str, mark_type_value: str) -> bool:
+        """Check with wildcard and hierarchical scope support."""
+        if ("*", mark_type_value) in self.revoked:
+            return False
+        for revoked_scope, revoked_type in self.revoked:
+            if revoked_type == mark_type_value and scope_contains(revoked_scope, scope):
+                return False
+        return True
+
+
 @dataclass
 class AgentBarrier:
     """
@@ -104,3 +127,13 @@ class AgentBarrier:
             if revoked_type == mark_type_value and scope_contains(revoked_scope, scope):
                 return False
         return True
+
+    def snapshot(self) -> BarrierSnapshot:
+        """Return a frozen snapshot for external inspection."""
+        return BarrierSnapshot(
+            agent_id=self.agent_id,
+            flag_count=self._flag_count,
+            flagged_scopes=frozenset(self.flagged_scopes),
+            revoked=frozenset(self._revoked),
+            require_need_scopes=frozenset(self._require_need_scopes),
+        )

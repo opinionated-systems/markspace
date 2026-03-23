@@ -320,6 +320,7 @@ class MarkSpace:
         mark_type: MarkType | None = None,
         min_strength: float = _DEFAULT_MIN_STRENGTH,
         reader: Agent | None = None,
+        max_tokens: int | None = None,
     ) -> list[AnyMark]:
         """
         Read marks from the space, filtered and with effective strength computed.
@@ -330,6 +331,12 @@ class MarkSpace:
         reader: The agent performing the read. Controls visibility:
           - None: full access (used by guard, internal infrastructure).
           - Agent with read_scopes: respects scope visibility rules.
+
+        max_tokens: Optional token budget for this read. Marks are returned
+            in strength-descending order and truncated when cumulative
+            estimated token count exceeds the limit. Token count is
+            estimated as len(str(mark.model_dump())) // 4. Marks beyond
+            the limit are not lost - they stay in the space for future reads.
 
         For OPEN scopes (default): full marks regardless of reader.
         For PROTECTED scopes: projected marks (content redacted) unless reader
@@ -415,6 +422,20 @@ class MarkSpace:
             # Apply projection if needed (PROTECTED scope, unauthorized reader)
             if needs_projection:
                 marks = [project_mark(m) for m in marks]
+
+            # Token budget truncation: keep the strongest marks that fit.
+            # Estimate: 4 characters per token (standard rough estimate
+            # across tokenizers, not a tuned constant).
+            if max_tokens is not None:
+                truncated: list[AnyMark] = []
+                tokens_used = 0
+                for m in marks:
+                    est = len(str(m.model_dump())) // 4
+                    if tokens_used + est > max_tokens:
+                        break
+                    truncated.append(m)
+                    tokens_used += est
+                marks = truncated
 
             return marks
 

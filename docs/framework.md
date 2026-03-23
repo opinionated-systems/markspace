@@ -12,6 +12,7 @@ This document describes the ideas and motivation behind the markspace protocol. 
 - [Scopes](#scopes)
 - [Agent Composition](#agent-composition)
 - [Positioning and Properties](#positioning-and-properties)
+- [Observability and Cost Controls](#observability-and-cost-controls)
 - [Related Work](#related-work)
 - [References](#references)
 
@@ -872,14 +873,14 @@ The protocol makes specific claims about what it prevents, mitigates, and delibe
 | Compliance with non-owner instructions (CS2) | Manifest can control whether an agent is authorized to interact with humans at all, but once authorized, what the agent shares is agent-internal | Not addressed |
 | Sensitive data disclosure (CS3) | Mark visibility controls structure, not content within agent outputs | Not addressed |
 | Resource exhaustion loop (CS4) | The direct agent-to-agent messaging channel that enabled the relay loop does not exist in markspace - agents interact only through the mark space. Watch/subscribe chains could still create mark-level loops within TTL, but the attack surface is narrower | Partially mitigated |
-| Denial of service via mass actions (CS5) | Guard enforces manifest constraints on what agents can write; no rate limiting beyond that | Partially mitigated |
+| Denial of service via mass actions (CS5) | Guard enforces manifest constraints on what agents can write; optional scope-level rate limits cap per-agent and fleet-wide write rates ([Observability and Cost Controls](#observability-and-cost-controls)) | Mitigated |
 | Provider value alignment (CS6) | Not addressed (model-internal behavior, below the protocol layer) | Not addressed |
 | Agent coercion / gaslighting (CS7) | Manifest can control whether an agent interacts with humans, but once authorized, the agent's response to social pressure is agent-internal | Not addressed |
 | Identity spoofing (CS8) | Source/trust tags identify mark authors within the protocol, but how an agent verifies human identity on its principal interface is agent-internal | Not addressed |
 | Agent corruption via prompt injection (CS10) | Protocol cannot prevent corruption, but manifest and scope constraints mean a corrupted agent can only write its granted mark types to its granted scopes - corruption degrades to a performance issue (bad output), not a safety violation | Partially mitigated |
 | Libelous broadcast (CS11) | Scope limits blast radius (agents can only write to authorized scopes); content not filtered | Partially mitigated |
 
-The paper's 16 case studies include 11 failure cases (CS1-CS8 harmful, CS10-CS11 community) and 5 positive outcomes (CS9 collaboration, CS12-CS16 defensive refusals) not included in this table. Summary: 5 coordination-layer failure patterns prevented, 4 partially mitigated (CS4, CS5, CS10, CS11), 6 agent-internal failure modes not addressed (CS1, CS2, CS3, CS6, CS7, CS8).
+The paper's 16 case studies include 11 failure cases (CS1-CS8 harmful, CS10-CS11 community) and 5 positive outcomes (CS9 collaboration, CS12-CS16 defensive refusals) not included in this table. Summary: 6 coordination-layer failure patterns prevented or mitigated (CS5 upgraded from partial to mitigated with scope-level rate limits), 3 partially mitigated (CS4, CS10, CS11), 6 agent-internal failure modes not addressed (CS1, CS2, CS3, CS6, CS7, CS8).
 
 The protocol is a coordination primitive, not a complete agent safety system - it guarantees that agents share a single, well-ordered view of state and that all writes conform to structural rules (schema, scope, authorization). Making agents do safe things *within* their authorized scope requires agent-level safeguards (content filtering, reasoning verification, action proportionality checks) that sit alongside the protocol, not inside it. One approach to the agent-internal layer is [AgentSpec](https://arxiv.org/abs/2503.18666) ([Wang, Poskitt & Sun, ICSE 2026](https://arxiv.org/abs/2503.18666)): structured rules with triggers, predicates, and enforcement actions that intercept agent behavior at decision points. It operates within individual agents; markspace operates between them.
 
@@ -914,7 +915,7 @@ A natural question is what a complete multi-agent delegation system requires and
 | Task assignment | No | Scheduler activates agents on fixed intervals. No capability matching, competitive bidding, or dynamic task routing. |
 | Multi-objective optimization | No | No mechanism for balancing competing objectives. Conflict resolution policies handle contention but do not optimize across multiple objectives. |
 | Adaptive coordination | Partial | Decay and reinforcement adapt signal strength over time. Conflict resolution adapts to mark state. No runtime adaptation of coordination strategy itself (e.g., switching conflict policies based on load). |
-| Monitoring | Partial | Action marks provide an audit trail. Guard decisions are logged. Every mark has an `agent_id` for attribution. No agent-internal monitoring (reasoning traces, prompt compliance). |
+| Monitoring | Yes | Action marks provide an audit trail. Guard decisions are logged. Every mark has an `agent_id` for attribution. OpenTelemetry-compatible metrics, structured logs, and trace context at the guard boundary ([Observability and Cost Controls](#observability-and-cost-controls)). No agent-internal monitoring (reasoning traces, prompt compliance). |
 | Trust and reputation | Partial | Three static source levels (fleet, verified, unverified). No dynamic trust updating, reputation, or experience-based trust. Sufficient for LLM non-compliance; insufficient for rational adversaries. |
 | Permission handling | Partial | Scope-based write authorization, hierarchical scope inheritance, three visibility levels (OPEN/PROTECTED/CLASSIFIED). No just-in-time authorization or privilege attenuation in sub-delegation chains. |
 | Verifiable task completion | Partial | Action marks record outcomes. Supersession chains track state transitions. No verification that the action's result is correct (the protocol records what happened, not whether it was right). |
@@ -933,6 +934,102 @@ Stigmergy reframes the problem. The mark space is both the coordination medium a
 This design is structurally input-heavy: agents read the mark space every round but write only a few marks, producing [input-to-output ratios of 15:1 to 62:1](../experiments/trials/results/multi_trial/analysis.md#6-token-economics) depending on model verbosity (stress tests, 100+5 agents, 20 rounds). Input token price is the dominant cost factor, and model output verbosity barely matters. A model producing 5x fewer output tokens costs about the same per trial because output is already a small fraction of total spend.
 
 Mark space size directly drives token cost - every mark in the active read set is tokens an agent consumes each round. Marks below a strength threshold add tokens without adding signal; a fully-decayed observation at 0.01 strength costs the same tokens as a fresh one at full strength. A production system needs a read-path cutoff: marks below a configurable strength threshold are excluded from agent reads but retained in storage. The [hybrid architecture](#option-c-hybrid-recommended) already separates hot state (Redis) from durable record (PostgreSQL) - the read-path cutoff determines what stays in the hot layer. See [Open Questions](#open-questions) for the unbounded growth problem.
+
+## Observability and Cost Controls
+
+The guard mediates every write and enforces every conflict resolution. Two things it doesn't do: tell operators what happened (observability), and limit how much agents spend (cost control). Both are optional extensions to the guard's existing enforcement boundary - they add metering and limits without changing coordination semantics.
+
+### Telemetry
+
+The guard emits structured events on every `write_mark()` and `execute()` call. Events go to a telemetry sink, not into the mark space. The interface is [OpenTelemetry](https://opentelemetry.io/)-compatible: metrics as instruments, structured logs as log records, and optional trace context propagation. Implementations SHOULD use the OpenTelemetry SDK when available and MAY fall back to structured JSON logs.
+
+**Metrics** (counters, gauges, histograms):
+
+| Metric | Type | Labels | What it tells you |
+|--------|------|--------|-------------------|
+| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` | Write volume and rejection rate per agent |
+| `markspace.marks.read` | Counter | `agent_id`, `scope` | Read volume per agent per round |
+| `markspace.tokens.input` | Counter | `agent_id` | Input tokens consumed per round |
+| `markspace.tokens.output` | Counter | `agent_id` | Output tokens generated (LLM responses + mark writes) |
+| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` | Conflict frequency and resolution distribution |
+| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | Hot-tier mark count (above strength threshold) |
+| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | Total mark count including decayed |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | Remaining token budget (input/output/total) |
+| `markspace.agent.round.duration` | Histogram | `agent_id` | Wall-clock time per agent round |
+| `markspace.needs.pending` | Gauge | `scope` | Unresolved need marks awaiting principal review |
+
+**Structured logs** (one per guard decision):
+
+```
+{
+  "timestamp": "2026-03-23T14:30:01Z",
+  "agent_id": "agent-booking-01",
+  "operation": "write_mark",
+  "scope": "calendar",
+  "mark_type": "observation",
+  "verdict": "accepted",
+  "envelope_status": "",
+  "barrier_restricted": false,
+  "reason": ""
+}
+```
+
+**Trace context.** Each agent round MAY carry an OpenTelemetry span context. The guard propagates this context to downstream tool calls, so a single trace connects: agent activation - mark space read - LLM call - tool execution - mark write - guard decision.
+
+Telemetry observes the mark space boundary, not agent internals. Reasoning traces, prompt compliance, and hallucination rates require agent-level instrumentation (e.g., LLM provider callbacks) that sits alongside the protocol.
+
+### Token Budgets
+
+The [Context Accumulation](#context-accumulation) section establishes that input tokens dominate cost and that mark space size drives input token count. Token budgets formalize the cost control that section implies: each agent gets a configurable token allowance, and the guard enforces it.
+
+**Manifest extension.** The agent manifest gains optional budget fields:
+
+```protobuf
+message TokenBudget {
+  optional uint64 max_input_tokens_per_round  = 1;  // read budget per activation
+  optional uint64 max_output_tokens_per_round = 2;  // generation budget per activation
+  optional uint64 max_input_tokens_total      = 3;  // lifetime input budget
+  optional uint64 max_output_tokens_total     = 4;  // lifetime output budget
+  double warning_fraction = 5;                       // default 4/5; see derivation below
+}
+
+message AgentManifest {
+  // ... existing fields ...
+  optional TokenBudget budget = 5;
+}
+```
+
+When omitted, the budget is unbounded.
+
+Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor ([15:1 to 62:1 input-to-output ratio](../experiments/trials/results/multi_trial/analysis.md#6-token-economics)) and are driven by mark space size - something the agent doesn't control. Output tokens reflect agent verbosity and model choice - something the operator controls through model selection and prompting.
+
+**Enforcement.** The scheduler checks remaining budget before activating an agent. The guard tracks cumulative token usage across rounds.
+
+1. **Read-path truncation.** When `max_input_tokens_per_round` is set, the mark space returns marks ranked by effective strength (which incorporates recency through decay) and truncates at the token limit. The agent gets the most relevant marks that fit in its budget. Marks below the cutoff are not lost - they remain in the mark space for other agents or future rounds. This turns the unbounded growth problem into a bounded cost problem per agent per round.
+
+2. **Output capping.** When `max_output_tokens_per_round` is set, the LLM call is configured with a matching `max_tokens` parameter. The agent's generation is bounded at the model API level - the guard doesn't need to truncate after the fact.
+
+3. **Lifetime budget tracking.** The guard maintains running totals for input and output tokens consumed across all rounds. When a lifetime budget is set:
+   - At `warning_fraction` usage (default 4/5, either dimension): the guard writes a Need mark (`blocking=False`) that surfaces to the principal through `aggregate_needs()`. The agent keeps working on its remaining budget.
+   - At 100% usage (either dimension): the guard stops activating the agent. No more rounds. The agent's marks persist; it just doesn't get scheduled again.
+   - The principal can increase the budget ceiling by updating the manifest. Cumulative consumption is preserved (P63) - the principal raises the limit, not resets the counter.
+
+   The warning fraction is configurable per-agent and derived from the deployment's parameters: `warning_fraction = 1 - (R * T / B)`, where R is the expected rounds before the principal responds, T is tokens per round, and B is the total budget. The default (4/5) assumes roughly one round of runway.
+
+**Scope-level rate limits.** Scopes gain an optional rate limit to address denial-of-service via mass writes ([CS5](#failure-mode-coverage)):
+
+```yaml
+scope: "calendar"
+  # ... existing fields ...
+  rate_limit:
+    max_writes_per_agent_per_window: 10   # per agent, per 5-minute window
+    max_total_writes_per_window: 50       # fleet-wide cap
+    window_seconds: 300
+```
+
+The guard enforces rate limits at write time. An agent exceeding its per-agent limit gets a rejection (and the rejection is visible to the envelope via `record_attempt()`). The fleet-wide cap prevents distributed flooding where many agents each stay within their individual limit but collectively overwhelm the scope. When omitted, no rate limit applies - the guard enforces only manifest constraints, as it does today.
+
+Token budgets, rate limits, and the statistical envelope are independent controls. The envelope detects anomalous *patterns* (rate spikes, type shifts); the budget limits *total cost*; rate limits cap *write throughput*. An agent can be within its budget but behaving anomalously, or consuming its budget through normal high-volume operation. All three matter; none subsumes the others.
 
 ## Related Work
 

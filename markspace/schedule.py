@@ -74,7 +74,11 @@ class Scheduler:
     Spec Section 14.
     """
 
-    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], float] | None = None,
+        pre_activation_check: Callable[[Agent], str | None] | None = None,
+    ) -> None:
         # Accept a MarkSpace for backward compatibility (uses its .now() method).
         from markspace.space import MarkSpace
 
@@ -84,6 +88,10 @@ class Scheduler:
             self._clock = clock
         else:
             self._clock = time.time
+
+        # Optional pre-activation check (e.g., budget exhaustion).
+        # If provided, agents that fail the check are skipped.
+        self._pre_activation_check = pre_activation_check
 
         # Internal state: schedule entries keyed by agent UUID.
         self._entries: dict[uuid.UUID, ScheduleEntry] = {}
@@ -123,7 +131,8 @@ class Scheduler:
         """
         Return agents whose schedule interval has elapsed since their
         last activation. Newly registered agents (never activated) are
-        immediately due.
+        immediately due. Agents that fail the pre-activation check
+        (e.g., budget exhaustion) are excluded.
 
         P56: Minimum interval between activations >= schedule_interval.
 
@@ -134,6 +143,10 @@ class Scheduler:
         with self._lock:
             for entry in self._entries.values():
                 if now - entry.last_activation >= entry.interval_seconds:
+                    if self._pre_activation_check is not None:
+                        rejection = self._pre_activation_check(entry.agent)
+                        if rejection is not None:
+                            continue
                     result.append(entry.agent)
         return result
 
@@ -151,12 +164,19 @@ class Scheduler:
         Holds the lock across the entire due-check + mark-activated sequence
         to prevent TOCTOU races where two concurrent tick_all() calls both
         see the same agents as due before either marks them activated.
+
+        Agents that fail the pre-activation check (e.g., budget exhaustion)
+        are excluded and NOT marked as activated.
         """
         now = self._clock()
         result: list[Agent] = []
         with self._lock:
             for entry in self._entries.values():
                 if now - entry.last_activation >= entry.interval_seconds:
+                    if self._pre_activation_check is not None:
+                        rejection = self._pre_activation_check(entry.agent)
+                        if rejection is not None:
+                            continue
                     result.append(entry.agent)
                     entry.last_activation = now
         return result

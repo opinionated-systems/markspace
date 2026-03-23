@@ -35,22 +35,36 @@ from typing import Any, Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
-from markspace.barrier import AgentBarrier
+from markspace.barrier import AgentBarrier, BarrierSnapshot
+from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.core import (
     Action,
     Agent,
     AnyMark,
     ConflictPolicy,
+    DecayConfig,
     Intent,
     MarkType,
     Need,
     Observation,
+    Scope,
     Severity,
     Warning,
+    hours,
     resolve_conflict,
 )
 from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
+from markspace.rate_limit import RateLimitTracker
 from markspace.space import MarkSpace, ScopeError
+from markspace.telemetry import (
+    METRIC_CONFLICTS_RESOLVED,
+    METRIC_MARKS_WRITTEN,
+    METRIC_TOKENS_INPUT,
+    METRIC_TOKENS_OUTPUT,
+    NullSink,
+    TelemetryEvent,
+    TelemetrySink,
+)
 
 
 class GuardVerdict(str, Enum):
@@ -144,11 +158,13 @@ class Guard:
         block_self_rebook: bool = False,
         envelope: StatisticalEnvelope | None = None,
         principal_token: uuid.UUID | None = None,
+        telemetry: TelemetrySink | None = None,
     ) -> None:
         self.space = space
         self.block_self_rebook = block_self_rebook
         self.envelope = envelope
         self._principal_token = principal_token or uuid.uuid4()
+        self._telemetry: TelemetrySink = telemetry or NullSink()
         # Per-resource locks: keyed by (scope, resource).
         # A global lock protects the _resource_locks dict itself.
         self._resource_locks: dict[tuple[str, str], _ResourceLock] = {}
@@ -156,13 +172,32 @@ class Guard:
         # Barriers: per-agent permission restrictions
         self._barriers: dict[uuid.UUID, AgentBarrier] = {}
         self._barrier_lock = threading.Lock()
+        # Budget trackers: per-agent token budget state
+        self._budget_trackers: dict[uuid.UUID, BudgetTracker] = {}
+        self._budget_lock = threading.Lock()
+        # Rate limit tracker: shared across all scopes, protected by its own lock
+        self._rate_limit_tracker = RateLimitTracker()
+        self._rate_limit_lock = threading.Lock()
         # System agent for guard-originated warnings/needs.
         # Exempt from envelope monitoring to prevent feedback loops.
         self._system_agent = Agent(
             name="_guard",
-            scopes={"*": ["warning", "need"]},
+            scopes={"*": ["warning", "need"], "_system": ["warning", "need"]},
             read_scopes=frozenset(),
         )
+        # Register the _system scope for guard-originated marks (budget
+        # warnings, audit needs) that don't belong to any user-defined scope.
+        if "_system" not in space._scopes:
+            space.register_scope(
+                Scope(
+                    name="_system",
+                    decay=DecayConfig(
+                        observation_half_life=hours(24),
+                        warning_half_life=hours(12),
+                        intent_ttl=hours(1),
+                    ),
+                )
+            )
         # Wire envelope to space write hooks
         if envelope is not None:
             envelope.add_exempt_agent(self._system_agent.id)
@@ -203,6 +238,277 @@ class Guard:
             return len(to_remove)
 
     # ------------------------------------------------------------------
+    # Telemetry helpers
+    # ------------------------------------------------------------------
+
+    def _emit_telemetry(
+        self,
+        agent: Agent,
+        operation: str,
+        scope: str,
+        mark_type: str,
+        verdict: str,
+        **kwargs: Any,
+    ) -> None:
+        """Emit a telemetry event. Failures are swallowed (P57)."""
+        try:
+            event = TelemetryEvent(
+                agent_id=str(agent.id),
+                operation=operation,
+                scope=scope,
+                mark_type=mark_type,
+                verdict=verdict,
+                **kwargs,
+            )
+            self._telemetry.emit_event(event)
+        except Exception:
+            logger.debug("Telemetry emission failed", exc_info=True)
+
+    def _emit_write_metric(
+        self, agent: Agent, scope: str, mark_type: str, verdict: str
+    ) -> None:
+        """Emit markspace.marks.written counter. Failures swallowed (P57)."""
+        try:
+            self._telemetry.record_counter(
+                METRIC_MARKS_WRITTEN,
+                1,
+                {
+                    "agent_id": str(agent.id),
+                    "scope": scope,
+                    "mark_type": mark_type,
+                    "verdict": verdict,
+                },
+            )
+        except Exception:
+            logger.debug("Metric emission failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Rate limit enforcement
+    # ------------------------------------------------------------------
+
+    def _check_rate_limit(self, agent: Agent, scope: str) -> str | None:
+        """Check scope rate limit. Returns rejection reason or None.
+
+        Thread-safe: acquires _rate_limit_lock to serialize
+        check_and_record (read-check-write is non-atomic).
+        """
+        scope_def = self.space.get_scope(scope)
+        if scope_def.rate_limit is None:
+            return None
+        with self._rate_limit_lock:
+            return self._rate_limit_tracker.check_and_record(
+                scope, agent.id, scope_def.rate_limit, self.space.now()
+            )
+
+    # ------------------------------------------------------------------
+    # Budget enforcement
+    # ------------------------------------------------------------------
+
+    def get_budget_status(self, agent_id: uuid.UUID) -> tuple[int, int, bool] | None:
+        """Snapshot of an agent's budget consumption: (input, output, exhausted).
+
+        Returns None if the agent has no budget tracker.
+        Returns a tuple, not the mutable tracker, to prevent races.
+        """
+        with self._budget_lock:
+            tracker = self._budget_trackers.get(agent_id)
+            if tracker is None:
+                return None
+            return (
+                tracker.total_input_consumed,
+                tracker.total_output_consumed,
+                tracker.exhausted,
+            )
+
+    def check_budget_activation(self, agent: Agent) -> str | None:
+        """Check if an agent's budget allows activation.
+
+        Returns rejection reason if budget is exhausted, None if OK.
+        Wired into the scheduler via pre_activation_check for scheduled
+        agents. For subscription-activated agents, the caller must check
+        this before each round.
+
+        P59: agents without a budget always return None.
+        P61: exhausted agents are rejected deterministically.
+        """
+        budget = self._get_agent_budget(agent)
+        if budget is None:
+            return None
+        with self._budget_lock:
+            tracker = self._budget_trackers.get(agent.id)
+            if tracker is None:
+                return None
+            if tracker.is_exhausted(budget):
+                return (
+                    f"Agent '{agent.name}' budget exhausted "
+                    f"(input: {tracker.total_input_consumed}, "
+                    f"output: {tracker.total_output_consumed})"
+                )
+        return None
+
+    def record_round_tokens(
+        self, agent: Agent, input_tokens: int, output_tokens: int
+    ) -> BudgetStatus:
+        """Record token usage for a completed round.
+
+        Called after each agent round. Tracks cumulative usage, checks
+        warning/exhaustion thresholds, and writes Need marks when
+        thresholds are crossed.
+
+        Returns the most severe budget status after recording.
+
+        P59: no-op for agents without a budget.
+        P60: emits exactly one Need per dimension at warning threshold.
+        P63: monotonically non-decreasing tracking.
+        """
+        # Emit token counters for all agents, regardless of budget
+        try:
+            self._telemetry.record_counter(
+                METRIC_TOKENS_INPUT,
+                input_tokens,
+                {"agent_id": str(agent.id)},
+            )
+            self._telemetry.record_counter(
+                METRIC_TOKENS_OUTPUT,
+                output_tokens,
+                {"agent_id": str(agent.id)},
+            )
+        except Exception:
+            logger.debug("Token metric emission failed", exc_info=True)
+
+        budget = self._get_agent_budget(agent)
+        if budget is None:
+            return BudgetStatus.OK
+
+        # Hold the lock for the entire check-and-flag sequence so that
+        # concurrent calls for the same agent cannot both see
+        # warning_emitted as False and emit duplicate Need marks.
+        warn_input = False
+        warn_output = False
+        input_consumed = 0
+        output_consumed = 0
+
+        with self._budget_lock:
+            tracker = self._budget_trackers.get(agent.id)
+            if tracker is None:
+                tracker = BudgetTracker()
+                self._budget_trackers[agent.id] = tracker
+
+            tracker.record_input(input_tokens)
+            tracker.record_output(output_tokens)
+            status = tracker.check_lifetime(budget)
+
+            # Mark warnings as emitted inside the lock to prevent races.
+            # These are mutually exclusive (check_lifetime returns one status),
+            # but written as independent checks for clarity.
+            if status == BudgetStatus.WARNING_INPUT:
+                warn_input = True
+                tracker.warning_emitted_input = True
+            if status == BudgetStatus.WARNING_OUTPUT:
+                warn_output = True
+                tracker.warning_emitted_output = True
+
+            # Snapshot values for telemetry outside the lock
+            input_consumed = tracker.total_input_consumed
+            output_consumed = tracker.total_output_consumed
+
+        # Write Need marks outside the lock (space.write acquires its own)
+        if warn_input:
+            self._emit_budget_warning(agent, budget, "input", input_consumed)
+        if warn_output:
+            self._emit_budget_warning(agent, budget, "output", output_consumed)
+        if status in (BudgetStatus.EXHAUSTED_INPUT, BudgetStatus.EXHAUSTED_OUTPUT):
+            dimension = "input" if status == BudgetStatus.EXHAUSTED_INPUT else "output"
+            logger.info("Agent '%s' %s budget exhausted", agent.name, dimension)
+
+        # Emit budget remaining gauges
+        try:
+            if budget.max_input_tokens_total is not None:
+                self._telemetry.record_gauge(
+                    "markspace.agent.budget.remaining",
+                    max(0, budget.max_input_tokens_total - input_consumed),
+                    {"agent_id": str(agent.id), "dimension": "input"},
+                )
+            if budget.max_output_tokens_total is not None:
+                self._telemetry.record_gauge(
+                    "markspace.agent.budget.remaining",
+                    max(0, budget.max_output_tokens_total - output_consumed),
+                    {"agent_id": str(agent.id), "dimension": "output"},
+                )
+        except Exception:
+            logger.debug("Budget metric emission failed", exc_info=True)
+
+        return status
+
+    def update_budget(
+        self, agent: Agent, new_budget: TokenBudget, principal_token: uuid.UUID
+    ) -> bool:
+        """Update an agent's budget (principal action).
+
+        P62: if the new budget exceeds consumption, the agent resumes.
+        Returns True if the update was applied.
+        """
+        if principal_token != self._principal_token:
+            return False
+        # Update the manifest on the agent (requires creating a new agent
+        # since Agent is frozen). The caller is responsible for using the
+        # returned agent going forward. Here we just update the tracker.
+        with self._budget_lock:
+            tracker = self._budget_trackers.get(agent.id)
+            if tracker is not None:
+                tracker.try_clear_exhaustion(new_budget)
+        return True
+
+    def _get_agent_budget(self, agent: Agent) -> TokenBudget | None:
+        """Extract budget from agent's manifest, if any."""
+        if agent.manifest is None:
+            return None
+        return agent.manifest.budget
+
+    def _emit_budget_warning(
+        self,
+        agent: Agent,
+        budget: TokenBudget,
+        dimension: str,
+        consumed: int,
+    ) -> None:
+        """Write a non-blocking Need mark when budget warning threshold is crossed.
+
+        P60: exactly one Need per dimension.
+        """
+        total = (
+            budget.max_input_tokens_total
+            if dimension == "input"
+            else budget.max_output_tokens_total
+        )
+
+        try:
+            self.space.write(
+                self._system_agent,
+                Need(
+                    scope="_system",
+                    question=(
+                        f"Agent '{agent.name}' has consumed "
+                        f"{consumed}/{total} {dimension} tokens "
+                        f"({budget.warning_fraction:.0%} of budget). "
+                        f"Continue, increase, or stop?"
+                    ),
+                    context={
+                        "agent_id": str(agent.id),
+                        "agent_name": agent.name,
+                        "dimension": dimension,
+                        "consumed": consumed,
+                        "total": total,
+                        "warning_fraction": budget.warning_fraction,
+                    },
+                    priority=0.7,
+                    blocking=False,
+                ),
+            )
+        except Exception:
+            logger.debug("Failed to write budget warning Need", exc_info=True)
+
+    # ------------------------------------------------------------------
     # write_mark: single enforcement boundary for non-contested writes
     # ------------------------------------------------------------------
 
@@ -215,6 +521,7 @@ class Guard:
         - Type validation (rejects intents/actions)
         - Barrier check (is this agent restricted?)
         - Envelope check (is this agent anomalous?)
+        - Rate limit check (is this scope rate-limited?)
         - Schema/scope validation (delegated to space.write())
 
         For intents and actions on contested resources, use execute()
@@ -232,23 +539,97 @@ class Guard:
         # Barrier check
         barrier_result = self._check_barrier(agent, mark.scope, mark.mark_type)
         if barrier_result is not None:
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "rejected",
+                reason=barrier_result,
+                barrier_restricted=True,
+            )
             raise ScopeError(barrier_result)
 
         # Envelope check
         envelope_result = self._check_envelope(agent, mark.scope)
         if envelope_result is not None:
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "rejected",
+                reason=envelope_result,
+                envelope_status="restricted",
+            )
             raise ScopeError(envelope_result)
 
-        return self.space.write(agent, mark)
+        # Rate limit check (P64, P65)
+        rate_limit_result = self._check_rate_limit(agent, mark.scope)
+        if rate_limit_result is not None:
+            # Make rate limit rejections visible to the envelope
+            if self.envelope is not None:
+                self.envelope.record_attempt(agent.id, mark.mark_type)
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "rejected",
+                reason=rate_limit_result,
+            )
+            raise ScopeError(rate_limit_result)
+
+        mark_id = self.space.write(agent, mark)
+
+        # Telemetry: successful write (P58)
+        self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "accepted")
+        self._emit_telemetry(
+            agent,
+            "write_mark",
+            mark.scope,
+            mark.mark_type.value,
+            "accepted",
+        )
+
+        return mark_id
 
     # ------------------------------------------------------------------
     # Barrier management
     # ------------------------------------------------------------------
 
-    def get_barrier(self, agent_id: uuid.UUID) -> AgentBarrier | None:
-        """Get the barrier for an agent, if any."""
+    def get_barrier(self, agent_id: uuid.UUID) -> BarrierSnapshot | None:
+        """Get a frozen snapshot of an agent's barrier, if any.
+
+        Returns an immutable BarrierSnapshot, not the mutable internal
+        AgentBarrier, so callers cannot mutate guard state through the
+        returned reference.
+        """
         with self._barrier_lock:
-            return self._barriers.get(agent_id)
+            barrier = self._barriers.get(agent_id)
+            if barrier is None:
+                return None
+            return barrier.snapshot()
+
+    def get_or_create_barrier(self, agent_id: uuid.UUID) -> AgentBarrier:
+        """Get or create the mutable barrier for an agent.
+
+        For guard-internal and experiment code that needs to modify
+        barrier state directly (narrow, require_need, etc.).
+        Callers that only need to inspect state should use get_barrier().
+        """
+        with self._barrier_lock:
+            barrier = self._barriers.get(agent_id)
+            if barrier is None:
+                barrier = AgentBarrier(
+                    agent_id=agent_id,
+                    _principal_token=self._principal_token,
+                )
+                self._barriers[agent_id] = barrier
+            return barrier
 
     def set_barrier(self, agent_id: uuid.UUID, barrier: AgentBarrier) -> None:
         """Set a barrier for an agent (principal action)."""
@@ -453,6 +834,16 @@ class Guard:
                 reason=envelope_msg,
             )
 
+        # Rate limit check (P64, P65)
+        rate_limit_msg = self._check_rate_limit(agent, scope)
+        if rate_limit_msg is not None:
+            if self.envelope is not None:
+                self.envelope.record_attempt(agent.id, MarkType.INTENT)
+            return GuardDecision(
+                verdict=GuardVerdict.DENIED,
+                reason=rate_limit_msg,
+            )
+
         # Check for existing action marks on this resource.
         # If the resource is already claimed (action mark exists from another agent),
         # reject immediately. The intent-vs-intent conflict resolution only applies
@@ -520,6 +911,19 @@ class Guard:
 
         # Resolve conflict
         winner_id = resolve_conflict(all_intents, scope_def.conflict_policy)
+        try:
+            outcome = "yield_all" if winner_id is None else "resolved"
+            self._telemetry.record_counter(
+                METRIC_CONFLICTS_RESOLVED,
+                1,
+                {
+                    "scope": scope,
+                    "policy": scope_def.conflict_policy.value,
+                    "outcome": outcome,
+                },
+            )
+        except Exception:
+            logger.debug("Conflict metric emission failed", exc_info=True)
 
         if winner_id is None:
             # YIELD_ALL - everyone must wait for principal.
@@ -834,6 +1238,18 @@ class Guard:
                 agent, scope, resource, intent_action, confidence
             )
 
+        # Telemetry for pre_action decision (P58)
+        self._emit_telemetry(
+            agent,
+            "execute",
+            scope,
+            intent_action,
+            decision.verdict.value,
+            conflict_check=True,
+            conflict_found=len(decision.conflicting_intents) > 0,
+            reason=decision.reason,
+        )
+
         if decision.verdict != GuardVerdict.ALLOW:
             return decision, None
 
@@ -862,5 +1278,8 @@ class Guard:
         # Phase 3: post_action under resource lock (record action mark)
         with self._resource_lock(scope, resource):
             self.post_action(agent, scope, resource, result_action, result, intent_id)
+
+        # Telemetry for completed execution
+        self._emit_write_metric(agent, scope, "action", "accepted")
 
         return decision, result

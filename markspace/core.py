@@ -20,6 +20,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from markspace.budget import TokenBudget
+from markspace.rate_limit import ScopeRateLimit
+
 # Type alias for mark payload fields that carry arbitrary data (Action.result,
 # Observation.content, Need.context). Named alias makes intent explicit and
 # provides a single point to tighten the type in the future (e.g., to JsonValue).
@@ -140,6 +143,7 @@ class Scope(BaseModel):
     )
     conflict_policy: ConflictPolicy = ConflictPolicy.HIGHEST_CONFIDENCE
     deferred: bool = False  # Spec Section 6.2: deferred resolution mode
+    rate_limit: ScopeRateLimit | None = None  # Spec Section 9.12: optional rate limit
 
     def allows_intent_verb(self, action: str) -> bool:
         return action in self.allowed_intent_verbs
@@ -279,6 +283,7 @@ class AgentManifest(BaseModel):
     expected_activity: dict[str, float] | None = (
         None  # MarkType.value -> expected marks per hour
     )
+    budget: TokenBudget | None = None  # optional token budget (Section 9.10)
 
     def produces(self, scope: str, mark_type: MarkType) -> bool:
         """Check if this manifest declares production of a mark type in a scope."""

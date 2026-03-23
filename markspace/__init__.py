@@ -13,6 +13,7 @@ Usage:
 Spec: ../docs/spec.md
 """
 
+from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.compose import validate_manifest_permissions, validate_pipeline
 from markspace.core import (
     CONTENT_FIELDS,
@@ -48,7 +49,7 @@ from markspace.core import (
     scope_contains,
     trust_weight,
 )
-from markspace.barrier import AgentBarrier
+from markspace.barrier import AgentBarrier, BarrierSnapshot
 from markspace.envelope import (
     AgentStats,
     AnomalyDetector,
@@ -61,8 +62,17 @@ from markspace.envelope import (
 from markspace.guard import Guard, GuardDecision, GuardVerdict
 from markspace.llm import LLMClient, LLMConfig
 from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeResult, ProbeVerdict
+from markspace.rate_limit import RateLimitTracker, ScopeRateLimit
 from markspace.schedule import Scheduler
 from markspace.models import DEFAULT_MODELS, FIREWORKS_MODELS, resolve_model_id
+from markspace.telemetry import (
+    FailingSink,
+    InMemorySink,
+    NullSink,
+    StructuredLogSink,
+    TelemetryEvent,
+    TelemetrySink,
+)
 from markspace.space import (
     MarkSpace,
     NeedCluster,
@@ -123,6 +133,7 @@ __all__ = [
     "GuardVerdict",
     # Defense-in-depth
     "AgentBarrier",
+    "BarrierSnapshot",
     "AgentStats",
     "AnomalyDetector",
     "DiagnosticProbe",
@@ -141,4 +152,18 @@ __all__ = [
     "DEFAULT_MODELS",
     "FIREWORKS_MODELS",
     "resolve_model_id",
+    # Budget
+    "BudgetStatus",
+    "BudgetTracker",
+    "TokenBudget",
+    # Rate limit
+    "RateLimitTracker",
+    "ScopeRateLimit",
+    # Telemetry
+    "FailingSink",
+    "InMemorySink",
+    "NullSink",
+    "StructuredLogSink",
+    "TelemetryEvent",
+    "TelemetrySink",
 ]
