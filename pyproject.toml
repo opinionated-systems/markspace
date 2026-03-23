@@ -1,7 +1,7 @@
 [project]
 name = "markspace"
 version = "0.1.3-beta"
-description = "Stigmergic coordination protocol for LLM agent fleets"
+description = "Environment-mediated coordination protocol for LLM agent fleets"
 license = "MIT AND CC-BY-4.0"
 requires-python = ">=3.11"
 readme = "README.md"
