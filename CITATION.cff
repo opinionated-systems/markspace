@@ -7,10 +7,15 @@ date-released: 2026-03-23
 doi: 10.5281/zenodo.18990235
 url: https://github.com/opinionated-systems/markspace
 abstract: >
-  A stigmergic coordination protocol for LLM agent fleets.
-  Enforces safety and coordination constraints in a deterministic
-  guard layer outside the agents, so guarantees hold independent
-  of agent behavior.
+  Markspace is a coordination protocol for LLM agent fleets based
+  on stigmergy - indirect coordination through traces left in a
+  shared environment. A deterministic guard layer at the environment
+  boundary enforces identity, scope, and conflict resolution outside
+  the agents, so safety guarantees hold independent of agent behavior.
+  The protocol defines five mark types encoding distinct epistemic
+  roles, three visibility levels, three conflict policies, and
+  trust-weighted decay. The included Python package is a reference
+  implementation used to verify 66 formal properties experimentally.
 authors:
   - family-names: Loose
     given-names: Andre
