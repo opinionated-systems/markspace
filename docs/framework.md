@@ -1132,7 +1132,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - [langroid/langroid](https://github.com/langroid/langroid). Multi-agent LLM framework using hierarchical task-delegation inspired by the Actor model.
 - [crewAIInc/crewAI](https://github.com/crewAIInc/crewAI). Role-based multi-agent orchestration with sequential/hierarchical process definitions.
 - [microsoft/autogen](https://github.com/microsoft/autogen). Multi-agent framework with group chat coordination and tool-use constraints.
-- Dibia, V. (2025). *Designing Multi-Agent Systems: Principles, Patterns, and Implementation for AI Agents.* [buy.multiagentbook.com](https://buy.multiagentbook.com/). [Code: [victordibia/designing-multiagent-systems](https://github.com/victordibia/designing-multiagent-systems)]. [Practical multi-agent design patterns, composition, evaluation, and production deployment.]
+- Dibia, V. (2025). "Designing Multi-Agent Systems: Principles, Patterns, and Implementation for AI Agents." [buy.multiagentbook.com](https://buy.multiagentbook.com/). [Code: [victordibia/designing-multiagent-systems](https://github.com/victordibia/designing-multiagent-systems)]. [Practical multi-agent design patterns, composition, evaluation, and production deployment.]
 - [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph). Graph-based agent orchestration with explicit state-graph edges.
 - [microsoft/agent-framework](https://github.com/microsoft/agent-framework). Lightweight agent framework with opt-in runtime context injection via FunctionTool. Used in the comparison experiment.
 - [pydantic/pydantic-ai](https://github.com/pydantic/pydantic-ai). Type-safe LLM agent framework with dependency injection via RunContext.
