@@ -147,8 +147,16 @@ class TestP58TelemetryCompleteness:
             guard_with_sink.write_mark(
                 unauthorized, Observation(scope="test", topic="x")
             )
-        # The rejection happens at space.write (scope validation) before
-        # telemetry. But barrier/envelope rejections do emit telemetry.
+        denied_events = [
+            e
+            for e in sink.events
+            if e.operation == "write_mark" and e.verdict == "denied"
+        ]
+        assert len(denied_events) == 1
+        assert (
+            "unauthorized" in denied_events[0].reason.lower()
+            or "scope" in denied_events[0].reason.lower()
+        )
 
     def test_execute_emits_event(
         self, guard_with_sink: Guard, agent: Agent, sink: InMemorySink

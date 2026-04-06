@@ -55,7 +55,7 @@ from markspace.core import (
 )
 from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
 from markspace.rate_limit import RateLimitTracker
-from markspace.space import MarkSpace, ScopeError
+from markspace.space import MarkSpace, QuotaExceededError, ScopeError, ValidationError
 from markspace.telemetry import (
     METRIC_CONFLICTS_RESOLVED,
     METRIC_MARKS_WRITTEN,
@@ -583,7 +583,19 @@ class Guard:
             )
             raise ScopeError(rate_limit_result)
 
-        mark_id = self.space.write(agent, mark)
+        try:
+            mark_id = self.space.write(agent, mark)
+        except (ScopeError, ValidationError, QuotaExceededError) as exc:
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "denied")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "denied",
+                reason=str(exc),
+            )
+            raise
 
         # Telemetry: successful write (P58)
         self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "accepted")
