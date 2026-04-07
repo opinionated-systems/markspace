@@ -33,7 +33,7 @@ In an [experiment](experiments/comparison/analysis.md), an agent prompted to boo
 - [Red-teaming](https://agentsofchaos.baulab.info/report.html) ([Shapira et al., 2026](https://arxiv.org/abs/2602.20021)) documented unauthorized compliance, sensitive data disclosure, resource exhaustion loops, and cross-agent propagation of unsafe behavior
 - Security researchers concluded that the system [cannot be meaningfully secured](https://www.aikido.dev/blog/why-trying-to-secure-openclaw-is-ridiculous) without removing the capabilities that make it useful, because its safety boundary is the agent itself - precisely what prompt injection compromises
 
-Markspace takes an architectural approach: enforce safety and coordination constraints in a layer outside the agent, so guarantees hold independent of agent behavior. This is what makes self-modifying agents possible - without an external safety layer, agents can rewrite any constraint embedded in their own code. [hyperspace](https://github.com/opinionated-systems/hyperspace) builds on markspace to enable cross-agent evolution of self-modifying code.
+Markspace takes an architectural approach: enforce safety and coordination constraints in a layer outside the agent, so guarantees hold independent of agent behavior. This is what makes self-modifying agents safe - without an external safety layer, agents can rewrite any constraint embedded in their own code. [hyperspace](https://github.com/opinionated-systems/hyperspace) builds on markspace to enable cross-agent evolution of self-modifying code.
 
 ## Protocol
 
