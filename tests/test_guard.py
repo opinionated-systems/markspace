@@ -15,19 +15,28 @@ import uuid
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from markspace import (
     Action,
     Agent,
     ConflictPolicy,
+    ContentPolicy,
+    ContentPolicyError,
     DecayConfig,
     Guard,
     GuardVerdict,
+    InMemorySink,
     Intent,
     MarkSpace,
     MarkType,
+    Need,
     Observation,
+    PolicyResult,
+    PolicyVerdict,
     Scope,
     Source,
+    Warning,
     hours,
     minutes,
 )
@@ -1081,3 +1090,237 @@ class TestFailedActionReleasesResource:
             optimizer, "calendar", "thu-14:00", "book", confidence=0.8
         )
         assert decision.verdict == GuardVerdict.ALLOW
+
+
+# ---------------------------------------------------------------------------
+# Content policy enforcement
+# ---------------------------------------------------------------------------
+
+
+class _AllowPolicy(ContentPolicy):
+    """Always allows."""
+
+    def evaluate(self, agent, mark, scope):
+        return PolicyResult(verdict=PolicyVerdict.ALLOW)
+
+
+class _RejectPolicy(ContentPolicy):
+    """Always rejects."""
+
+    def __init__(self, reason="blocked"):
+        self._reason = reason
+
+    def evaluate(self, agent, mark, scope):
+        return PolicyResult(verdict=PolicyVerdict.REJECT, reason=self._reason)
+
+
+class _RewritePolicy(ContentPolicy):
+    """Rewrites content to a fixed value."""
+
+    def __init__(self, new_content="sanitized"):
+        self._new_content = new_content
+
+    def evaluate(self, agent, mark, scope):
+        return PolicyResult(verdict=PolicyVerdict.REWRITE, content=self._new_content)
+
+
+class _FlagPolicy(ContentPolicy):
+    """Always flags."""
+
+    def __init__(self, reason="suspicious"):
+        self._reason = reason
+
+    def evaluate(self, agent, mark, scope):
+        return PolicyResult(verdict=PolicyVerdict.FLAG, reason=self._reason)
+
+
+class _RecordingPolicy(ContentPolicy):
+    """Records what it sees for assertions."""
+
+    def __init__(self):
+        self.seen: list = []
+
+    def evaluate(self, agent, mark, scope):
+        self.seen.append(mark)
+        return PolicyResult(verdict=PolicyVerdict.ALLOW)
+
+
+@pytest.fixture
+def notes_scope() -> Scope:
+    return Scope(
+        name="notes",
+        observation_topics=("*",),
+        warning_topics=("*",),
+        decay=DecayConfig(
+            observation_half_life=hours(6),
+            warning_half_life=hours(2),
+            intent_ttl=minutes(30),
+        ),
+    )
+
+
+@pytest.fixture
+def notes_space(notes_scope: Scope) -> MarkSpace:
+    s = MarkSpace(scopes=[notes_scope])
+    s.set_clock(1_000_000.0)
+    return s
+
+
+@pytest.fixture
+def writer() -> Agent:
+    return Agent(
+        name="writer",
+        scopes={"notes": ["observation", "warning", "need"]},
+    )
+
+
+class TestContentPolicies:
+    """Content policy middleware in the Guard's write path."""
+
+    def test_allow_passthrough(self, notes_space, writer):
+        """ALLOW verdict writes mark unchanged."""
+        guard = Guard(notes_space, content_policies=[_AllowPolicy()])
+        mark_id = guard.write_mark(
+            writer, Observation(scope="notes", topic="t", content="hello")
+        )
+        marks = notes_space.read(scope="notes")
+        obs = [m for m in marks if isinstance(m, Observation)]
+        assert len(obs) == 1
+        assert obs[0].content == "hello"
+        assert obs[0].id == mark_id
+
+    def test_reject_blocks_write(self, notes_space, writer):
+        """REJECT verdict raises ContentPolicyError, no mark stored."""
+        guard = Guard(notes_space, content_policies=[_RejectPolicy("bad content")])
+        with pytest.raises(ContentPolicyError, match="bad content"):
+            guard.write_mark(
+                writer, Observation(scope="notes", topic="t", content="evil")
+            )
+        obs = [m for m in notes_space.read(scope="notes") if isinstance(m, Observation)]
+        assert len(obs) == 0
+
+    def test_rewrite_modifies_content(self, notes_space, writer):
+        """REWRITE verdict stores the rewritten content."""
+        guard = Guard(notes_space, content_policies=[_RewritePolicy("cleaned")])
+        guard.write_mark(
+            writer,
+            Observation(scope="notes", topic="t", content="WORLD RECORD"),
+        )
+        obs = [m for m in notes_space.read(scope="notes") if isinstance(m, Observation)]
+        assert len(obs) == 1
+        assert obs[0].content == "cleaned"
+
+    def test_flag_allows_but_writes_warning(self, notes_space, writer):
+        """FLAG verdict writes the mark and emits a Warning to _system scope."""
+        guard = Guard(notes_space, content_policies=[_FlagPolicy("suspicious")])
+        guard.write_mark(writer, Observation(scope="notes", topic="t", content="hmm"))
+        obs = [m for m in notes_space.read(scope="notes") if isinstance(m, Observation)]
+        assert len(obs) == 1
+        assert obs[0].content == "hmm"
+
+        # Warning is written to _system scope (where the guard agent has perms)
+        warnings = [
+            m for m in notes_space.read(scope="_system") if isinstance(m, Warning)
+        ]
+        flag_warnings = [w for w in warnings if w.topic == "content-policy-flag"]
+        assert len(flag_warnings) == 1
+        assert "suspicious" in flag_warnings[0].reason
+
+    def test_pipeline_composition_rewrite_feeds_next(self, notes_space, writer):
+        """REWRITE from policy A feeds the rewritten mark into policy B."""
+        recorder = _RecordingPolicy()
+        guard = Guard(
+            notes_space,
+            content_policies=[_RewritePolicy("step1"), recorder],
+        )
+        guard.write_mark(
+            writer, Observation(scope="notes", topic="t", content="original")
+        )
+        assert len(recorder.seen) == 1
+        assert recorder.seen[0].content == "step1"
+
+    def test_first_reject_wins(self, notes_space, writer):
+        """After first REJECT, subsequent policies are not called."""
+        recorder = _RecordingPolicy()
+        guard = Guard(
+            notes_space,
+            content_policies=[_RejectPolicy("nope"), recorder],
+        )
+        with pytest.raises(ContentPolicyError):
+            guard.write_mark(
+                writer,
+                Observation(scope="notes", topic="t", content="x"),
+            )
+        assert len(recorder.seen) == 0
+
+    def test_no_policies_passthrough(self, notes_space, writer):
+        """Empty policy list has no effect on writes."""
+        guard = Guard(notes_space, content_policies=[])
+        guard.write_mark(writer, Observation(scope="notes", topic="t", content="fine"))
+        obs = [m for m in notes_space.read(scope="notes") if isinstance(m, Observation)]
+        assert len(obs) == 1
+        assert obs[0].content == "fine"
+
+    def test_non_string_content(self, notes_space, writer):
+        """Policies receive marks with non-string content (dict)."""
+        recorder = _RecordingPolicy()
+        guard = Guard(notes_space, content_policies=[recorder])
+        guard.write_mark(
+            writer,
+            Observation(scope="notes", topic="t", content={"key": "value"}),
+        )
+        assert recorder.seen[0].content == {"key": "value"}
+
+    def test_flag_does_not_feed_envelope(self, notes_space, writer):
+        """FLAG verdict does NOT call envelope.record_attempt (P70)."""
+        envelope = MagicMock()
+        from markspace.envelope import EnvelopeVerdict
+
+        envelope.check.return_value = EnvelopeVerdict.NORMAL
+
+        guard = Guard(
+            notes_space,
+            envelope=envelope,
+            content_policies=[_FlagPolicy("sus")],
+        )
+        guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        envelope.record_attempt.assert_not_called()
+
+    def test_policies_skip_warning_marks(self, notes_space, writer):
+        """Content policies are NOT evaluated for Warning marks (P69)."""
+        recorder = _RecordingPolicy()
+        guard = Guard(notes_space, content_policies=[recorder])
+        guard.write_mark(
+            writer,
+            Warning(scope="notes", topic="test", reason="something wrong"),
+        )
+        assert len(recorder.seen) == 0
+
+    def test_policies_skip_need_marks(self, notes_space, writer):
+        """Content policies are NOT evaluated for Need marks (P69)."""
+        recorder = _RecordingPolicy()
+        guard = Guard(notes_space, content_policies=[recorder])
+        guard.write_mark(
+            writer,
+            Need(scope="notes", question="help?"),
+        )
+        assert len(recorder.seen) == 0
+
+    def test_telemetry_emitted_per_policy(self, notes_space, writer):
+        """Each policy evaluation emits a telemetry event."""
+        sink = InMemorySink()
+        guard = Guard(
+            notes_space,
+            telemetry=sink,
+            content_policies=[_AllowPolicy(), _AllowPolicy()],
+        )
+        guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        policy_events = [e for e in sink.events if e.operation == "content_policy"]
+        assert len(policy_events) == 2
+        assert all(e.verdict == "allow" for e in policy_events)
+
+    def test_content_policy_error_is_scope_error(self):
+        """ContentPolicyError inherits from ScopeError for catch compatibility."""
+        from markspace.space import ScopeError
+
+        assert issubclass(ContentPolicyError, ScopeError)

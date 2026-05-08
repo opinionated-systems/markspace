@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -65,6 +66,74 @@ from markspace.telemetry import (
     TelemetryEvent,
     TelemetrySink,
 )
+
+
+# ---------------------------------------------------------------------------
+# Content policy types
+# ---------------------------------------------------------------------------
+
+
+class PolicyVerdict(str, Enum):
+    """Result of evaluating a content policy."""
+
+    ALLOW = "allow"  # Content passes, write as-is
+    REWRITE = "rewrite"  # Content modified, write the rewritten version
+    REJECT = "reject"  # Content blocked, mark not written
+    FLAG = "flag"  # Content allowed but flagged (warning emitted)
+
+
+@dataclass
+class PolicyResult:
+    """Outcome of a single content policy evaluation."""
+
+    verdict: PolicyVerdict
+    content: Any = None  # Rewritten content (REWRITE only). MarkPayload type.
+    reason: str | None = None
+    metadata: dict | None = None
+
+
+class ContentPolicy(ABC):
+    """Base class for content policies applied to Observation marks before write.
+
+    Content policies are only evaluated for Observation marks in the
+    ``write_mark()`` path. Warning, Need, Intent, and Action marks are
+    not subject to content policies.
+
+    Implementations must be thread-safe - multiple marks may be evaluated
+    concurrently from different ``write_mark()`` calls. The ``evaluate()``
+    method should be fast for the common case (ALLOW). Expensive checks
+    (LLM calls) should use caching or async pre-computation.
+
+    Note: ``mark.content`` is typed as ``MarkPayload`` (``Any``), so it may
+    be a string, dict, list, number, or None. Policies that only handle
+    string content should check the type and ALLOW non-string marks.
+    """
+
+    @abstractmethod
+    def evaluate(
+        self,
+        agent: Agent,
+        mark: Observation,
+        scope: Scope,
+    ) -> PolicyResult:
+        """Evaluate observation content against this policy."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Policy name for telemetry and logging."""
+        return self.__class__.__name__
+
+
+class ContentPolicyError(ScopeError):
+    """Raised when a content policy rejects a mark."""
+
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Guard verdict / decision types
+# ---------------------------------------------------------------------------
 
 
 class GuardVerdict(str, Enum):
@@ -155,16 +224,16 @@ class Guard:
     def __init__(
         self,
         space: MarkSpace,
-        block_self_rebook: bool = False,
         envelope: StatisticalEnvelope | None = None,
         principal_token: uuid.UUID | None = None,
         telemetry: TelemetrySink | None = None,
+        content_policies: list[ContentPolicy] | None = None,
     ) -> None:
         self.space = space
-        self.block_self_rebook = block_self_rebook
         self.envelope = envelope
         self._principal_token = principal_token or uuid.uuid4()
         self._telemetry: TelemetrySink = telemetry or NullSink()
+        self._content_policies: list[ContentPolicy] = content_policies or []
         # Per-resource locks: keyed by (scope, resource).
         # A global lock protects the _resource_locks dict itself.
         self._resource_locks: dict[tuple[str, str], _ResourceLock] = {}
@@ -299,6 +368,73 @@ class Guard:
             return self._rate_limit_tracker.check_and_record(
                 scope, agent.id, scope_def.rate_limit, self.space.now()
             )
+
+    # ------------------------------------------------------------------
+    # Content policy enforcement
+    # ------------------------------------------------------------------
+
+    def _check_content_policies(
+        self, agent: Agent, mark: Observation, scope: Scope
+    ) -> tuple[Observation, str | None]:
+        """Run content policies on an Observation mark.
+
+        Returns ``(possibly_rewritten_mark, rejection_reason)``.
+
+        Policies compose as a pipeline: a REWRITE from policy A feeds the
+        rewritten mark into policy B.  First REJECT wins.  FLAGS accumulate
+        and emit warnings to ``_system`` scope.
+
+        Only called for Observation marks (P69).
+        """
+        current_mark = mark
+        flags: list[PolicyResult] = []
+
+        for policy in self._content_policies:
+            result = policy.evaluate(agent, current_mark, scope)
+
+            self._emit_telemetry(
+                agent,
+                "content_policy",
+                scope.name,
+                current_mark.mark_type.value,
+                result.verdict.value,
+                reason=result.reason or "",
+                extra={"policy": policy.name},
+            )
+
+            if result.verdict == PolicyVerdict.REJECT:
+                return current_mark, result.reason or f"Rejected by {policy.name}"
+
+            elif result.verdict == PolicyVerdict.REWRITE:
+                current_mark = current_mark.model_copy(
+                    update={"content": result.content}
+                )
+
+            elif result.verdict == PolicyVerdict.FLAG:
+                flags.append(result)
+
+        if flags:
+            reasons = "; ".join(f.reason for f in flags if f.reason)
+            detail = f": {reasons}" if reasons else ""
+            try:
+                self.space.write(
+                    self._system_agent,
+                    Warning(
+                        scope="_system",
+                        topic="content-policy-flag",
+                        reason=(
+                            f"Content flagged for agent '{agent.name}' "
+                            f"in scope '{scope.name}'{detail}"
+                        ),
+                        severity=Severity.CAUTION,
+                    ),
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to write content-policy-flag warning", exc_info=True
+                )
+
+        return current_mark, None
 
     # ------------------------------------------------------------------
     # Budget enforcement
@@ -522,6 +658,7 @@ class Guard:
         - Barrier check (is this agent restricted?)
         - Envelope check (is this agent anomalous?)
         - Rate limit check (is this scope rate-limited?)
+        - Content policy check (Observation marks only, P67-P70)
         - Schema/scope validation (delegated to space.write())
 
         For intents and actions on contested resources, use execute()
@@ -582,6 +719,24 @@ class Guard:
                 reason=rate_limit_result,
             )
             raise ScopeError(rate_limit_result)
+
+        # Content policy check (Observation marks only - P69)
+        if self._content_policies and isinstance(mark, Observation):
+            scope_def = self.space.get_scope(mark.scope)
+            mark, rejection = self._check_content_policies(agent, mark, scope_def)
+            if rejection:
+                self._emit_write_metric(
+                    agent, mark.scope, mark.mark_type.value, "content_rejected"
+                )
+                self._emit_telemetry(
+                    agent,
+                    "write_mark",
+                    mark.scope,
+                    mark.mark_type.value,
+                    "rejected",
+                    reason=rejection,
+                )
+                raise ContentPolicyError(rejection)
 
         try:
             mark_id = self.space.write(agent, mark)
@@ -694,9 +849,12 @@ class Guard:
                 self.space.write(
                     self._system_agent,
                     Warning(
-                        scope=scope,
+                        scope="_system",
                         topic="envelope-flag",
-                        reason=f"Concentration detected involving agent '{agent.name}'",
+                        reason=(
+                            f"Concentration detected involving agent "
+                            f"'{agent.name}' in scope '{scope}'"
+                        ),
                         severity=Severity.CAUTION,
                     ),
                 )
@@ -741,10 +899,13 @@ class Guard:
                 self.space.write(
                     self._system_agent,
                     Warning(
-                        scope=scope,
+                        scope="_system",
                         invalidates=obs.id,
                         topic="envelope-restriction",
-                        reason=f"Agent '{agent.name}' flagged by statistical envelope",
+                        reason=(
+                            f"Agent '{agent.name}' flagged by statistical "
+                            f"envelope in scope '{scope}'"
+                        ),
                         severity=Severity.CAUTION,
                     ),
                 )
@@ -756,8 +917,11 @@ class Guard:
             self.space.write(
                 self._system_agent,
                 Need(
-                    scope=scope,
-                    question=f"Agent '{agent.name}' restricted: observation/action revoked in '{scope}'",
+                    scope="_system",
+                    question=(
+                        f"Agent '{agent.name}' restricted: "
+                        f"observation/action revoked in '{scope}'"
+                    ),
                     context={
                         "agent_id": str(agent.id),
                         "trigger": "envelope",
@@ -871,10 +1035,7 @@ class Guard:
         successful_actions = [
             a for a in existing_actions if not (isinstance(a, Action) and a.failed)
         ]
-        if self.block_self_rebook:
-            blocking_actions = successful_actions
-        else:
-            blocking_actions = [a for a in successful_actions if a.agent_id != agent.id]
+        blocking_actions = [a for a in successful_actions if a.agent_id != agent.id]
         if blocking_actions:
             # Record the attempt so conflict-spam is visible to the envelope.
             # This return path produces 0 marks (the Intent write is below,
@@ -1109,6 +1270,7 @@ class Guard:
                         conflicting_intents=others,
                     )
                 else:
+                    assert winner is not None  # validated above
                     decision = GuardDecision(
                         verdict=GuardVerdict.CONFLICT,
                         intent_id=intent.id,

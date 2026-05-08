@@ -66,7 +66,15 @@ from markspace.envelope import (
     WelfordConfig,
     WelfordDetector,
 )
-from markspace.guard import Guard, GuardDecision, GuardVerdict
+from markspace.guard import (
+    ContentPolicy,
+    ContentPolicyError,
+    Guard,
+    GuardDecision,
+    GuardVerdict,
+    PolicyResult,
+    PolicyVerdict,
+)
 from markspace.llm import LLMClient, LLMConfig
 from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeResult, ProbeVerdict
 from markspace.rate_limit import RateLimitTracker, ScopeRateLimit
@@ -135,9 +143,13 @@ __all__ = [
     # Scheduler
     "Scheduler",
     # Guard
+    "ContentPolicy",
+    "ContentPolicyError",
     "Guard",
     "GuardDecision",
     "GuardVerdict",
+    "PolicyResult",
+    "PolicyVerdict",
     # Defense-in-depth
     "AgentBarrier",
     "BarrierSnapshot",

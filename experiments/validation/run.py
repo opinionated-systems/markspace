@@ -162,13 +162,12 @@ class Cell:
     conflict_policy: str = "highest_confidence"
     n_rounds: int = 1
     n_slots: int = 15
-    block_self_rebook: bool = False
 
     def key(self) -> str:
         return (
             f"{self.model}|{self.n_agents}|{self.visibility}"
             f"|{self.temperature}|{self.execution_mode}|{self.conflict_policy}"
-            f"|{self.n_rounds}|{self.n_slots}|{self.block_self_rebook}"
+            f"|{self.n_rounds}|{self.n_slots}"
         )
 
 
@@ -243,7 +242,6 @@ class CalendarEnv:
         self,
         conflict_policy: ConflictPolicy = ConflictPolicy.HIGHEST_CONFIDENCE,
         n_slots: int = 15,
-        block_self_rebook: bool = False,
     ) -> None:
         self.slots = make_slots(n_slots) if n_slots != 15 else SLOTS
         self.scope = Scope(
@@ -259,7 +257,7 @@ class CalendarEnv:
         )
         self.space = MarkSpace(scopes=[self.scope])
         self.space.set_clock(1_000_000.0)
-        self.guard = Guard(self.space, block_self_rebook=block_self_rebook)
+        self.guard = Guard(self.space)
 
         self._stats_lock = threading.Lock()
         self.guard_invocation_count = 0
@@ -696,7 +694,6 @@ def run_trial(cell: Cell, trial_id: int, client: LLMClient, phase: str) -> Trial
     env = CalendarEnv(
         conflict_policy=policy,
         n_slots=cell.n_slots,
-        block_self_rebook=cell.block_self_rebook,
     )
 
     tools = _make_tools(env.slots, cell.visibility)
@@ -810,11 +807,10 @@ def load_completed(path: Path) -> dict[str, set[int]]:
             c = record["cell"]
             n_rounds = c.get("n_rounds", 1)
             n_slots = c.get("n_slots", 15)
-            block_self_rebook = c.get("block_self_rebook", False)
             key = (
                 f"{c['model']}|{c['n_agents']}|{c['visibility']}"
                 f"|{c['temperature']}|{c['execution_mode']}|{c['conflict_policy']}"
-                f"|{n_rounds}|{n_slots}|{block_self_rebook}"
+                f"|{n_rounds}|{n_slots}"
             )
             tid = record["trial_id"]
             if tid == -1:
@@ -852,13 +848,6 @@ def main() -> None:
     parser.add_argument("--conflict-policy", nargs="+", default=["highest_confidence"])
     parser.add_argument("--n-rounds", nargs="+", type=int, default=[1])
     parser.add_argument("--n-slots", nargs="+", type=int, default=[15])
-    parser.add_argument(
-        "--block-self-rebook",
-        nargs="+",
-        type=str,
-        default=["false"],
-        help="Whether to block agents from re-booking their own slots (true/false)",
-    )
     parser.add_argument("--max-consecutive-failures", type=int, default=10)
     parser.add_argument(
         "--parallel-cells",
@@ -867,10 +856,6 @@ def main() -> None:
         help="Number of cells to run concurrently (default: 12)",
     )
     args = parser.parse_args()
-
-    block_self_rebook_vals = [
-        v.lower() in ("true", "1", "yes") for v in args.block_self_rebook
-    ]
 
     cells = [
         Cell(
@@ -882,7 +867,6 @@ def main() -> None:
             conflict_policy=p,
             n_rounds=r,
             n_slots=s,
-            block_self_rebook=b,
         )
         for m in args.models
         for n in args.agents
@@ -892,7 +876,6 @@ def main() -> None:
         for p in args.conflict_policy
         for r in args.n_rounds
         for s in args.n_slots
-        for b in block_self_rebook_vals
     ]
 
     output_dir = Path(__file__).parent
@@ -968,8 +951,6 @@ def main() -> None:
                 extra_tags += f" rounds={cell.n_rounds}"
             if cell.n_slots != 15:
                 extra_tags += f" slots={cell.n_slots}"
-            if cell.block_self_rebook:
-                extra_tags += " block_self_rebook"
             label = (
                 f"[cell {cell_idx + 1}/{total_cells} | trial {trial_id + 1}/{args.trials_per_cell}] "
                 f"{cell.model} N={cell.n_agents} {cell.visibility} "

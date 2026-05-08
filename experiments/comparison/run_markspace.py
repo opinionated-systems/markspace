@@ -155,7 +155,7 @@ class BookingEnv:
             allowed_action_verbs=("book",),
         )
         self.space = MarkSpace(scopes=[scope], clock=1_000_000.0)
-        self.guard = Guard(self.space, block_self_rebook=True)
+        self.guard = Guard(self.space)
 
     def view_schedule(self, agent: Agent) -> str:
         """Read current bookings from the mark space."""

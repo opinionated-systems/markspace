@@ -439,7 +439,6 @@ class OfficeEnv:
 
         self.guard = Guard(
             self.space,
-            block_self_rebook=True,
             envelope=self.envelope,
         )
 

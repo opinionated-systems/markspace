@@ -59,6 +59,7 @@ This document is the formal specification for the markspace protocol. For the id
   - [9.10 Token Budgets](#910-token-budgets)
   - [9.11 Telemetry](#911-telemetry)
   - [9.12 Scope Rate Limits](#912-scope-rate-limits)
+  - [9.13 Content Policies](#913-content-policies)
 - [10. Generalized Supersession](#10-generalized-supersession)
   - [10.1 Formal Properties](#101-formal-properties)
 - [11. Agent](#11-agent)
@@ -87,7 +88,7 @@ This document specifies a coordination protocol for autonomous agent fleets base
 
 The specification is accompanied by a Python reference implementation and property tests. Every normative statement (MUST, SHOULD, MAY) maps to an executable test. The reference implementation demonstrates that these properties hold together consistently; any language can reimplement it by satisfying the same test suite.
 
-**Verification level.** The 47 mandatory properties (P1-P47, P40-P43) are verified empirically through Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)), not through formal model checking (e.g., [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47), or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests exercise each property across randomized inputs and edge cases, and the [stress test](../experiments/stress_test/analysis.md) validates them under realistic concurrent load - up to 1,050 agents across 20 rounds with adversarial participants, zero safety violations across all 21 trial runs and 4,010 agent instances ([trial results](../experiments/trials/analysis.md)). This provides high confidence that the properties hold in practice but does not constitute a formal proof. A formal verification effort would strengthen the safety guarantees, particularly for P11 (Determinism) and P12 (Progress), which make claims about all possible states.
+**Verification level.** The 40 mandatory properties (P1-P39 and P47) are verified empirically through Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)), not through formal model checking (e.g., [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47), or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests exercise each property across randomized inputs and edge cases, and the [stress test](../experiments/stress_test/analysis.md) validates them under realistic concurrent load - up to 1,050 agents across 20 rounds with adversarial participants, zero safety violations across all 21 trial runs and 4,010 agent instances ([trial results](../experiments/trials/analysis.md)). This provides high confidence that the properties hold in practice but does not constitute a formal proof. A formal verification effort would strengthen the safety guarantees, particularly for P11 (Determinism) and P12 (Progress), which make claims about all possible states.
 
 ## 1. Terminology
 
@@ -857,7 +858,7 @@ The statistical envelope provides behavioral anomaly detection for agent write p
 
 **Exempt agents.** The guard's system agent and the diagnostic probe agent (Section 9.9) are added to the envelope's `exempt_agents` set. Their writes are invisible to the envelope, preventing feedback loops where the guard's own warning/need marks trigger further anomalies. Exemption should be used sparingly - external bots and integrations should be monitored with their own baselines (using `expected_activity` declarations), not exempted.
 
-**`write_mark()` as single enforcement boundary.** All agent writes pass through `Guard.write_mark()`, which checks the barrier and envelope before delegating to `space.write()`. Intent and Action marks are rejected by `write_mark()` with a ValueError - they flow through `pre_action()`/`post_action()` instead. This ensures every observation, warning, and need write is monitored.
+**`write_mark()` as single enforcement boundary.** All agent writes pass through `Guard.write_mark()`, which checks the barrier, envelope, rate limit, and content policies (for Observation marks) before delegating to `space.write()`. Intent and Action marks are rejected by `write_mark()` with a ValueError - they flow through `pre_action()`/`post_action()` instead. This ensures every observation, warning, and need write is monitored.
 
 **P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until `reset(agent, principal_token)` is called. The `restricted` flag is sticky.
 
@@ -1016,6 +1017,59 @@ The `rate_limit` field is added to the Scope definition. When omitted, no rate l
 **P66: Rate Limit Independence**: Rate limits operate independently of the statistical envelope and token budgets. An agent within its rate limit but flagged by the envelope is still subject to envelope restrictions; an agent within its envelope baseline but exceeding its rate limit is still rejected.
 
 Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.py::_check_rate_limit`](../markspace/guard.py), [`tests/test_rate_limit.py`](../tests/test_rate_limit.py)
+
+### 9.13 Content Policies
+
+The guard's existing enforcement layers operate on structural properties of marks - who wrote it, which scope, what type, how many. None inspect mark content. Content policies add a pluggable content inspection layer for Observation marks, positioned between rate limiting and scope validation in the `write_mark()` enforcement stack:
+
+```
+authorization -> barrier -> envelope -> rate limit -> CONTENT POLICY -> scope validation -> write
+```
+
+Content policies run late in the stack because they may be expensive (LLM calls). Cheap structural checks gate first.
+
+**Scope.** Content policies apply to Observation marks only. Warning and Need marks are system-facing and principal-facing respectively - blocking or rewriting them would suppress safety signals or escalation. Intent and Action marks have no free-text content field; their fields (`resource`, `action`, `confidence`, `result`) carry structural meaning for conflict resolution and historical record.
+
+**Interface.**
+
+```protobuf
+enum PolicyVerdict {
+  ALLOW   = 0;  // Content passes, write as-is
+  REWRITE = 1;  // Content modified, write the rewritten version
+  REJECT  = 2;  // Content blocked, mark not written
+  FLAG    = 3;  // Content allowed but flagged (warning emitted)
+}
+
+message PolicyResult {
+  PolicyVerdict verdict  = 1;
+  optional bytes content = 2;  // Rewritten content (REWRITE only)
+  optional string reason = 3;  // Human-readable explanation
+  optional bytes metadata = 4; // Arbitrary data for telemetry/debugging
+}
+```
+
+A `ContentPolicy` is an abstract class with an `evaluate(agent, mark, scope) -> PolicyResult` method. Implementations must be thread-safe.
+
+**Composition.** The guard accepts an ordered list of content policies. Policies compose as a pipeline:
+
+- A REWRITE from policy N replaces the mark's `content` field and feeds the rewritten mark into policy N+1.
+- The first REJECT terminates the pipeline. Subsequent policies are not evaluated.
+- FLAG verdicts accumulate. The mark is written, and a Warning is emitted to the `_system` scope with the aggregated flag reasons.
+- ALLOW passes the mark through unchanged.
+
+Order matters: cheap checks (length limits, regex) should precede expensive checks (LLM calls) to minimize cost on the common path.
+
+**FLAG behavior.** A FLAG verdict writes the Observation mark (the write succeeds) and emits a Warning to the `_system` scope recording the flag reason. FLAG does not feed into the statistical envelope - the envelope already observes the written mark through the post-write hook, and calling `record_attempt()` would double-count the write, distorting the agent's anomaly baseline. FLAG is an observability signal, not an enforcement signal.
+
+**P67: Content Policy Atomicity**: A REJECT verdict MUST prevent the Observation mark from being stored. No partial writes.
+
+**P68: Content Policy Composition**: Policies MUST execute in declaration order. A REWRITE from policy N MUST feed the rewritten mark into policy N+1. The first REJECT MUST terminate the pipeline.
+
+**P69: Content Policy Scope**: Content policies MUST only be evaluated for Observation marks. Content policies MUST only modify the `content` field via REWRITE. Mark identity (`id`, `agent_id`, `scope`, `mark_type`, `created_at`) and structural fields (`topic`, `confidence`, `source`) MUST NOT be altered by a policy.
+
+**P70: Content Policy Independence**: Content policies operate independently of the envelope, barrier, and rate limits. A REJECT from a content policy does not trigger barrier narrowing or envelope recording. A FLAG does not feed into `record_attempt()`.
+
+Ref: [`markspace/guard.py::ContentPolicy`](../markspace/guard.py), [`markspace/guard.py::_check_content_policies`](../markspace/guard.py), [`tests/test_guard.py::TestContentPolicies`](../tests/test_guard.py)
 
 ## 10. Generalized Supersession
 
@@ -1345,7 +1399,7 @@ Ref: [`markspace/schedule.py`](../markspace/schedule.py), [`tests/test_schedule.
 
 ## 15. Properties Summary
 
-All normative properties, collected. A conforming implementation MUST satisfy P1-P39 and P47. Properties P40-P45 (adaptive layer), P46 (diagnostic probe), P48-P55 (composition), P56 (scheduling), P57-P58 (telemetry), P59-P63 (token budgets), and P64-P66 (scope rate limits) are OPTIONAL - required only if the implementation supports that feature. The reference implementation's test suite verifies each one.
+All normative properties, collected. A conforming implementation MUST satisfy P1-P39 and P47. Properties P40-P45 (adaptive layer), P46 (diagnostic probe), P48-P55 (composition), P56 (scheduling), P57-P58 (telemetry), P59-P63 (token budgets), P64-P66 (scope rate limits), and P67-P70 (content policies) are OPTIONAL - required only if the implementation supports that feature. The reference implementation's test suite verifies each one.
 
 Properties are numbered sequentially by section.
 
@@ -1433,6 +1487,11 @@ Properties are numbered sequentially by section.
 | P64 | Rate Limit Enforcement | 9.12 |
 | P65 | Rate Limit Fleet Cap | 9.12 |
 | P66 | Rate Limit Independence | 9.12 |
+| | **Content Policies** (optional) | |
+| P67 | Content Policy Atomicity | 9.13 |
+| P68 | Content Policy Composition | 9.13 |
+| P69 | Content Policy Scope | 9.13 |
+| P70 | Content Policy Independence | 9.13 |
 
 ## 16. Conformance
 
@@ -1461,6 +1520,8 @@ An implementation MAY additionally support telemetry ([Section 9.11](#911-teleme
 An implementation MAY additionally support token budgets ([Section 9.10](#910-token-budgets)). If it does, it MUST satisfy P59-P63. Token budget support is OPTIONAL for conformance.
 
 An implementation MAY additionally support scope rate limits ([Section 9.12](#912-scope-rate-limits)). If it does, it MUST satisfy P64-P66. Rate limit support is OPTIONAL for conformance.
+
+An implementation MAY additionally support content policies ([Section 9.13](#913-content-policies)). If it does, it MUST satisfy P67-P70. Content policy support is OPTIONAL for conformance.
 
 An implementation MAY additionally support agent composition ([Section 13](#13-agent-composition)). If it does, it MUST satisfy P48-P55. Composition support is OPTIONAL for conformance.
 
