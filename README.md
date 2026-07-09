@@ -6,7 +6,7 @@
 
 If you're coordinating multiple LLM agents, you've likely hit some of these:
 
-- **Prompt injection exposure** - agent identity and permissions are controlled by the LLM, so a compromised prompt can escalate privileges or impersonate other agents
+- **Prompt injection exposure** - agent identity and permissions are controlled by the LLM, so a [compromised prompt](https://role-confusion.github.io/) can escalate privileges or impersonate other agents
 - **Implicit permissions** - you find out what an agent shouldn't have done after it already did it
 - **Blind trust** - no standard way to distinguish your fleet's data from API responses or crawled content
 - **Context drift** - long-running agents lose track of what happened 200 steps ago and repeat or contradict earlier actions
