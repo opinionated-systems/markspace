@@ -63,7 +63,7 @@ Full protocol design in [`framework.md`](docs/framework.md). Formal specificatio
 
 ## Composition and isolation
 
-Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent declares what it can read and write in a manifest, and the guard rejects everything else. Capabilities you didn't grant don't exist.
+Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent's principal declares what the agent can read and write in a manifest, and the guard rejects everything else. Capabilities you didn't grant don't exist.
 
 Watch/subscribe lets agents activate when matching marks appear, forming pipelines without a central orchestrator. Agents can be added, removed, or replaced independently, and need marks let them escalate rather than grow to handle edge cases. The manifest interface is model-agnostic - each agent can run a different backend (cloud API, local open-weights model, or deterministic code), and sensitive scopes can run entirely on-premise.
 
