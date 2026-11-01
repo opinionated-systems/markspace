@@ -1324,3 +1324,29 @@ class TestContentPolicies:
         from markspace.space import ScopeError
 
         assert issubclass(ContentPolicyError, ScopeError)
+
+
+class TestDeferredAuthorization:
+    """Deferred resolution re-checks each intent's agent against the intent's
+    own scope, not the scope whose boundary resolves it."""
+
+    def test_child_scope_intent_keeps_its_authorization_at_a_parent_boundary(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/merger"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        insider = Agent(name="insider", scopes={"corp/merger": ["intent", "action"]})
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        assert guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9).verdict == (
+            GuardVerdict.ALLOW
+        )
+        guard.pre_action(outsider, "corp", "acme", "buy", 0.1)
+        decisions = guard.resolve_deferred(
+            "corp", "acme", agents={insider.id: insider, outsider.id: outsider}
+        )
+        assert decisions[insider.id].verdict == GuardVerdict.ALLOW
+        assert decisions[outsider.id].verdict == GuardVerdict.CONFLICT

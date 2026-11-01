@@ -1208,8 +1208,8 @@ class Guard:
                             ),
                         )
                     elif not agent.can_write(
-                        scope, MarkType.INTENT
-                    ) or not agent.can_write(scope, MarkType.ACTION):
+                        intent.scope, MarkType.INTENT
+                    ) or not agent.can_write(intent.scope, MarkType.ACTION):
                         _update_best_decision(
                             results,
                             intent.agent_id,
@@ -1219,7 +1219,10 @@ class Guard:
                                 reason=f"Agent '{agent.name}' authorization revoked since pre_action",
                             ),
                         )
-                    elif self._check_barrier(agent, scope, MarkType.INTENT) is not None:
+                    elif (
+                        self._check_barrier(agent, intent.scope, MarkType.INTENT)
+                        is not None
+                    ):
                         _update_best_decision(
                             results,
                             intent.agent_id,

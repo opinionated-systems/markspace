@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 240 tests
+pytest  # 326 tests
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution, guard enforcement, composition properties, scheduling, thread safety, and hypothesis property-based tests.
