@@ -27,10 +27,10 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 470 tests (tests/ and experiments/stress_test/)
+pytest  # 487 tests (tests/ and experiments/stress_test/)
 ```
 
-Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, and hypothesis property-based tests.
+Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, and the LLM client.
 
 ### Composition Stress Test
 

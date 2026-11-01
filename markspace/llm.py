@@ -23,9 +23,10 @@ import random
 import time
 import uuid
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ class LLMConfig:
     model: str
     temperature: float = 0.0
     max_tokens: int = 10_000
+    # Sent as `reasoning_effort` when set (OpenAI-compatible APIs only). On
+    # Fireworks DeepSeek V4.1, omitting it selects "high" with no thinking cap;
+    # an integer >= 1024 selects "high" with that hard thinking-token budget.
+    reasoning_effort: str | int | None = None
 
     @property
     def is_anthropic(self) -> bool:
@@ -174,6 +179,36 @@ class LLMConfig:
         )
 
 
+class RequestPacer(Protocol):
+    """
+    Hook that spaces a client's HTTP attempts. LLMClient calls acquire()
+    before every attempt, retries included, then on_response() for every HTTP
+    response or on_failure() for a timeout.
+    """
+
+    def acquire(self) -> int:
+        """Block until the attempt may start; return a generation to pass back."""
+        ...
+
+    def on_response(
+        self,
+        status: int,
+        headers: Mapping[str, str],
+        usage: Mapping[str, Any] | None,
+        generation: int,
+        retry_after: float | None,
+    ) -> None:
+        """
+        Record a response. retry_after is a 429's Retry-After in seconds, at
+        most the client's max_retry_after; None when the response has none.
+        """
+        ...
+
+    def on_failure(self) -> None:
+        """Record an attempt that timed out without a response."""
+        ...
+
+
 class LLMClient:
     """
     LLM client supporting OpenAI-compatible and Anthropic APIs.
@@ -195,10 +230,19 @@ class LLMClient:
         max_retries: int = 5,
         consecutive_failure_threshold: int = 3,
         circuit_breaker_timeout: float = 60.0,
+        pacer: RequestPacer | None = None,
+        max_retry_after: float = 120.0,
     ) -> None:
         self.config = config
         self.timeout = timeout
         self.max_retries = max_retries
+        # When set, every HTTP attempt (retries included) waits for the
+        # pacer, every response and every timeout is reported to it, and a 429
+        # goes to the pacer instead of counting toward the circuit breaker.
+        self.pacer = pacer
+        # A 429 whose Retry-After exceeds this many seconds fails the call at
+        # once: retrying sooner would go against the provider's instruction.
+        self.max_retry_after = max_retry_after
         if config.is_anthropic:
             self._endpoint = f"{config.base_url}/messages"
         else:
@@ -252,15 +296,42 @@ class LLMClient:
         for attempt in range(self.max_retries + 1):
             try:
                 http = self._get_http()
+                generation = self.pacer.acquire() if self.pacer is not None else 0
                 resp = http.post(
                     self._endpoint,
                     headers=headers,
                     json=payload,
                 )
+                retry_after = (
+                    _parse_retry_after(resp) if resp.status_code == 429 else None
+                )
+                if self.pacer is not None and resp.status_code != 200:
+                    # The pacer waits no longer than a call can: past
+                    # max_retry_after the call fails below, and the other
+                    # callers resume after max_retry_after even if the
+                    # provider's window is longer (their calls then fail too).
+                    self.pacer.on_response(
+                        resp.status_code,
+                        resp.headers,
+                        None,
+                        generation,
+                        (
+                            min(retry_after, self.max_retry_after)
+                            if retry_after is not None
+                            else None
+                        ),
+                    )
 
+                if retry_after is not None and retry_after > self.max_retry_after:
+                    raise httpx.HTTPStatusError(
+                        f"HTTP 429 with Retry-After {retry_after:.0f} s",
+                        request=resp.request,
+                        response=resp,
+                    )
                 if resp.status_code == 429 or resp.status_code >= 500:
-                    self._record_failure()
-                    wait = min(2**attempt, 30) * (0.5 + random.random())
+                    if not (resp.status_code == 429 and self.pacer is not None):
+                        self._record_failure()
+                    wait = _retry_wait(retry_after, attempt)
                     time.sleep(wait)
                     last_error = httpx.HTTPStatusError(
                         f"HTTP {resp.status_code}",
@@ -290,11 +361,22 @@ class LLMClient:
                     data = _convert_anthropic_response(data)
                 else:
                     _normalize_tool_calls(data)
+                    _record_cached_prompt_tokens(data, resp.headers)
+                if self.pacer is not None:
+                    self.pacer.on_response(
+                        resp.status_code,
+                        resp.headers,
+                        data.get("usage"),
+                        generation,
+                        None,
+                    )
 
                 return data
 
             except httpx.TimeoutException as e:
                 self._record_failure()
+                if self.pacer is not None:
+                    self.pacer.on_failure()
                 last_error = e
                 if attempt < self.max_retries:
                     wait = min(2**attempt, 30) * (0.5 + random.random())
@@ -331,6 +413,8 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
+        if self.config.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.config.reasoning_effort
 
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
@@ -597,6 +681,64 @@ def _convert_anthropic_response(resp: dict) -> dict:
             "completion_tokens": usage.get("output_tokens", 0),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Retry wait
+# ---------------------------------------------------------------------------
+
+
+def _parse_retry_after(resp: httpx.Response) -> float | None:
+    """A 429's Retry-After in seconds, or None when absent or not in seconds."""
+    raw = resp.headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Retry-After is not in seconds: %r", raw)
+        return None
+
+
+def _retry_wait(retry_after: float | None, attempt: int) -> float:
+    """
+    Seconds to wait before retrying a 429 or 5xx: exponential backoff with
+    jitter, and never less than a 429's Retry-After, as Fireworks' error-code
+    guide asks.
+    """
+    backoff = min(2**attempt, 30) * (0.5 + random.random())
+    return backoff if retry_after is None else max(retry_after, backoff)
+
+
+# ---------------------------------------------------------------------------
+# Cached prompt tokens
+# ---------------------------------------------------------------------------
+
+
+def _record_cached_prompt_tokens(data: dict, headers: Mapping[str, str]) -> None:
+    """
+    Store the cached share of the prompt as usage["cached_prompt_tokens"], so
+    cost can price cached input at its own rate.
+
+    Fireworks reports cached tokens in the `fireworks-cached-prompt-tokens`
+    response header, and sometimes only in the body's
+    `prompt_tokens_details.cached_tokens`. The header wins when present. With
+    neither, no key is written: the count is unknown, not zero.
+    """
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return
+    raw = headers.get("fireworks-cached-prompt-tokens")
+    if raw is not None:
+        try:
+            usage["cached_prompt_tokens"] = int(raw)
+            return
+        except ValueError:
+            # A paid response must not be lost to a malformed header.
+            logger.warning("Unparseable fireworks-cached-prompt-tokens: %r", raw)
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and isinstance(details.get("cached_tokens"), int):
+        usage["cached_prompt_tokens"] = details["cached_tokens"]
 
 
 # ---------------------------------------------------------------------------
