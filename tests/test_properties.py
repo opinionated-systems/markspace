@@ -1160,6 +1160,67 @@ class TestScopeVisibility:
 
 
 # ---------------------------------------------------------------------------
+# Decay through a parent scope: each mark decays by its own scope's settings
+# ---------------------------------------------------------------------------
+
+
+class TestChildScopeDecay:
+    @staticmethod
+    def _space() -> MarkSpace:
+        fast = DecayConfig(
+            observation_half_life=60, warning_half_life=60, intent_ttl=60
+        )
+        s = MarkSpace(scopes=[Scope(name="ops"), Scope(name="ops/fast", decay=fast)])
+        s.set_clock(1000000.0)
+        return s
+
+    def test_read_through_parent_uses_child_half_life(self) -> None:
+        s = self._space()
+        writer = Agent(name="w", scopes={"ops": ["observation"]})
+        s.write(
+            writer,
+            Observation(scope="ops/fast", topic="t", content="X", source=Source.FLEET),
+        )
+        s.set_clock(1000000.0 + 600)  # ten child half-lives: strength ~0.001
+        assert s.read(scope="ops/fast") == []
+        assert [m for m in s.read(scope="ops") if m.scope == "ops/fast"] == []
+
+    def test_warning_decays_by_its_own_scope(self) -> None:
+        """A warning in a slow-decaying scope keeps suppressing a mark in a
+        scope whose own warnings decay fast."""
+        slow = DecayConfig(
+            observation_half_life=hours(12), warning_half_life=hours(12), intent_ttl=60
+        )
+        quick = DecayConfig(
+            observation_half_life=hours(6), warning_half_life=60, intent_ttl=60
+        )
+        s = MarkSpace(
+            scopes=[Scope(name="ops", decay=quick), Scope(name="audit", decay=slow)]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(name="w", scopes={"ops": ["observation"], "audit": ["warning"]})
+        obs_id = s.write(
+            writer,
+            Observation(scope="ops", topic="t", content="X", source=Source.FLEET),
+        )
+        s.write(
+            writer, Warning(scope="audit", invalidates=obs_id, topic="t", reason="r")
+        )
+        s.set_clock(1000000.0 + 600)  # ten of ops' warning half-lives
+        assert s.read(scope="ops") == []
+
+    def test_intents_through_parent_use_child_ttl(self) -> None:
+        s = self._space()
+        writer = Agent(name="w", scopes={"ops": ["intent"]})
+        s.write(
+            writer, Intent(scope="ops/fast", resource="r", action="a", confidence=0.5)
+        )
+        s.set_clock(1000000.0 + 120)  # past the child's 60 s TTL
+        assert s.get_intents("ops/fast", "r") == []
+        assert s.get_intents("ops", "r") == []
+
+
+# ---------------------------------------------------------------------------
 # P30 - Mark Immutability
 # Core fields MUST NOT be mutated after write.
 # ---------------------------------------------------------------------------

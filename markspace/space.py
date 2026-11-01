@@ -348,7 +348,6 @@ class MarkSpace:
         with self._lock:
             now = self.now()
             scope_def = self.get_scope(scope)
-            decay_config = scope_def.decay
 
             # Visibility check - determine read mode for this scope + reader
             visibility = scope_def.visibility
@@ -408,7 +407,11 @@ class MarkSpace:
                     and isinstance(w, Warning)
                 ]
                 strength = effective_strength_with_warnings(
-                    m, relevant_warnings, now, decay_config
+                    m,
+                    relevant_warnings,
+                    now,
+                    self.get_scope(m.scope).decay,
+                    warning_decay=self._own_decay,
                 )
 
                 if strength >= min_strength:
@@ -537,7 +540,11 @@ class MarkSpace:
                         and isinstance(w, Warning)
                     ]
                     strength = effective_strength_with_warnings(
-                        m, relevant_warnings, now, scope_def.decay
+                        m,
+                        relevant_warnings,
+                        now,
+                        scope_def.decay,
+                        warning_decay=self._own_decay,
                     )
                     if strength > 0:
                         unresolved.append(m)
@@ -571,6 +578,10 @@ class MarkSpace:
             clusters.sort(key=lambda c: c.effective_priority, reverse=True)
             return clusters
 
+    def _own_decay(self, mark: AnyMark) -> DecayConfig:
+        """The decay settings of *mark*'s own scope."""
+        return self.get_scope(mark.scope).decay
+
     def get_mark(self, mark_id: uuid.UUID) -> AnyMark | None:
         """Retrieve a mark by id. Returns None if not found."""
         with self._lock:
@@ -579,7 +590,7 @@ class MarkSpace:
     def _get_intents_unlocked(self, scope: str, resource: str) -> list[Intent]:
         """Get active intents on a resource. Caller MUST hold self._lock."""
         now = self.now()
-        scope_def = self.get_scope(scope)
+        self.get_scope(scope)  # raises for a scope with no definition
 
         candidate_ids: set[uuid.UUID] = set()
         for s, ids in self._by_scope.items():
@@ -594,7 +605,7 @@ class MarkSpace:
                 and isinstance(m, Intent)
                 and m.resource == resource
                 and m.id not in self._superseded
-                and compute_strength(m, now, scope_def.decay) > 0
+                and compute_strength(m, now, self.get_scope(m.scope).decay) > 0
             ):
                 results.append(m)
         return results

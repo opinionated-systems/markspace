@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from enum import Enum
 from types import MappingProxyType
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -505,10 +506,14 @@ def effective_strength_with_warnings(
     warnings: list[Warning],
     now: float,
     decay_config: DecayConfig,
+    warning_decay: Callable[[Warning], DecayConfig] | None = None,
 ) -> float:
     """
     Effective strength after warning invalidation.
     Warnings targeting this mark reduce its effective strength.
+
+    warning_decay: the decay settings of each warning. Without it, warnings
+    decay by decay_config. MarkSpace passes each warning's own scope settings.
 
     Spec Section 9.5.
     P34: Result MUST NOT be < 0.
@@ -516,7 +521,9 @@ def effective_strength_with_warnings(
     """
     base = effective_strength(mark, now, decay_config)
     total_warning_strength = sum(
-        effective_strength(w, now, decay_config)
+        effective_strength(
+            w, now, warning_decay(w) if warning_decay is not None else decay_config
+        )
         for w in warnings
         if w.invalidates == mark.id
     )

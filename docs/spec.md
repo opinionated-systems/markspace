@@ -637,7 +637,7 @@ Postconditions:
 read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader=None) → list[Mark]
 
   - Returns all marks in the given scope matching the filters
-  - Each mark's effective_strength is computed at read time (Section 3 + 4)
+  - Each mark's effective_strength is computed at read time (Section 3 + 4), with the decay configuration of the mark's own scope
   - Marks with effective_strength < min_strength are excluded
   - Results SHOULD be sorted by effective_strength descending
   - reader: the agent performing the read (controls visibility per Section 7.4)
@@ -800,7 +800,7 @@ The division: **the agent decides WHAT to do. The guard decides WHETHER it's all
 
 ### 9.5 Warning Invalidation
 
-When a warning mark references `invalidates: mark_id`, it reduces the target mark's effective strength.
+When a warning mark references `invalidates: mark_id`, it reduces the target mark's effective strength. Each mark, the warning included, decays by the decay configuration of its own scope.
 
 ```
 effective_strength_with_warnings(mark, now) =
