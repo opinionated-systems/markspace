@@ -1233,7 +1233,8 @@ def resolve_parking_priority(
     This extends the spec's single-winner deferred resolution to multi-winner
     pool allocation: N spots available means top-N intents by confidence win.
     Every pending pool intent is released first, so a later resolution does
-    not judge it again. Each winner claims a spot with its own intent, which
+    not judge it again. An agent gets at most one spot a day: its best
+    request counts, and an agent that already holds a spot gets none. Each winner claims a spot with its own intent, which
     the harness grants as the principal; guard.post_action() records the spot
     under that lease (Spec 6.5). Winners get the lowest spots no action holds;
     a spot under another agent's lease is skipped. A winner whose spot claim is
@@ -1263,6 +1264,14 @@ def resolve_parking_priority(
     ]
     for intent in intents:
         env.guard.release(intent.id, env.principal_token)
+    # One spot per agent per day: each agent's best request counts, and an
+    # agent that already holds a spot that day gets none.
+    holders = {a.agent_id for a in day_actions}
+    best: dict[uuid.UUID, Intent] = {}
+    for intent in sorted(intents, key=lambda i: (-i.confidence, i.created_at)):
+        if intent.agent_id not in holders:
+            best.setdefault(intent.agent_id, intent)
+    intents = list(best.values())
     if not intents or remaining <= 0:
         # No intents or no spots — mark losers' items as failed
         for intent in intents:

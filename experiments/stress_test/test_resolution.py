@@ -190,3 +190,37 @@ def test_a_boardroom_grant_that_fails_records_nothing() -> None:
     assert len(waiting) == 2
     assert all(env.guard.claim_state(m.id) is None for m in waiting)
     assert not high.manifest[0].completed
+
+
+def test_two_requests_of_one_agent_get_one_spot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scenario, "PARKING_SPOTS", 2)
+    env = run.OfficeEnv()
+    twice, other = (profile(n, "parking", {"day": "mon"}) for n in ("twice", "other"))
+    env.request_parking(twice.agent, "mon", 0.9)
+    env.request_parking(twice.agent, "mon", 0.8)  # a second request, still waiting
+    env.request_parking(other.agent, "mon", 0.5)
+    run.resolve_parking_priority(env, [twice, other], "mon")
+    holders = [a.agent_id for a in actions(env, "parking")]
+    assert sorted(map(str, holders)) == sorted(
+        map(str, [twice.agent.id, other.agent.id])
+    )
+    assert twice.manifest[0].completed and other.manifest[0].completed
+    assert_every_intent_closed(env)
+
+
+def test_an_agent_holding_a_spot_gets_no_second_one() -> None:
+    env = run.OfficeEnv()
+    p = profile("p", "parking", {"day": "mon"})
+    env.request_parking(p.agent, "mon", 0.9)
+    # p gets a spot another way before the resolution runs.
+    claim = env.guard.pre_action(p.agent, "parking", "mon/spot-7", "book", 0.5)
+    assert claim.intent_id is not None
+    env.guard.grant(claim.intent_id, env.principal_token)
+    env.guard.post_action(
+        p.agent, "parking", "mon/spot-7", "booked", "ok", intent_id=claim.intent_id
+    )
+    run.resolve_parking_priority(env, [p], "mon")
+    assert [a.resource for a in actions(env, "parking")] == ["mon/spot-7"]
+    assert_every_intent_closed(env)
