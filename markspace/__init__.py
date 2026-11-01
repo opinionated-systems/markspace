@@ -67,11 +67,14 @@ from markspace.envelope import (
     WelfordDetector,
 )
 from markspace.guard import (
+    ClaimState,
     ContentPolicy,
     ContentPolicyError,
+    FencingToken,
     Guard,
     GuardDecision,
     GuardVerdict,
+    NotGrantedError,
     PolicyResult,
     PolicyVerdict,
 )
@@ -143,11 +146,14 @@ __all__ = [
     # Scheduler
     "Scheduler",
     # Guard
+    "ClaimState",
     "ContentPolicy",
     "ContentPolicyError",
+    "FencingToken",
     "Guard",
     "GuardDecision",
     "GuardVerdict",
+    "NotGrantedError",
     "PolicyResult",
     "PolicyVerdict",
     # Defense-in-depth

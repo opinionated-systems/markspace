@@ -49,7 +49,7 @@ build-backend = "hatchling.build"
 packages = ["markspace"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "experiments/stress_test"]
 
 [tool.pyright]
 include = ["markspace", "tests"]

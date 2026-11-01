@@ -437,9 +437,13 @@ class OfficeEnv:
         self._pending_canary_id: str | None = None
         self._canary_acks: set[str] = set()  # agent names that acknowledged
 
+        # The harness is the principal: it grants the boardroom and parking
+        # winners and releases the losers (Spec 6.5, G5).
+        self.principal_token = uuid.uuid4()
         self.guard = Guard(
             self.space,
             envelope=self.envelope,
+            principal_token=self.principal_token,
         )
 
         # Week tracking for multi-week resource scoping.
@@ -1134,9 +1138,11 @@ def resolve_boardroom_conflicts(
     """Phase 3 (Spec 6.2.1): Batch resolution for boardroom conflicts.
 
     With deferred=True and YIELD_ALL, guard.pre_action() writes intents and
-    returns BLOCKED without writing need marks. Resolution reads intents
-    directly, picks highest-confidence winner per resource, and uses
-    guard.post_action() to write action marks.
+    returns BLOCKED without writing need marks. Resolution reads the intents
+    still pending, picks the highest-confidence winner per resource, grants
+    it as the principal, records its action under the lease with
+    guard.post_action(), and releases the other intents (Spec 6.5). If the
+    grant fails, every intent stays pending.
     """
     log: list[str] = []
 
@@ -1149,7 +1155,11 @@ def resolve_boardroom_conflicts(
     # Group intents by resource
     resource_intents: dict[str, list[Intent]] = {}
     for mark in all_intents:
-        if isinstance(mark, Intent) and mark.confidence > 0:
+        if (
+            isinstance(mark, Intent)
+            and mark.confidence > 0
+            and env.guard.claim_state(mark.id) is None  # still pending
+        ):
             resource_intents.setdefault(mark.resource, []).append(mark)
 
     # For each contested resource, pick highest confidence winner
@@ -1166,7 +1176,14 @@ def resolve_boardroom_conflicts(
                 break
 
         if winner_agent:
-            # Write action mark via guard.post_action()
+            granted = env.guard.grant(winner.id, env.principal_token)
+            if granted.verdict != GuardVerdict.ALLOW:
+                log.append(f"Boardroom {resource}: not granted ({granted.reason})")
+                continue
+            for other in intents:
+                if other.id != winner.id:
+                    env.guard.release(other.id, env.principal_token)
+            # The action is recorded under the winner's lease.
             env.guard.post_action(
                 agent=winner_agent,
                 scope="rooms/exec",
@@ -1215,7 +1232,12 @@ def resolve_parking_priority(
 
     This extends the spec's single-winner deferred resolution to multi-winner
     pool allocation: N spots available means top-N intents by confidence win.
-    Uses guard.post_action() to write action marks for each winner.
+    Every pending pool intent is released first, so a later resolution does
+    not judge it again. Each winner claims a spot with its own intent, which
+    the harness grants as the principal; guard.post_action() records the spot
+    under that lease (Spec 6.5). Winners get the lowest spots no action holds;
+    a spot under another agent's lease is skipped. A winner whose spot claim is
+    refused (a barrier) fails its item, and the spot stays free.
     """
     log: list[str] = []
 
@@ -1232,8 +1254,15 @@ def resolve_parking_priority(
     taken = len(day_actions)
     remaining = scenario.PARKING_SPOTS - taken
 
-    # Collect all intents from Phase 1 (written by guard.pre_action)
-    intents = env.space.get_intents("parking", f"parking/{wday}")
+    # Collect the intents of Phase 1 that are still pending, and release them:
+    # each winner claims its spot with an intent of its own.
+    intents = [
+        i
+        for i in env.space.get_intents("parking", f"parking/{wday}")
+        if env.guard.claim_state(i.id) is None
+    ]
+    for intent in intents:
+        env.guard.release(intent.id, env.principal_token)
     if not intents or remaining <= 0:
         # No intents or no spots — mark losers' items as failed
         for intent in intents:
@@ -1254,19 +1283,80 @@ def resolve_parking_priority(
     # Rank by HIGHEST_CONFIDENCE (same ordering as resolve_conflict)
     intents.sort(key=lambda i: (-i.confidence, i.created_at))
 
-    winners = intents[:remaining]
-    losers = intents[remaining:]
+    def fail_item(agent_id: object) -> None:
+        for p in profiles:
+            if p.agent.id == agent_id:
+                for item in p.manifest:
+                    if (
+                        item.scope == "parking"
+                        and not item.completed
+                        and not item.failed
+                        and item.target.get("day") == day
+                    ):
+                        item.failed = True
+                        break
+                break
 
-    for i, intent in enumerate(winners):
-        spot_num = taken + i + 1
-        spot_resource = f"{wday}/spot-{spot_num}"
-
-        # Find the agent
-        winner_agent = None
+    allocated = 0
+    held = {a.resource for a in day_actions}
+    free = [
+        n
+        for n in range(1, scenario.PARKING_SPOTS + 1)
+        if f"{wday}/spot-{n}" not in held
+    ]
+    k = 0  # the next free spot to offer
+    losers: list[Intent] = []
+    for intent in intents:
+        if allocated >= remaining:
+            losers.append(intent)
+            continue
+        winner_agent = next(
+            (p.agent for p in profiles if p.agent.id == intent.agent_id), None
+        )
+        if winner_agent is None:
+            continue
+        booked: int | None = None
+        refusal = ""
+        while booked is None and k < len(free):
+            spot = free[k]
+            spot_resource = f"{wday}/spot-{spot}"
+            # The winner claims its spot; the principal grants the claim.
+            claim = env.guard.pre_action(
+                winner_agent, "parking", spot_resource, "book", intent.confidence
+            )
+            if claim.verdict != GuardVerdict.BLOCKED or claim.intent_id is None:
+                refusal = claim.reason  # refused, a barrier for example
+                break
+            granted = env.guard.grant(claim.intent_id, env.principal_token)
+            if granted.verdict != GuardVerdict.ALLOW:  # another agent's lease
+                env.guard.release(claim.intent_id, env.principal_token)
+                k += 1
+                continue
+            env.guard.post_action(
+                winner_agent,
+                "parking",
+                spot_resource,
+                "booked",
+                {
+                    "booked_by": winner_agent.name,
+                    "day": day,
+                    "spot": f"spot-{spot}",
+                    "confidence": intent.confidence,
+                },
+                intent_id=claim.intent_id,
+            )
+            booked = spot
+            k += 1
+        if booked is None:
+            fail_item(intent.agent_id)
+            log.append(
+                f"Parking {day}: {winner_agent.name} got no spot ({refusal or 'none free'})"
+            )
+            continue
+        allocated += 1
+        # Credit the manifest once the action is recorded.
         for p in profiles:
             if p.agent.id == intent.agent_id:
-                winner_agent = p.agent
-                # Credit manifest
                 for item in p.manifest:
                     if (
                         item.scope == "parking"
@@ -1277,27 +1367,11 @@ def resolve_parking_priority(
                         item.completed = True
                         break
                 break
-
-        if winner_agent:
-            # Use guard.post_action to write the action mark (formalized Phase 3)
-            env.guard.post_action(
-                winner_agent,
-                "parking",
-                spot_resource,
-                "booked",
-                {
-                    "booked_by": winner_agent.name,
-                    "day": day,
-                    "spot": f"spot-{spot_num}",
-                    "confidence": intent.confidence,
-                },
-                intent_id=intent.id,
-            )
-            conf_label = "HEAD" if intent.confidence > 0.8 else "regular"
-            log.append(
-                f"Parking {day}/spot-{spot_num}: "
-                f"{winner_agent.name} (conf={intent.confidence}, {conf_label})"
-            )
+        conf_label = "HEAD" if intent.confidence > 0.8 else "regular"
+        log.append(
+            f"Parking {day}/spot-{booked}: "
+            f"{winner_agent.name} (conf={intent.confidence}, {conf_label})"
+        )
 
     # Mark losers as failed
     for intent in losers:

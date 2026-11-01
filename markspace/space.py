@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from functools import cmp_to_key
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,30 @@ class IntentJudgement:
     wins: bool
     yield_all: bool  # a competing pair is under YIELD_ALL: a principal decides
     winner: Intent | None  # when it loses: the strongest intent that beats it
+
+
+class ClaimTable(Protocol):
+    """
+    The guard that holds a space's grants (Section 6.5). The space calls it
+    under its own lock; the guard takes its lease-table lock and calls back
+    only space methods that re-enter the lock its thread holds.
+    """
+
+    def on_supersede(self, mark: AnyMark) -> None:
+        """*mark* was just stored and supersedes mark.supersedes."""
+
+    def on_gc(self) -> None:
+        """gc removed marks; the table may drop entries whose mark is gone."""
+
+    def leases_and_closed(
+        self, scope: str, resource: str
+    ) -> tuple[list[uuid.UUID], set[uuid.UUID]]:
+        """
+        On *resource* in the competing set of *scope*: the intent ids of live
+        leases (lowest token first), and the ids of intents that are granted or
+        closed, which are no longer pending.
+        """
+        ...
 
 
 class ScopeError(Exception):
@@ -144,6 +168,11 @@ class MarkSpace:
         # Subscription state for watch/subscribe (Section 14)
         self._subscriptions: dict[uuid.UUID, list[WatchPattern]] = {}
         self._pending_notifications: dict[uuid.UUID, list[uuid.UUID]] = {}
+        # The guard that holds this space's grants (Section 6.5); at most one.
+        self._claims: ClaimTable | None = None
+        # Per thread: how deep in locked() it is, and the write hooks to fire
+        # when the outermost locked() block ends (Section 8.6).
+        self._local = threading.local()
         if scopes:
             for scope in scopes:
                 self._scopes[scope.name] = scope
@@ -152,6 +181,17 @@ class MarkSpace:
         """Register a scope definition."""
         with self._lock:
             self._scopes[scope.name] = scope
+
+    def attach_claim_table(self, table: ClaimTable) -> None:
+        """
+        Attach the guard that holds this space's grants (Section 6.5). A
+        space has at most one: a second guard would grant the same resource
+        again.
+        """
+        with self._lock:
+            if self._claims is not None:
+                raise ValueError("This MarkSpace already has a guard")
+            self._claims = table
 
     def add_write_hook(self, hook: Callable[[uuid.UUID, AnyMark], None]) -> uuid.UUID:
         """Register a post-write hook. Returns a handle for removal."""
@@ -291,6 +331,29 @@ class MarkSpace:
                         f"Wait for GC to reclaim expired marks."
                     )
 
+            # Only a mark's author may supersede it (Section 10): another
+            # agent could otherwise erase an action, or the warning that
+            # hides one, from an unrelated scope.
+            if mark.supersedes is not None:
+                target = self._marks.get(mark.supersedes)
+                if target is not None and target.agent_id != agent.id:
+                    raise ScopeError(
+                        f"Agent '{agent.name}' may not supersede mark "
+                        f"{mark.supersedes} of another agent"
+                    )
+            # A warning that hides an action needs warning rights in the
+            # action's own scope (Section 9.5): otherwise an agent could hide
+            # a booking from any scope it may warn in, and take the resource.
+            if isinstance(mark, Warning) and mark.invalidates is not None:
+                target = self._marks.get(mark.invalidates)
+                if isinstance(target, Action) and not agent.can_write(
+                    target.scope, MarkType.WARNING
+                ):
+                    raise ScopeError(
+                        f"Agent '{agent.name}' may not write warnings in scope "
+                        f"'{target.scope}', where action {target.id} lies"
+                    )
+
             # Create an immutable copy with assigned metadata
             new_id = uuid.uuid4()
             stored = mark.model_copy(
@@ -330,6 +393,8 @@ class MarkSpace:
                     new_id
                 )
             self._notify_subscribers(stored)
+            if stored.supersedes is not None and self._claims is not None:
+                self._claims.on_supersede(stored)
             self._write_seq += 1
             stored_mark = stored
             # Snapshot hooks to fire outside lock
@@ -337,14 +402,24 @@ class MarkSpace:
 
         # Fire post-write hooks outside the lock (P33: hook failure must not
         # affect stored mark). Marks are immutable, safe to pass references.
+        # Inside locked(), the hooks wait until the outermost block ends.
         if stored_mark is not None:
-            for hook in hooks_to_fire:
-                try:
-                    hook(stored_mark.agent_id, stored_mark)
-                except Exception:
-                    logger.debug("Post-write hook failed", exc_info=True)
+            if getattr(self._local, "depth", 0) > 0:
+                self._local.deferred.append((hooks_to_fire, stored_mark))
+            else:
+                self._fire_hooks(hooks_to_fire, stored_mark)
 
         return new_id
+
+    @staticmethod
+    def _fire_hooks(
+        hooks: list[Callable[[uuid.UUID, AnyMark], None]], mark: AnyMark
+    ) -> None:
+        for hook in hooks:
+            try:
+                hook(mark.agent_id, mark)
+            except Exception:
+                logger.debug("Post-write hook failed", exc_info=True)
 
     def read(
         self,
@@ -610,13 +685,37 @@ class MarkSpace:
         """
         Hold the space: no write, gc or read by another thread runs until the
         block ends. A guard decision that reads several sets holds it, so that
-        every read sees one state (Section 6.2.3). Lock order: a guard's
-        resource lock, then a barrier lock, then this one. Take it only inside
-        a guard's resource lock or with no guard lock held, and never call a
-        guard method or take a barrier lock while holding it.
+        every read sees one state (Section 6.2.3). The write hooks of writes
+        made inside the block wait as in hooks_deferred(). Lock order: a
+        guard's resource lock, then a barrier lock, then this one, then the
+        guard's lease-table lock (Section 6.5). Take it only inside a guard's
+        resource lock or with no guard lock held. While holding it, the space
+        calls only its guard's ClaimTable methods; never call another guard
+        method or take a barrier lock while holding it.
         """
-        with self._lock:
+        with self.hooks_deferred(), self._lock:
             yield
+
+    @contextmanager
+    def hooks_deferred(self) -> Iterator[None]:
+        """
+        The write hooks of writes this thread makes inside the block fire when
+        the outermost such block ends, after every lock taken inside it is
+        released (Section 8.6), also when the block raises: a mark stored is
+        stored. A guard enters it around its resource lock.
+        """
+        depth = getattr(self._local, "depth", 0)
+        if depth == 0:
+            self._local.deferred = []
+        self._local.depth = depth + 1
+        try:
+            yield
+        finally:
+            self._local.depth = depth
+            if depth == 0:
+                deferred, self._local.deferred = self._local.deferred, []
+                for hooks, mark in deferred:
+                    self._fire_hooks(hooks, mark)
 
     def visible_form(self, mark: AnyMark, reader: Agent | None) -> AnyMark | None:
         """
@@ -826,20 +925,33 @@ class MarkSpace:
     def check_conflict(self, scope: str, resource: str) -> uuid.UUID | None:
         """
         Check for intent conflicts on a resource and resolve them.
-        Returns the id of the intent that wins its own competing set, or None
-        (YIELD_ALL, or no intent wins). Sibling scopes do not compete, so more
-        than one intent can win; then the earliest is returned.
+        Returns the intent of a live lease in the competing set (the lowest
+        token; Section 6.5), else the id of the pending intent that wins its
+        own competing set, or None (YIELD_ALL, or no intent wins). Sibling
+        scopes do not compete, so more than one intent can win; then the
+        earliest is returned. With no guard attached, every intent is pending.
         """
         with self._lock:
             now = self.now()
-            intents = self._get_intents_unlocked(scope, resource, now)
+            closed: set[uuid.UUID] = set()
+            if self._claims is not None:
+                leases, closed = self._claims.leases_and_closed(scope, resource)
+                if leases:
+                    return leases[0]
+            intents = [
+                i
+                for i in self._get_intents_unlocked(scope, resource, now)
+                if i.id not in closed
+            ]
             if len(intents) <= 1:
                 return intents[0].id if intents else None
             # Each intent's own competing set lies in the scope tree.
             tree: dict[uuid.UUID, Intent] = {}
             for s in {i.scope for i in intents}:
                 tree.update(
-                    (o.id, o) for o in self._get_intents_unlocked(s, resource, now)
+                    (o.id, o)
+                    for o in self._get_intents_unlocked(s, resource, now)
+                    if o.id not in closed
                 )
             judged = self.judge_all(list(tree.values()))
             winners = [i for i in intents if judged[i.id].wins]
@@ -978,6 +1090,8 @@ class MarkSpace:
                 self._last_claim_at = {
                     k: t for k, t in self._last_claim_at.items() if k in claimed
                 }
+                if self._claims is not None:
+                    self._claims.on_gc()
 
             return len(to_remove)
 

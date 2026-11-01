@@ -16,7 +16,7 @@ If you're coordinating multiple LLM agents, you've likely hit some of these:
 
 Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy) - a mechanism by which biological systems coordinate at scale. Agents leave traces in a shared environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution. These constraints live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes. Over time, the environment becomes a model of the world the agents operate in.
 
-The protocol defines five mark types, three visibility levels, three conflict policies, trust-weighted decay, and [70 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
+The protocol defines five mark types, three visibility levels, three conflict policies, trust-weighted decay, and [76 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
 ## Motivation
 
@@ -59,7 +59,7 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 **Decay:** Coordination is a dynamical process - the goal is stability against continuous change, not a fixed solution reached once. Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
 
-Full protocol design in [`framework.md`](docs/framework.md). Formal specification (70 properties, conformance checklist) in [`spec.md`](docs/spec.md).
+Full protocol design in [`framework.md`](docs/framework.md). Formal specification (76 properties, conformance checklist) in [`spec.md`](docs/spec.md).
 
 ## Composition and isolation
 
@@ -95,12 +95,12 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (389):**
+**Unit tests (468):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
 - **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), trust source enforcement, tool failure handling
-- **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, post-action supersession, equal-time intents in write order
+- **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, leases and fencing tokens, equal-time intents in write order
 - **Composition** - agent manifest properties, scheduling
 - **Robustness** - garbage collection, thread safety under concurrent access
 - **Property-based ([Hypothesis](https://hypothesis.readthedocs.io/))** - randomized inputs, stateful scheduler fuzzing (register/unregister/update/tick sequences)
@@ -147,7 +147,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 389 tests, no API key needed
+pytest            # 468 tests, no API key needed
 ```
 
 ### Use the protocol
@@ -234,7 +234,7 @@ See [`experiments/guide.md`](experiments/guide.md) for CLI reference and cost es
 ## Documentation
 
 - [`docs/framework.md`](docs/framework.md) - protocol design, biological foundations, composition, architecture, failure analysis
-- [`docs/spec.md`](docs/spec.md) - formal specification (70 properties, conformance checklist)
+- [`docs/spec.md`](docs/spec.md) - formal specification (76 properties, conformance checklist)
 - [`experiments/guide.md`](experiments/guide.md) - running experiments (setup, CLI reference, analysis, costs)
 - [`experiments/validation/`](experiments/validation/analysis.md) - safety, visibility, concurrency, scaling
 - [`experiments/stress_test/`](experiments/stress_test/) - 105-agent stress test ([design](experiments/stress_test/design.md), [analysis](experiments/stress_test/analysis.md))
