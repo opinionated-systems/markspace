@@ -12,9 +12,34 @@ Spec Section 9.8.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from markspace.core import scope_contains
+
+
+def revocation_allows(
+    revoked: Iterable[tuple[str, str]], scope: str, mark_type_value: str
+) -> bool:
+    """
+    Whether no revocation blocks (scope, mark_type). A revocation for "*"
+    blocks the mark type in every scope; one for scope "hr" also blocks
+    "hr/payroll", consistent with how Agent.can_write() handles scope
+    hierarchy.
+    """
+    return not any(
+        revoked_type == mark_type_value
+        and (revoked_scope == "*" or scope_contains(revoked_scope, scope))
+        for revoked_scope, revoked_type in revoked
+    )
+
+
+def need_required(require_need_scopes: Iterable[str], scope: str) -> bool:
+    """
+    Whether a need requirement covers scope: "*" covers every scope, and
+    require_need("hr") also covers "hr/payroll".
+    """
+    return any(s == "*" or scope_contains(s, scope) for s in require_need_scopes)
 
 
 @dataclass(frozen=True)
@@ -32,12 +57,7 @@ class BarrierSnapshot:
 
     def is_allowed_checked(self, scope: str, mark_type_value: str) -> bool:
         """Check with wildcard and hierarchical scope support."""
-        if ("*", mark_type_value) in self.revoked:
-            return False
-        for revoked_scope, revoked_type in self.revoked:
-            if revoked_type == mark_type_value and scope_contains(revoked_scope, scope):
-                return False
-        return True
+        return revocation_allows(self.revoked, scope, mark_type_value)
 
 
 @dataclass
@@ -81,12 +101,7 @@ class AgentBarrier:
 
         Hierarchical: require_need("hr") also requires needs for "hr/payroll".
         """
-        if "*" in self._require_need_scopes:
-            return True
-        for required_scope in self._require_need_scopes:
-            if scope_contains(required_scope, scope):
-                return True
-        return False
+        return need_required(self._require_need_scopes, scope)
 
     def increment_flags(self) -> int:
         """Increment and return the flag count for escalation."""
@@ -121,12 +136,7 @@ class AgentBarrier:
         A revocation for scope "hr" also blocks "hr/payroll", consistent
         with how Agent.can_write() handles scope hierarchy.
         """
-        if ("*", mark_type_value) in self._revoked:
-            return False
-        for revoked_scope, revoked_type in self._revoked:
-            if revoked_type == mark_type_value and scope_contains(revoked_scope, scope):
-                return False
-        return True
+        return revocation_allows(self._revoked, scope, mark_type_value)
 
     def snapshot(self) -> BarrierSnapshot:
         """Return a frozen snapshot for external inspection."""
