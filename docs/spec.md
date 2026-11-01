@@ -635,7 +635,7 @@ Preconditions:
   - mark MUST satisfy type-specific field requirements ([Section 2](#2-mark-types))
 
 Postconditions:
-  - mark is stored with a new unique id and created_at = now
+  - mark is stored with a new unique id and created_at = now; an intent or action is moved past the latest intent or action on the same resource in the same scope if needed (P32)
   - mark is immediately visible to subsequent reads (subject to scope visibility rules, Section 7.4)
 ```
 
@@ -702,9 +702,9 @@ The aggregator is deliberately simple. It groups, scores, and sorts. It has no i
 
 **P31: Mark ID Uniqueness**: Every call to write() MUST assign a unique id. No two marks in the same mark space MUST share an id. Broken uniqueness would corrupt supersession chains and warning invalidation references.
 
-**P32: Total Write Ordering**: Marks MUST be totally ordered by (created_at, id). The mark space MUST assign monotonically non-decreasing created_at timestamps. When two marks share the same created_at (concurrent writes within clock resolution), id serves as the tiebreaker. This ordering is used by conflict resolution (FIRST_WRITER) and write-order delivery (P52).
+**P32: Total Write Ordering**: Marks MUST be totally ordered by (created_at, id). created_at is the mark space's clock at write. Among intents and actions on the same resource in one scope, the mark space MUST assign strictly increasing created_at: when its clock has not passed the latest such mark's created_at (writes within clock resolution, a fixed or stepped clock, or a clock that goes back), the next one gets the next representable time after it. Conflict resolution (FIRST_WRITER, and ties under HIGHEST_CONFIDENCE) therefore follows write order: an earlier intent wins every tie it breaks by created_at. Other marks get the clock's time (a resolved need keeps its need's), and id breaks their ties. Conflict resolution breaks ties only within one scope (a pair in two scopes is decided by which scope contains the other), so this order serves every tie-break, and no other scope's writes show in a claim's created_at. Write-order delivery (P52) follows the order of `write()` calls, not created_at.
 
-Ref: [`markspace/space.py::MarkSpace`](../markspace/space.py), [`tests/test_properties.py::TestMarkSpaceProperties`](../tests/test_properties.py)
+Ref: [`markspace/space.py::MarkSpace._created_at_for`](../markspace/space.py), [`tests/test_properties.py::TestP32TotalWriteOrdering`](../tests/test_properties.py), [`tests/test_guard.py::TestEqualTimeIntents`](../tests/test_guard.py)
 
 ### 8.6 Write Hooks
 

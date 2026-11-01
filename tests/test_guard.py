@@ -1639,6 +1639,63 @@ class TestConflictAcrossScopeHierarchy:
         )
 
 
+class TestEqualTimeIntents:
+    """Intents written at one clock reading keep their write order (P32)."""
+
+    @pytest.mark.parametrize(
+        "policy", [ConflictPolicy.FIRST_WRITER, ConflictPolicy.HIGHEST_CONFIDENCE]
+    )
+    def test_a_later_equal_intent_never_overtakes_an_allowed_one(
+        self, policy: ConflictPolicy
+    ) -> None:
+        # The earlier intent's tool still runs: execute() releases the lock
+        # around the tool. A random tie-break would let the later one win
+        # about half the time; 50 runs with new ids would show it.
+        for _ in range(50):
+            s = MarkSpace(scopes=[Scope(name="desk", conflict_policy=policy)])
+            s.set_clock(1000000.0)
+            guard = Guard(s)
+            a1 = Agent(name="a1", scopes={"desk": ["intent", "action"]})
+            a2 = Agent(name="a2", scopes={"desk": ["intent", "action"]})
+            assert guard.pre_action(a1, "desk", "d1", "book", 0.9).verdict == (
+                GuardVerdict.ALLOW
+            )
+            assert guard.pre_action(a2, "desk", "d1", "book", 0.9).verdict == (
+                GuardVerdict.CONFLICT
+            )
+
+
+class TestWriteOrderAfterGc:
+    def test_gc_keeps_the_order_of_a_resource_with_a_live_claim(self) -> None:
+        s = MarkSpace(
+            scopes=[Scope(name="desk", conflict_policy=ConflictPolicy.FIRST_WRITER)]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a0, a1, a2 = (
+            Agent(name=n, scopes={"desk": ["intent", "action"]})
+            for n in ("a0", "a1", "a2")
+        )
+        d0 = guard.pre_action(a0, "desk", "r", "book", 0.5)
+        s.write(
+            a0,
+            Action(
+                scope="desk",
+                resource="r",
+                action="booked",
+                result=None,
+                failed=True,
+                supersedes=d0.intent_id,
+            ),
+        )
+        d1 = guard.pre_action(a1, "desk", "r", "book", 0.5)
+        assert d1.verdict == GuardVerdict.ALLOW  # a1's tool runs
+        assert s.gc() >= 1  # a0's superseded intent goes; a1's intent stays
+        assert guard.pre_action(a2, "desk", "r", "book", 0.5).verdict == (
+            GuardVerdict.CONFLICT
+        )
+
+
 class TestPerIntentCompetingSets:
     """Section 6.1: each intent is judged against its own competing set. An
     intent in an outer scope beats one in an inner scope; inside one scope the

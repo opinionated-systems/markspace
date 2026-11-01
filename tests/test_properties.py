@@ -10,6 +10,7 @@ Run: python -m pytest tests/test_properties.py -v
 
 from __future__ import annotations
 
+import math
 import uuid
 
 import pytest
@@ -1493,7 +1494,7 @@ class TestP32TotalWriteOrdering:
     def test_created_at_monotonically_nondecreasing(
         self, space: MarkSpace, scope: Scope, agent: Agent
     ) -> None:
-        """created_at must be monotonically non-decreasing across writes."""
+        """With a clock that never goes back, created_at never decreases."""
         ids = []
         for i in range(20):
             mid = space.write(
@@ -1513,6 +1514,123 @@ class TestP32TotalWriteOrdering:
             assert (
                 timestamps[i] >= timestamps[i - 1]
             ), f"created_at decreased: {timestamps[i]} < {timestamps[i - 1]}"
+
+    def test_claims_on_one_resource_keep_write_order(
+        self, space: MarkSpace, scope: Scope, agent: Agent
+    ) -> None:
+        """Intents on one resource in one scope, at one clock reading or after the clock goes back."""
+        intent = Intent(scope=scope.name, resource="r", action="book", confidence=0.5)
+        ids = [space.write(agent, intent) for _ in range(3)]
+        space.set_clock(999_000.0)  # the clock goes back
+        ids.append(space.write(agent, intent))
+        marks = [space.get_mark(mid) for mid in ids]
+        timestamps = [m.created_at for m in marks if m is not None]
+        assert len(timestamps) == 4
+        assert timestamps[0] == 1_000_000.0
+        assert all(b > a for a, b in zip(timestamps, timestamps[1:]))
+
+    def test_hidden_writes_leave_no_gap_elsewhere(self) -> None:
+        """Only the order on one resource in one scope is kept (P32)."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="pub"),
+                Scope(name="sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"pub": ["intent", "observation"]})
+        s = Agent(name="s", scopes={"sec": ["intent", "observation"]})
+        first = space.write(
+            w, Intent(scope="pub", resource="r", action="a", confidence=0.5)
+        )
+        for res in ("r", "q"):  # hidden claims, also on the same resource name
+            space.write(
+                s, Intent(scope="sec", resource=res, action="a", confidence=0.5)
+            )
+        space.write(
+            s, Observation(scope="sec", topic="t", content={}, source=Source.FLEET)
+        )
+        other = space.write(
+            w, Intent(scope="pub", resource="q", action="a", confidence=0.5)
+        )
+        note = space.write(
+            w, Observation(scope="pub", topic="t", content={}, source=Source.FLEET)
+        )
+        second = space.write(
+            w, Intent(scope="pub", resource="r", action="a", confidence=0.5)
+        )
+        times = [space.get_mark(m) for m in (first, other, note, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            1_000_000.0,
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),  # one step: only first came before
+        ]
+
+    def test_sibling_claims_leave_no_gap(self) -> None:
+        """Sibling scopes never compete: their claims stay out of each other's times."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="corp/pub"),
+                Scope(name="corp/sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"corp/pub": ["intent"]})
+        s = Agent(name="s", scopes={"corp/sec": ["intent"]})
+        first = space.write(
+            w, Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        )
+        for _ in range(3):
+            space.write(
+                s, Intent(scope="corp/sec", resource="r", action="a", confidence=0.5)
+            )
+        second = space.write(
+            w, Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        )
+        times = [space.get_mark(m) for m in (first, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),
+        ]
+
+    def test_claims_in_other_scopes_leave_no_gap(self) -> None:
+        """A claim in a shared ancestor carries no count from a hidden sibling."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="corp"),
+                Scope(name="corp/pub"),
+                Scope(name="corp/sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"corp/pub": ["intent"]})
+        s = Agent(name="s", scopes={"corp/sec": ["intent"]})
+        p = Agent(name="p", scopes={"corp": ["intent"]})
+        claim = Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        first = space.write(w, claim)
+        for _ in range(3):
+            space.write(
+                s, Intent(scope="corp/sec", resource="r", action="a", confidence=0.5)
+            )
+        space.write(p, Intent(scope="corp", resource="r", action="a", confidence=0.5))
+        second = space.write(w, claim)
+        times = [space.get_mark(m) for m in (first, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),
+        ]
+
+    def test_gc_drops_the_order_of_a_resource_with_no_claims(
+        self, space: MarkSpace, scope: Scope, agent: Agent
+    ) -> None:
+        space.write(
+            agent, Intent(scope=scope.name, resource="r", action="book", confidence=0.5)
+        )
+        assert space._last_claim_at
+        space.set_clock(1_000_000.0 + scope.decay.intent_ttl + 1)
+        assert space.gc() == 1
+        assert space._last_claim_at == {}
 
 
 # ---------------------------------------------------------------------------

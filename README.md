@@ -95,12 +95,12 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (381):**
+**Unit tests (389):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
 - **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), trust source enforcement, tool failure handling
-- **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, post-action supersession
+- **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, post-action supersession, equal-time intents in write order
 - **Composition** - agent manifest properties, scheduling
 - **Robustness** - garbage collection, thread safety under concurrent access
 - **Property-based ([Hypothesis](https://hypothesis.readthedocs.io/))** - randomized inputs, stateful scheduler fuzzing (register/unregister/update/tick sequences)
@@ -147,7 +147,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 381 tests, no API key needed
+pytest            # 389 tests, no API key needed
 ```
 
 ### Use the protocol

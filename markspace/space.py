@@ -124,6 +124,9 @@ class MarkSpace:
         self._marks: dict[uuid.UUID, AnyMark] = {}
         self._scopes: dict[str, Scope] = {}
         self._clock: float | None = clock  # None = use real time
+        # created_at of the latest intent or action per (scope, resource): the
+        # next one there gets a later time (P32).
+        self._last_claim_at: dict[tuple[str, str], float] = {}
         # Per-agent write quota. None = unlimited.
         self._max_marks_per_agent: int | None = max_marks_per_agent
         # Per-agent live mark count, maintained incrementally on write/gc.
@@ -233,6 +236,25 @@ class MarkSpace:
                     f"cannot write observations with source={mark.source.value}"
                 )
 
+    def _created_at_for(self, mark: AnyMark) -> float:
+        """
+        created_at for a mark about to be stored: now(). An intent or action
+        gets the next representable time after the latest intent or action on
+        the same resource in the same scope when the clock has not passed it,
+        so equal claims in one scope resolve in write order (P32). Conflict
+        resolution breaks ties only within one scope, and no other scope's
+        writes show in this time. Caller MUST hold self._lock.
+        """
+        t = self.now()
+        if not isinstance(mark, (Intent, Action)):
+            return t
+        key = (mark.scope, mark.resource)
+        last = self._last_claim_at.get(key)
+        if last is not None and t <= last:
+            t = math.nextafter(last, math.inf)
+        self._last_claim_at[key] = t
+        return t
+
     def write(self, agent: Agent, mark: AnyMark) -> uuid.UUID:
         """
         Write a mark to the space.
@@ -275,7 +297,7 @@ class MarkSpace:
                 update={
                     "id": new_id,
                     "agent_id": agent.id,
-                    "created_at": self.now(),
+                    "created_at": self._created_at_for(mark),
                 }
             )
 
@@ -945,6 +967,17 @@ class MarkSpace:
                     self._warnings_by_target.pop(mid, None)
                 # Clean up supersession references
                 self._superseded.discard(mid)
+
+            # Keep write order only where an intent or action still lives.
+            if to_remove:
+                claimed = {
+                    (m.scope, m.resource)
+                    for m in self._marks.values()
+                    if isinstance(m, (Intent, Action))
+                }
+                self._last_claim_at = {
+                    k: t for k, t in self._last_claim_at.items() if k in claimed
+                }
 
             return len(to_remove)
 
