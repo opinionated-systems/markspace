@@ -950,21 +950,21 @@ The guard emits structured events on every `write_mark()` and `execute()` call. 
 
 **Metrics** (counters, gauges, histograms):
 
-| Metric | Type | Labels | What it tells you |
-|--------|------|--------|-------------------|
-| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` | Write volume and rejection rate per agent |
-| `markspace.marks.read` | Counter | `agent_id`, `scope` | Read volume per agent per round |
-| `markspace.tokens.input` | Counter | `agent_id` | Input tokens consumed per round |
-| `markspace.tokens.output` | Counter | `agent_id` | Output tokens generated (LLM responses + mark writes) |
-| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` | Conflict frequency and resolution distribution |
-| `markspace.leases.granted` | Counter | `scope`, `resource` | Grants per resource (spec 6.5) |
-| `markspace.leases.expired` | Counter | `scope`, `resource` | Leases that reached their expiry: tools slower than their lease |
-| `markspace.leases.lost` | Counter | `scope`, `resource` | Intents closed as lost: refused or beaten |
-| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | Hot-tier mark count (above strength threshold) |
-| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | Total mark count including decayed |
-| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | Remaining token budget (input/output/total) |
-| `markspace.agent.round.duration` | Histogram | `agent_id` | Wall-clock time per agent round |
-| `markspace.needs.pending` | Gauge | `scope` | Unresolved need marks awaiting principal review |
+| Metric | Type | Labels | Emitted by | What it tells you |
+|--------|------|--------|------------|-------------------|
+| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` | guard | Write volume and rejection rate per agent |
+| `markspace.marks.read` | Counter | `agent_id`, `scope` | deployment | Read volume per agent per round |
+| `markspace.tokens.input` | Counter | `agent_id` | guard | Input tokens consumed per round |
+| `markspace.tokens.output` | Counter | `agent_id` | guard | Output tokens generated (LLM responses + mark writes) |
+| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` | guard | Conflict frequency and resolution distribution |
+| `markspace.leases.granted` | Counter | `scope`, `resource` | guard | Grants per resource (spec 6.5) |
+| `markspace.leases.expired` | Counter | `scope`, `resource` | guard | Leases that reached their expiry: tools slower than their lease |
+| `markspace.leases.lost` | Counter | `scope`, `resource` | guard | Intents closed as lost: refused or beaten |
+| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | deployment | Hot-tier mark count (above strength threshold) |
+| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | deployment | Total mark count including decayed |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | deployment | Remaining token budget (input/output/total) |
+| `markspace.agent.round.duration` | Histogram | `agent_id` | deployment | Wall-clock time per agent round |
+| `markspace.needs.pending` | Gauge | `scope` | deployment | Unresolved need marks awaiting principal review |
 
 **Structured logs** (one per guard decision):
 
@@ -982,7 +982,7 @@ The guard emits structured events on every `write_mark()` and `execute()` call. 
 }
 ```
 
-**Trace context.** Each agent round MAY carry an OpenTelemetry span context. The guard propagates this context to downstream tool calls, so a single trace connects: agent activation - mark space read - LLM call - tool execution - mark write - guard decision.
+**Trace context.** Each agent round MAY carry an OpenTelemetry span context. The guard MAY propagate this context to downstream tool calls, so a single trace connects: agent activation - mark space read - LLM call - tool execution - mark write - guard decision. The reference guard does not propagate it.
 
 Telemetry observes the mark space boundary, not agent internals. Reasoning traces, prompt compliance, and hallucination rates require agent-level instrumentation (e.g., LLM provider callbacks) that sits alongside the protocol.
 

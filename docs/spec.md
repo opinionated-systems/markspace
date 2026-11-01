@@ -1295,21 +1295,21 @@ Telemetry goes to a configurable sink. Telemetry does not go into the mark space
 
 **Metrics:**
 
-| Metric | Type | Labels |
-|--------|------|--------|
-| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` |
-| `markspace.marks.read` | Counter | `agent_id`, `scope` |
-| `markspace.tokens.input` | Counter | `agent_id` |
-| `markspace.tokens.output` | Counter | `agent_id` |
-| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` |
-| `markspace.leases.granted` | Counter | `scope`, `resource` |
-| `markspace.leases.expired` | Counter | `scope`, `resource` |
-| `markspace.leases.lost` | Counter | `scope`, `resource` |
-| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` |
-| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` |
-| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` |
-| `markspace.agent.round.duration` | Histogram | `agent_id` |
-| `markspace.needs.pending` | Gauge | `scope` |
+| Metric | Type | Labels | Emitted by |
+|--------|------|--------|------------|
+| `markspace.marks.written` | Counter | `agent_id`, `scope`, `mark_type`, `verdict` | guard |
+| `markspace.marks.read` | Counter | `agent_id`, `scope` | deployment |
+| `markspace.tokens.input` | Counter | `agent_id` | guard |
+| `markspace.tokens.output` | Counter | `agent_id` | guard |
+| `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` | guard |
+| `markspace.leases.granted` | Counter | `scope`, `resource` | guard |
+| `markspace.leases.expired` | Counter | `scope`, `resource` | guard |
+| `markspace.leases.lost` | Counter | `scope`, `resource` | guard |
+| `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | deployment |
+| `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | deployment |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | deployment |
+| `markspace.agent.round.duration` | Histogram | `agent_id` | deployment |
+| `markspace.needs.pending` | Gauge | `scope` | deployment |
 
 **Sink implementations:**
 - `NullSink`: no-op, the default.
