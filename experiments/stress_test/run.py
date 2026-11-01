@@ -64,6 +64,7 @@ from markspace.envelope import (
 from markspace.llm import LLMClient, LLMConfig
 from markspace.models import EXTERNAL_MODELS, resolve_model_id
 from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeResult, ProbeVerdict
+from pacing import AdaptivePacer
 import scenario
 from scenario import (
     BLOCKS,
@@ -174,6 +175,7 @@ class AgentRoundRecord:
     step_count: int = 0
     wasted_attempts: int = 0
     messages: list[dict[str, Any]] = field(default_factory=list)
+    usages: list[dict[str, Any]] = field(default_factory=list)
     # Defense-in-depth per-agent state (populated when defense is enabled)
     envelope_verdict: str = ""
     probe_verdict: str = ""
@@ -1412,8 +1414,13 @@ def run_agent(
     round_num: int,
     temperature: float = 0.0,
     rate_limiter: TokenBucket | None = None,
-) -> tuple[list[StepRecord], dict[str, int], list[dict[str, Any]]]:
-    """Run one agent for one round. Returns (steps, token_usage, messages)."""
+) -> tuple[
+    list[StepRecord], dict[str, int], list[dict[str, Any]], list[dict[str, Any]]
+]:
+    """Run one agent for one round. Returns (steps, token_usage, messages, usages).
+
+    usages holds each LLM response's raw usage block, in call order.
+    """
     tools = make_tools_for_agent(profile, defense_enabled=env.defense_enabled)
     completed_summary = get_completed_summary(profile)
     warnings_summary = get_warnings_summary(env.space, profile)
@@ -1442,7 +1449,17 @@ def run_agent(
         messages.append({"role": "user", "content": injection})
 
     steps: list[StepRecord] = []
-    tokens: dict[str, int] = {"prompt": 0, "completion": 0}
+    tokens: dict[str, int] = {
+        "prompt": 0,
+        "completion": 0,
+        "cached_prompt": 0,
+        "reasoning": 0,
+        "calls": 0,
+        # Calls whose response gave no cached-token count: their cached share
+        # is unknown, and cost prices them as uncached (an upper bound).
+        "calls_cached_unknown": 0,
+    }
+    usages: list[dict[str, Any]] = []
 
     for step_num in range(MAX_STEPS):
         try:
@@ -1462,8 +1479,17 @@ def run_agent(
             break
 
         usage = llm_resp.get("usage", {})
+        usages.append(usage)
         tokens["prompt"] += usage.get("prompt_tokens", 0)
         tokens["completion"] += usage.get("completion_tokens", 0)
+        tokens["calls"] += 1
+        if "cached_prompt_tokens" in usage:
+            tokens["cached_prompt"] += usage["cached_prompt_tokens"]
+        else:
+            tokens["calls_cached_unknown"] += 1
+        completion_details = usage.get("completion_tokens_details")
+        if isinstance(completion_details, dict):
+            tokens["reasoning"] += completion_details.get("reasoning_tokens") or 0
 
         choice = llm_resp["choices"][0]
         message = choice["message"]
@@ -1514,7 +1540,7 @@ def run_agent(
                 }
             )
 
-    return steps, tokens, messages
+    return steps, tokens, messages, usages
 
 
 def _dispatch_tool(
@@ -1827,10 +1853,10 @@ def run_round(
             for f in as_completed(futures):
                 profile = futures[f]
                 try:
-                    agent_steps, agent_tokens, agent_messages = f.result()
+                    agent_steps, agent_tokens, agent_messages, agent_usages = f.result()
                     all_steps.extend(agent_steps)
-                    total_tokens["prompt"] += agent_tokens["prompt"]
-                    total_tokens["completion"] += agent_tokens["completion"]
+                    for key, count in agent_tokens.items():
+                        total_tokens[key] = total_tokens.get(key, 0) + count
                     agent_wasted = sum(
                         1
                         for s in agent_steps
@@ -1847,6 +1873,7 @@ def run_round(
                             step_count=len(agent_steps),
                             wasted_attempts=agent_wasted,
                             messages=agent_messages,
+                            usages=agent_usages,
                         )
                     )
                     for s in agent_steps:
@@ -2115,6 +2142,7 @@ class TrialWriter:
                     "agent": ar.agent,
                     "dept": ar.dept,
                     "messages": compact,
+                    "usages": ar.usages,
                 }
                 self._messages_f.write(json.dumps(msg_row, default=str) + "\n")
         self._messages_f.flush()
@@ -2490,8 +2518,8 @@ def run_trial(
 
         total_tokens: dict[str, int] = {"prompt": 0, "completion": 0}
         for rr in round_summaries:
-            total_tokens["prompt"] += rr.tokens.get("prompt", 0)
-            total_tokens["completion"] += rr.tokens.get("completion", 0)
+            for key, count in rr.tokens.items():
+                total_tokens[key] = total_tokens.get(key, 0) + count
         result.tokens = total_tokens
 
         # Safety
@@ -2581,6 +2609,11 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-oss-120b")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        help="Sent as reasoning_effort: a level name, or an integer token budget",
+    )
+    parser.add_argument(
         "--adversarial",
         type=int,
         default=0,
@@ -2612,6 +2645,25 @@ def main() -> None:
         metavar="RPS",
         help="Rate limit LLM requests (0 = unlimited)",
     )
+    parser.add_argument(
+        "--pace-start-rps",
+        type=float,
+        default=None,
+        help="Pace every LLM request, retries included, starting at this rate and "
+        "ramping slowly (AdaptivePacer in experiments/stress_test/pacing.py)",
+    )
+    parser.add_argument("--pace-step-rps", type=float, default=0.25)
+    parser.add_argument("--pace-step-seconds", type=float, default=60.0)
+    parser.add_argument("--pace-max-rps", type=float, default=5.0)
+    parser.add_argument("--pace-min-rps", type=float, default=0.05)
+    parser.add_argument(
+        "--pace-target-fraction",
+        type=float,
+        default=0.6,
+        help="Stop ramping once the last minute's generated tokens reach this "
+        "share of the provider's reported limit",
+    )
+    parser.add_argument("--pace-cooldown-seconds", type=float, default=300.0)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--scale-resources",
@@ -2647,10 +2699,43 @@ def main() -> None:
 
     completed_seeds = load_completed(output_dir) if args.resume else set()
 
+    # Pacer: one shared, slowly ramping schedule for every request
+    if args.pace_start_rps is not None and args.requests_per_second > 0:
+        raise SystemExit("Use --pace-start-rps or --requests-per-second, not both")
+    pacer: AdaptivePacer | None = None
+    if args.pace_start_rps is not None:
+        pacer_log = output_dir / "pacer.jsonl"
+
+        def _log_pacer_event(event: dict[str, Any]) -> None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with open(pacer_log, "a") as f:
+                f.write(json.dumps({"wall_time": time.time(), **event}) + "\n")
+
+        pacer = AdaptivePacer(
+            start_rps=args.pace_start_rps,
+            step_rps=args.pace_step_rps,
+            step_seconds=args.pace_step_seconds,
+            max_rps=args.pace_max_rps,
+            min_rps=args.pace_min_rps,
+            target_fraction=args.pace_target_fraction,
+            cooldown_seconds=args.pace_cooldown_seconds,
+            on_change=_log_pacer_event,
+        )
+        print(
+            f"Pacing: start {args.pace_start_rps} req/s, +{args.pace_step_rps} "
+            f"every {args.pace_step_seconds:.0f} s up to {args.pace_max_rps}, "
+            f"target {args.pace_target_fraction:.0%} of the generated-token limit"
+        )
+
     # Build LLM client
     base_config = LLMConfig.from_env()
     model_short = args.model
     if model_short in EXTERNAL_MODELS:
+        if pacer is not None or args.reasoning_effort is not None:
+            raise SystemExit(
+                "--pace-start-rps and --reasoning-effort are not supported "
+                f"for external model '{model_short}'"
+            )
         import os
 
         entry = EXTERNAL_MODELS[model_short]
@@ -2670,7 +2755,14 @@ def main() -> None:
                 base_url=base_config.base_url,
                 api_key=base_config.api_key,
                 model=resolve_model_id(model_short),
-            )
+                reasoning_effort=(
+                    int(args.reasoning_effort)
+                    if args.reasoning_effort is not None
+                    and args.reasoning_effort.isdigit()
+                    else args.reasoning_effort
+                ),
+            ),
+            pacer=pacer,
         )
 
     total_agents = args.agents_per_dept * len(DEPTS)

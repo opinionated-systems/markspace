@@ -27,10 +27,10 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 487 tests (tests/ and experiments/stress_test/)
+pytest  # 543 tests (tests/ and experiments/stress_test/)
 ```
 
-Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, and the LLM client.
+Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, and the stress-test pacer.
 
 ### Composition Stress Test
 
@@ -70,6 +70,14 @@ python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
 python experiments/stress_test/run.py --agents-per-dept 20 --rounds 10 \
     --model mercury-2 --requests-per-second 8
 
+# Paced run on a provider with adaptive rate limits (Fireworks), with a
+# 2048-token thinking budget; target 0.3 leaves the rest of the limit to
+# other workloads on the same account and model (see Pacing below)
+python experiments/stress_test/run.py --agents-per-dept 20 --rounds 10 \
+    --seed 42 --adversarial 5 --max-concurrent 20 \
+    --model accounts/fireworks/models/deepseek-v4p1-flash-1017 \
+    --reasoning-effort 2048 --pace-start-rps 0.25 --pace-target-fraction 0.3
+
 # Resume interrupted run
 python experiments/stress_test/run.py --resume --output results_stress_v1_20260228.jsonl
 ```
@@ -81,7 +89,15 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--seed` | 42 | Random seed |
 | `--model` | `gpt-oss-120b` | Model short name |
 | `--max-concurrent` | 20 | Max concurrent agent executions |
-| `--requests-per-second` | 0 | Rate limit (0 = unlimited) |
+| `--requests-per-second` | 0 | Fixed rate limit (0 = unlimited); not together with `--pace-start-rps` |
+| `--reasoning-effort` | none | Sent as `reasoning_effort`: a level name, or an integer token budget. Fireworks' chat-completions reference calls an integer of 1024 or more a hard thinking budget on DeepSeek V4.1 |
+| `--pace-start-rps` | none | Turn on pacing ([`pacing.py`](stress_test/pacing.py)), starting at this many requests per second |
+| `--pace-step-rps` | 0.25 | Rate added per step |
+| `--pace-step-seconds` | 60 | Length of a step window |
+| `--pace-max-rps` | 5.0 | Highest rate |
+| `--pace-min-rps` | 0.05 | Lowest rate after cuts |
+| `--pace-target-fraction` | 0.6 | Stop stepping once this run's generated tokens in the last minute reach this share of the provider's reported limit |
+| `--pace-cooldown-seconds` | 300 | No step for this long after a rate-limit signal |
 | `--output-dir` | auto | Output directory |
 | `--adversarial` | 0 | Number of adversarial agents |
 | `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift` |
@@ -90,7 +106,9 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--probe-interval` | 5 | Run diagnostic probe every N rounds (requires `--defense`) |
 | `--resume` | false | Resume from existing output |
 
-Output goes to a results directory containing decomposed JSONL files: `trial.jsonl` (aggregates), `rounds.jsonl` (per-round), `agents.jsonl` (per-agent-per-round), `steps.jsonl` (per-tool-call), `manifests.jsonl` (agent manifests), and optionally `messages.jsonl` (full LLM history).
+Output goes to a results directory containing decomposed JSONL files: `trial.jsonl` (aggregates), `rounds.jsonl` (per-round), `agents.jsonl` (per-agent-per-round), `steps.jsonl` (per-tool-call), `manifests.jsonl` (agent manifests), and optionally `messages.jsonl` (full LLM history, with each call's raw `usage` block). Token totals count `prompt`, `completion`, `cached_prompt` and `reasoning` tokens and the number of `calls`; `calls_cached_unknown` counts responses that reported no cached-token count. A paced run also writes `pacer.jsonl`, one line per rate change.
+
+**Pacing.** Providers such as Fireworks set limits in tokens per minute, per account and per model, and raise a limit only while usage stays above half of it; traffic that ramps up too quickly gets HTTP 429. With `--pace-start-rps`, every request, retries included, waits in one arrival-ordered line, so concurrent agents never fire together. The rate starts low and steps up only while requests succeed and agents use about the whole current rate. A 429 or an over-limit signal halves it, and no request starts before a 429's Retry-After has passed. Other workloads on the same account and model share its limits without being counted here: keep the sum of every workload's share at or below the limit, for example `--pace-target-fraction 0.3` next to a workload that uses 70% of it.
 
 ### Trial Experiments
 
