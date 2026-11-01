@@ -443,7 +443,7 @@ Each win goes to the intent in the outer scope, or follows the order of one scop
 
 Inside one scope, these comparisons give the same result as one application of the policy of the scope to the whole set.
 
-An implementation MAY judge a whole set at once. Every intent in an outer scope beats every intent below it, unless one or both scopes are YIELD_ALL. Thus one sort of the intents of each scope, by the policy of that scope, gives the outcome of every intent. This method follows multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976). The judgment of a beaten intent names the first intent of the outermost scope that beats it.
+An implementation MAY judge a whole set at once. Every intent in an outer scope beats every intent below it, unless one or both scopes are YIELD_ALL. Thus one sort of the intents of each scope, by the policy of that scope, gives the outcome of every intent. This method follows multiple-granularity locking ([Gray, Lorie, Putzolu, Traiger, 1976](https://core.ac.uk/works/16970558)). The judgment of a beaten intent names the first intent of the outermost scope that beats it.
 
 In this section, an intent, a lease or an action **blocks** an intent when it prevents a grant to that intent. This is not the verdict BLOCKED.
 
@@ -608,14 +608,14 @@ Ref: [`markspace/core.py::resolve_conflict`](../markspace/core.py), [`tests/test
 
 ### 6.5 Grants
 
-ALLOW alone is not exclusive over time. Also, nothing checks ALLOW when the action lands. Thus a later claim can overtake a claim whose tool still runs. Therefore, a guard grants a **lease** to the winning intent. A lease is a grant with an expiry (Gray, Cheriton, "Leases", SOSP 1989). The lease holds the resource until one of these events occurs:
+ALLOW alone is not exclusive over time. Also, nothing checks ALLOW when the action lands. Thus a later claim can overtake a claim whose tool still runs. Therefore, a guard grants a **lease** to the winning intent. A lease is a grant with an expiry (Gray, Cheriton, ["Leases"](https://doi.org/10.1145/74850.74870), SOSP 1989). The lease holds the resource until one of these events occurs:
 
 - The action of the agent.
 - A failed action of the agent.
 - A release by the principal.
 - The expiry of the lease.
 
-Each grant carries a **fencing token** (Burrows, "The Chubby lock service", sequencers, OSDI 2006). A fencing token is a pair (epoch, n). The value n increases with every grant on the resource. The token makes it possible to reject a stale holder. The rule for which claims compete follows multiple-granularity locking (Section 6.1).
+Each grant carries a **fencing token** (Burrows, ["The Chubby lock service"](https://www.usenix.org/conference/osdi-06/presentation/chubby-lock-service-loosely-coupled-distributed-systems), sequencers, OSDI 2006). A fencing token is a pair (epoch, n). The value n increases with every grant on the resource. The token makes it possible to reject a stale holder. The rule for which claims compete follows multiple-granularity locking (Section 6.1).
 
 The guard keeps its record of grants in its own table, the lease table. The guard keeps its barriers and budgets in the same way. The record is not a mark. A read of the mark space does not show it. A mark space has at most one guard. A second guard would grant the same resource again.
 
