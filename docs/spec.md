@@ -349,7 +349,7 @@ The effective strength of a mark, incorporating both decay and trust:
 effective_strength(mark, now) = compute_strength(mark, now) * trust_weight(mark.source)
 ```
 
-For mark types that don't have a `source` field (intent, action, need), trust weight MUST be 1.0 (these marks are always fleet-internal).
+For mark types that don't have a `source` field (intent, action, warning, need), trust weight MUST be 1.0 (these marks are always fleet-internal).
 
 ### 4.3 Formal Properties
 
@@ -409,7 +409,7 @@ When an agent reads intent marks on a resource it also intends to modify:
 
 1. Collect the intent's competing set: all active intent marks (strength > 0) on `(scope, resource)`.
 2. If no other intents and no other agent's lease exist, proceed.
-3. If other intents exist, compare the intent with each of them. If either scope of a pair uses YIELD_ALL, the pair goes to the principal (YIELD_ALL below), unless another competitor beats the intent: then the intent loses. Otherwise the intent in the outer scope, the one that contains the other, wins; inside one scope, the scope's policy decides. The intent proceeds only if it wins every comparison. Every win points to an outer scope or follows one scope's order, so wins never form a cycle: no decision allows two competing intents, an intent's outcome does not depend on which scope's decision computes it, and anything that beats a competitor also competes with and beats the intent. Within one scope this is the same as applying the scope's policy to the whole set. An implementation MAY judge a whole set at once: every intent in an outer scope beats every intent below it unless either scope is YIELD_ALL, so sorting each scope's intents once by its policy gives every intent's outcome, as in multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976); a beaten intent names the first intent of the outermost scope that beats it. Consequences: among waiting claims, an outer-scope intent pre-empts inner-scope intents whatever their order or confidence. A granted claim is not pre-empted: a guard grants the winning intent a lease (Section 6.5), and an intent that would beat another agent's live lease waits for it or yields. An intent whose competing set holds another agent's completed action (P39) cannot proceed and is closed for good, so it holds off no other intent.
+3. If other intents exist, compare the intent with each of them. If either scope of a pair uses YIELD_ALL, the pair goes to the principal (YIELD_ALL below), unless another competitor beats the intent: then the intent loses. Otherwise the intent in the outer scope, the one that contains the other, wins; inside one scope, the scope's policy decides. The intent proceeds only if it wins every comparison. Every win points to an outer scope or follows one scope's order, so wins never form a cycle: no decision allows two competing intents, an intent's outcome does not depend on which scope's decision computes it, and if X beats a competitor of the intent, and that competitor beats the intent, then X also competes with and beats the intent. Within one scope this is the same as applying the scope's policy to the whole set. An implementation MAY judge a whole set at once: every intent in an outer scope beats every intent below it unless either scope is YIELD_ALL, so sorting each scope's intents once by its policy gives every intent's outcome, as in multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976); a beaten intent names the first intent of the outermost scope that beats it. Consequences: among waiting claims, an outer-scope intent pre-empts inner-scope intents whatever their order or confidence. A granted claim is not pre-empted: a guard grants the winning intent a lease (Section 6.5), and an intent that would beat another agent's live lease waits for it or yields. An intent whose competing set holds another agent's completed action (P39) cannot proceed and is closed for good, so it holds off no other intent.
 
 The policies:
 
@@ -431,7 +431,7 @@ Deferred resolution fixes this by separating claim collection from allocation.
 
 The deferred resolution protocol has three phases:
 
-**Phase 1: Claim collection.** Agents write intent marks to the mark space. The guard operates in advisory mode during this phase: it MAY acquire a lock for serializing writes (implementation-defined), but no resource allocation or ALLOW/CONFLICT verdicts are issued. Each intent carries the agent's confidence (priority) for the resource.
+**Phase 1: Claim collection.** Agents write intent marks to the mark space. The guard operates in advisory mode during this phase: it MAY acquire a lock for serializing writes (implementation-defined), but no resource allocation or ALLOW verdicts are issued: an intent it writes receives BLOCKED, and the checks before the write can still return CONFLICT or DENIED (Section 9.2). Each intent carries the agent's confidence (priority) for the resource.
 
 **Phase 2: Resolution boundary.** A resolution boundary is triggered by an external event: end of a scheduling round, a timer, a principal action, or an explicit `resolve_deferred(scope, resource)` call. The trigger mechanism is deployment-defined; the spec only requires that a boundary eventually occurs for any scope with pending intents.
 
@@ -452,7 +452,7 @@ Deferred resolution is OPTIONAL for FIRST_WRITER scopes (serialized first-come-f
 
 #### 6.2.3 Relationship to Guard
 
-During Phase 1, the guard operates in **advisory mode**: it writes intent marks but does not acquire a resource lock or return ALLOW/CONFLICT. Agents receive BLOCKED (pending resolution) instead. During Phase 3, the guard operates normally: it acquires the lock, judges each intent, and returns ALLOW only for intents that win their own competing sets (intents in sibling scopes can both win).
+During Phase 1, the guard operates in **advisory mode**: it writes intent marks but returns no ALLOW; whether it takes a lock is implementation-defined (Section 6.2.1). An agent whose intent is written receives BLOCKED (pending resolution); the checks before the write can still return CONFLICT or DENIED (Section 9.2). During Phase 3, the guard operates normally: it acquires the lock, judges each intent, and returns ALLOW only for intents that win their own competing sets (intents in sibling scopes can both win).
 
 An implementation MAY combine deferred and immediate resolution within the same mark space. Some scopes (e.g., room bookings with FIRST_WRITER) resolve immediately; others (e.g., parking with HIGHEST_CONFIDENCE) defer. The scope's conflict policy and a per-scope `deferred: bool` flag determine which path is taken.
 
@@ -738,7 +738,7 @@ The aggregator is deliberately simple. It groups, scores, and sorts. It has no i
 
 **P30: Mark Immutability**: A mark's fields MUST NOT be mutated after write. All marks are frozen. Need resolution creates a new mark (with `resolved_by` set) that supersedes the original, consistent with the supersession mechanism used for all mark updates. All other state changes (decay, warning invalidation, supersession) are computed at read time from immutable data.
 
-**P31: Mark ID Uniqueness**: Every call to write() MUST assign a unique id. No two marks in the same mark space MUST share an id. Broken uniqueness would corrupt supersession chains and warning invalidation references.
+**P31: Mark ID Uniqueness**: Every call to write() MUST assign a unique id. Two marks in the same mark space MUST NOT share an id. Broken uniqueness would corrupt supersession chains and warning invalidation references.
 
 **P32: Total Write Ordering**: Marks MUST be totally ordered by (created_at, id). created_at is the mark space's clock at write. Among intents and actions on the same resource in one scope, the mark space MUST assign strictly increasing created_at: when its clock has not passed the latest such mark's created_at (writes within clock resolution, a fixed or stepped clock, or a clock that goes back), the next one gets the next representable time after it. Conflict resolution (FIRST_WRITER, and ties under HIGHEST_CONFIDENCE) therefore follows write order: an earlier intent wins every tie it breaks by created_at. Other marks get the clock's time (a resolved need keeps its need's), and id breaks their ties. Conflict resolution breaks ties only within one scope (a pair in two scopes is decided by which scope contains the other), so this order serves every tie-break, and no other scope's writes show in a claim's created_at. Write-order delivery (P52) follows the order of `write()` calls, not created_at.
 
