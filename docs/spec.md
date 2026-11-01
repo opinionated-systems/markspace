@@ -551,7 +551,7 @@ OPEN  >  PROTECTED  >  CLASSIFIED
 |------------|--------------------------|----------------------|
 | `OPEN` | Full marks | Full marks |
 | `PROTECTED` | Projected marks (content redacted) | Full marks |
-| `CLASSIFIED` | Nothing (empty list) | Full marks |
+| `CLASSIFIED` | No mark of that scope | Full marks |
 
 **Default**: OPEN. Scopes that don't specify visibility are OPEN.
 
@@ -600,15 +600,15 @@ Scope names MAY use `/` as a hierarchy separator. Authorization for a parent sco
 
 **P21: Content Access**: For PROTECTED scopes, an agent MUST have read authorization to access content fields. Without read authorization, an implementation MUST return projected marks with content fields redacted and `projected=true`.
 
-**P22: Classified Opacity**: For CLASSIFIED scopes, an agent without read authorization MUST receive an empty result. CLASSIFIED scopes MUST NOT fall back to projected reads. It is all-or-nothing.
+**P22: Classified Opacity**: For CLASSIFIED scopes, an agent without read authorization MUST receive no mark of that scope, whether it reads the scope itself or a parent of it. CLASSIFIED scopes MUST NOT fall back to projected reads. It is all-or-nothing.
 
 **P23: Hierarchy**: Write authorization for scope `"a"` MUST imply write authorization for `"a/b"` and `"a/b/c"` for all b, c. Read authorization MUST follow the same rule.
 
 **P24: Projection Preservation**: A projected mark MUST retain all structural and coordination metadata (id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes). Only content fields (result, content, reason, question, context) are redacted. `projected` MUST be `true`. *Note: P24 refines P20 (Structural Visibility) by specifying exactly which fields are structural vs content.*
 
-**P25: Classified No Fallback**: CLASSIFIED scopes MUST NOT provide projected reads as a fallback. An unauthorized reader MUST receive an empty list, not projected marks. This prevents existence leakage. *Note: P25 strengthens P22 (Classified Opacity) by explicitly ruling out projected reads as a fallback path.*
+**P25: Classified No Fallback**: CLASSIFIED scopes MUST NOT provide projected reads as a fallback. An unauthorized reader MUST receive no mark of a CLASSIFIED scope, not projected marks. This prevents existence leakage. *Note: P25 strengthens P22 (Classified Opacity) by explicitly ruling out projected reads as a fallback path.*
 
-**P26: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the parent scope's visibility level. Read authorization for a parent scope MUST imply read authorization for all child scopes.
+**P26: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the parent scope's visibility level. A child scope with its own definition keeps its own visibility level, also when its marks are read through a parent scope or delivered by a subscription. Read authorization for a parent scope MUST imply read authorization for all child scopes.
 
 Ref: [`markspace/core.py::Scope, Agent, ScopeVisibility, project_mark`](../markspace/core.py), [`tests/test_properties.py::TestScopeVisibility`](../tests/test_properties.py)
 
@@ -645,7 +645,7 @@ read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader
     - Agent: respects scope visibility rules (OPEN/PROTECTED/CLASSIFIED)
 ```
 
-Read is a pure query with no side effects. Reading marks MUST NOT modify them. For PROTECTED scopes with an unauthorized reader, the returned marks are projections (content redacted, `projected=true`). For CLASSIFIED scopes with an unauthorized reader, the result is an empty list.
+Read is a pure query with no side effects. Reading marks MUST NOT modify them. For PROTECTED scopes with an unauthorized reader, the returned marks are projections (content redacted, `projected=true`). For CLASSIFIED scopes with an unauthorized reader, no mark of that scope is returned. A read of a parent scope also returns marks of its child scopes; each mark is returned under the visibility of its own scope's definition (P26), never the parent's, so a read of a CLASSIFIED parent still returns the marks of an OPEN child exactly as a direct read of that child does.
 
 ### 8.3 Resolve
 
@@ -782,7 +782,8 @@ message GuardDecision {
   string               reason              = 2;  // human-readable explanation
   optional UUID        intent_id           = 3;  // id of the intent written by this pre_action
   optional IntentMark  winning_intent      = 4;  // if CONFLICT, the intent that won
-  repeated IntentMark  conflicting_intents = 5;  // other intents on this resource
+  repeated IntentMark  conflicting_intents = 5;  // other intents on this resource the agent may see (P38)
+  bool                 conflict_found      = 6;  // telemetry only: another agent's intent or action competed for the resource, seen or not; harnesses MUST NOT show it to the agent
 }
 ```
 
@@ -823,7 +824,7 @@ Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.p
 
 **P37: Guard Atomicity**: If `pre_action` returns CONFLICT or BLOCKED, `tool_fn` MUST NOT be called. The tool function is never invoked unless the guard explicitly allows it.
 
-**P38: Guard Transparency**: The `GuardDecision` MUST contain sufficient information for the agent to reason about why it was blocked and choose an alternative. Specifically: a CONFLICT verdict MUST include `winning_intent` (the intent that won the resource); a BLOCKED verdict MUST include a non-empty `reason` string; a DENIED verdict MUST include `reason` specifying which authorization check failed.
+**P38: Guard Transparency**: The `GuardDecision` MUST contain sufficient information for the agent to reason about why it was blocked and choose an alternative. Specifically: a CONFLICT verdict MUST include `winning_intent` (the intent that won the resource); a BLOCKED verdict MUST include a non-empty `reason` string; a DENIED verdict MUST include `reason` specifying which authorization check failed. Exception (P22): a decision MUST NOT name an intent or action from a CLASSIFIED scope the deciding agent has no read authorization for. When the deciding agent is not known (deferred resolution without the agents mapping), a decision names only intents in OPEN scopes. For a hidden winner, `winning_intent` is null and the reason says the agent yields to an intent in a scope it cannot read; `conflicting_intents` leaves hidden intents out, and an ALLOW reason does not mention a conflict the agent cannot see. The verdict itself still counts every intent the decision considers.
 
 **P39: Action Precedence**: If an action mark exists on a resource from agent X, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
 
@@ -1315,6 +1316,7 @@ get_watched_marks(agent, clear=true) -> list[Mark]
 
 Postconditions:
   - Returns marks written since the last poll that match the agent's subscription patterns (P50)
+  - Each mark is delivered under the scope visibility rules of read() for this agent (Section 7.4): projected for a PROTECTED scope without read authorization, withheld for a CLASSIFIED scope without read authorization
   - If clear=true: the queue is emptied; the same marks will not be returned again (P51)
   - If clear=false: the queue is preserved for re-reading
   - Marks are returned in write order (P52)

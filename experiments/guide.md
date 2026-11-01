@@ -27,10 +27,10 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 329 tests
+pytest  # 349 tests
 ```
 
-Covers mark algebra, decay, trust weighting, conflict resolution, guard enforcement, composition properties, scheduling, thread safety, and hypothesis property-based tests.
+Covers mark algebra, decay, trust weighting, conflict resolution, guard enforcement and scope visibility, composition properties, scheduling, thread safety, and hypothesis property-based tests.
 
 ### Composition Stress Test
 

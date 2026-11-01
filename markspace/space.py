@@ -341,25 +341,20 @@ class MarkSpace:
         For OPEN scopes (default): full marks regardless of reader.
         For PROTECTED scopes: projected marks (content redacted) unless reader
             has content read authorization.
-        For CLASSIFIED scopes: empty list unless reader has read authorization.
+        For CLASSIFIED scopes: no mark of the scope unless reader has read
+            authorization.
+        Each mark is judged and decayed by its own scope's definition, also
+        when it is read through a parent scope.
 
         Returns marks sorted by effective_strength descending.
         """
         with self._lock:
             now = self.now()
-            scope_def = self.get_scope(scope)
+            self.get_scope(scope)  # raises for a scope with no definition
 
-            # Visibility check - determine read mode for this scope + reader
-            visibility = scope_def.visibility
-            if reader is not None and visibility == ScopeVisibility.CLASSIFIED:
-                if not reader.can_read_content(scope):
-                    return []
-
-            needs_projection = (
-                reader is not None
-                and visibility == ScopeVisibility.PROTECTED
-                and not reader.can_read_content(scope)
-            )
+            # Each mark decays and is shown by its own scope's definition
+            # (visible_form, P26), so a defined child scope keeps its own
+            # settings when read through its parent.
 
             # Use scope index for O(scope) reads instead of O(total) full scan
             # Collect candidates from the scope index. This is O(registered_scopes)
@@ -415,16 +410,14 @@ class MarkSpace:
                 )
 
                 if strength >= min_strength:
-                    results.append((strength, m))
+                    visible = self.visible_form(m, reader)
+                    if visible is not None:
+                        results.append((strength, visible))
 
             # Sort by strength descending
             results.sort(key=lambda pair: pair[0], reverse=True)
 
             marks = [m for _, m in results]
-
-            # Apply projection if needed (PROTECTED scope, unauthorized reader)
-            if needs_projection:
-                marks = [project_mark(m) for m in marks]
 
             # Token budget truncation: keep the strongest marks that fit.
             # Estimate: 4 characters per token (standard rough estimate
@@ -581,6 +574,22 @@ class MarkSpace:
     def _own_decay(self, mark: AnyMark) -> DecayConfig:
         """The decay settings of *mark*'s own scope."""
         return self.get_scope(mark.scope).decay
+
+    def visible_form(self, mark: AnyMark, reader: Agent | None) -> AnyMark | None:
+        """
+        The form of *mark* that *reader* may see under the visibility of the
+        mark's own scope (Section 7.4): the full mark, its projection, or None.
+        reader=None is infrastructure and sees full marks (P20).
+        """
+        if reader is None or reader.can_read_content(mark.scope):
+            return mark
+        with self._lock:
+            visibility = self.get_scope(mark.scope).visibility
+        if visibility == ScopeVisibility.OPEN:
+            return mark
+        if visibility == ScopeVisibility.PROTECTED:
+            return project_mark(mark)
+        return None  # CLASSIFIED: not even projected (P22, P25)
 
     def get_mark(self, mark_id: uuid.UUID) -> AnyMark | None:
         """Retrieve a mark by id. Returns None if not found."""
@@ -800,8 +809,12 @@ class MarkSpace:
             marks: list[AnyMark] = []
             for mark_id in pending_ids:
                 mark = self._marks.get(mark_id)
-                if mark is not None:
-                    marks.append(mark)
+                if mark is None:
+                    continue
+                # Same visibility rules as read() (Section 7.4)
+                visible = self.visible_form(mark, agent)
+                if visible is not None:
+                    marks.append(visible)
             if clear:
                 self._pending_notifications[agent.id] = []
             return marks

@@ -49,6 +49,7 @@ from markspace.core import (
     Need,
     Observation,
     Scope,
+    ScopeVisibility,
     Severity,
     Warning,
     hours,
@@ -161,6 +162,10 @@ class GuardDecision:
     intent_id: uuid.UUID | None = None  # ID of the intent written by this pre_action
     winning_intent: Intent | None = None
     conflicting_intents: list[Intent] = field(default_factory=list)
+    # Telemetry only: True when another agent's intent or action competed for
+    # the resource, including marks in scopes this agent may not read.
+    # Harnesses MUST NOT show it to the agent.
+    conflict_found: bool = field(default=False, repr=False)
 
 
 @dataclass
@@ -1045,10 +1050,18 @@ class Guard:
             # a potential detection blind spot - audit accordingly.
             if self.envelope is not None:
                 self.envelope.record_attempt(agent.id, MarkType.INTENT)
+            # Name the claimant only if this agent may see its mark (P22).
+            claimant = blocking_actions[0]
+            claimed_by = (
+                f" (agent_id={claimant.agent_id})"
+                if self.space.visible_form(claimant, agent) is not None
+                else ""
+            )
             return GuardDecision(
                 verdict=GuardVerdict.CONFLICT,
-                reason=f"Resource '{resource}' already claimed by action mark "
-                f"(agent_id={blocking_actions[0].agent_id})",
+                reason=f"Resource '{resource}' already claimed by action mark"
+                f"{claimed_by}",
+                conflict_found=True,
             )
 
         # Write this agent's intent
@@ -1081,6 +1094,12 @@ class Guard:
                 intent_id=intent_id,
                 reason="No conflict",
             )
+
+        # Intents this agent may see (P22): a decision names no intent from a
+        # scope the agent cannot read. The verdict still counts every intent.
+        others = [
+            i for i in all_intents if i.id != intent_id and self._visible_to(i, agent)
+        ]
 
         # Resolve conflict
         winner_id = resolve_conflict(all_intents, scope_def.conflict_policy)
@@ -1122,15 +1141,19 @@ class Guard:
                 verdict=GuardVerdict.BLOCKED,
                 intent_id=intent_id,
                 reason="YIELD_ALL policy - principal decision required",
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
+                conflicting_intents=others,
+                conflict_found=True,
             )
 
         if winner_id == intent_id:
             return GuardDecision(
                 verdict=GuardVerdict.ALLOW,
                 intent_id=intent_id,
-                reason="This agent wins the conflict",
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
+                # Name the conflict only if this agent can see a competitor; else
+                # the same reason as an agent alone, so nothing hidden shows.
+                reason="This agent wins the conflict" if others else "No conflict",
+                conflicting_intents=others,
+                conflict_found=True,
             )
         else:
             winner = next((i for i in all_intents if i.id == winner_id), None)
@@ -1139,14 +1162,33 @@ class Guard:
                     f"resolve_conflict returned winner_id={winner_id} "
                     f"not found in intents for {scope}/{resource}"
                 )
+            if not self._visible_to(winner, agent):
+                return GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent_id,
+                    reason=f"Agent '{agent.name}' yields to an intent in a scope "
+                    f"it cannot read",
+                    conflicting_intents=others,
+                    conflict_found=True,
+                )
             return GuardDecision(
                 verdict=GuardVerdict.CONFLICT,
                 intent_id=intent_id,
                 reason=f"Agent '{agent.name}' yields to intent {winner_id} "
                 f"(confidence={winner.confidence}, created_at={winner.created_at})",
                 winning_intent=winner,
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
+                conflicting_intents=others,
+                conflict_found=True,
             )
+
+    def _visible_to(self, mark: AnyMark, agent: Agent | None) -> bool:
+        """
+        Whether a decision may name *mark* to *agent* (P22, P38). An unknown
+        agent (None) may see only marks in OPEN scopes.
+        """
+        if agent is None:
+            return self.space.get_scope(mark.scope).visibility == ScopeVisibility.OPEN
+        return self.space.visible_form(mark, agent) is not None
 
     def resolve_deferred(
         self,
@@ -1256,13 +1298,19 @@ class Guard:
                 )
 
             for intent in eligible_intents:
+                # Each decision names only intents its receiver may see (P22,
+                # P38). Without the agents mapping the receiver is unknown,
+                # and only intents in OPEN scopes are named.
+                receiver = agents.get(intent.agent_id) if agents is not None else None
                 others = others_by_id[intent.id]
+                visible_others = [o for o in others if self._visible_to(o, receiver)]
                 if winner_id is not None and intent.id == winner_id:
                     decision = GuardDecision(
                         verdict=GuardVerdict.ALLOW,
                         intent_id=intent.id,
                         reason="Deferred resolution - this agent wins",
-                        conflicting_intents=others,
+                        conflicting_intents=visible_others,
+                        conflict_found=bool(others),
                     )
                 elif winner_id is None:
                     # YIELD_ALL - all blocked
@@ -1270,17 +1318,27 @@ class Guard:
                         verdict=GuardVerdict.BLOCKED,
                         intent_id=intent.id,
                         reason="YIELD_ALL - principal decision required",
-                        conflicting_intents=others,
+                        conflicting_intents=visible_others,
+                        conflict_found=bool(others),
                     )
-                else:
-                    assert winner is not None  # validated above
+                elif winner is not None and self._visible_to(winner, receiver):
                     decision = GuardDecision(
                         verdict=GuardVerdict.CONFLICT,
                         intent_id=intent.id,
                         reason=f"Deferred resolution - yields to agent "
                         f"'{winner.agent_id}' (confidence={winner.confidence})",
                         winning_intent=winner,
-                        conflicting_intents=others,
+                        conflicting_intents=visible_others,
+                        conflict_found=True,
+                    )
+                else:
+                    decision = GuardDecision(
+                        verdict=GuardVerdict.CONFLICT,
+                        intent_id=intent.id,
+                        reason="Deferred resolution - yields to an intent in a "
+                        "scope this agent cannot read",
+                        conflicting_intents=visible_others,
+                        conflict_found=True,
                     )
                 _update_best_decision(results, intent.agent_id, decision)
 
@@ -1423,7 +1481,7 @@ class Guard:
             intent_action,
             decision.verdict.value,
             conflict_check=True,
-            conflict_found=len(decision.conflicting_intents) > 0,
+            conflict_found=decision.conflict_found,
             reason=decision.reason,
         )
 

@@ -1350,3 +1350,199 @@ class TestDeferredAuthorization:
         )
         assert decisions[insider.id].verdict == GuardVerdict.ALLOW
         assert decisions[outsider.id].verdict == GuardVerdict.CONFLICT
+
+
+class TestGuardDecisionVisibility:
+    """P38 with P22: a decision names no intent or agent from a scope the
+    deciding agent cannot read. The verdict itself still enforces mutual
+    exclusion (Section 7.4, CLASSIFIED)."""
+
+    @staticmethod
+    def _space() -> MarkSpace:
+        from markspace import ScopeVisibility
+
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", visibility=ScopeVisibility.PROTECTED),
+                Scope(name="corp/merger", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        s.set_clock(1000000.0)
+        return s
+
+    @staticmethod
+    def _insider() -> Agent:
+        return Agent(
+            name="insider",
+            scopes={"corp/merger": ["intent", "action"]},
+            read_scopes=frozenset({"corp/merger"}),
+        )
+
+    def test_conflict_withholds_unreadable_winning_intent(self):
+        s = self._space()
+        guard = Guard(s)
+        insider = self._insider()
+        assert guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9).verdict == (
+            GuardVerdict.ALLOW
+        )
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        d = guard.pre_action(outsider, "corp", "acme", "buy", 0.1)
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert d.winning_intent is None
+        assert all(i.scope != "corp/merger" for i in d.conflicting_intents)
+        assert "0.9" not in d.reason and "corp/merger" not in d.reason
+
+    def test_conflict_names_readable_winning_intent(self):
+        s = self._space()
+        guard = Guard(s)
+        insider = self._insider()
+        guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9)
+        reader = Agent(
+            name="reader",
+            scopes={"corp": ["intent", "action"]},
+            read_scopes=frozenset({"corp"}),
+        )
+        d = guard.pre_action(reader, "corp", "acme", "buy", 0.1)
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert d.winning_intent is not None
+        assert d.winning_intent.agent_id == insider.id
+
+    def test_claimed_resource_reason_hides_unreadable_agent(self):
+        s = self._space()
+        guard = Guard(s)
+        insider = self._insider()
+        decision, _ = guard.execute(
+            agent=insider,
+            scope="corp/merger",
+            resource="acme",
+            intent_action="buy",
+            result_action="bought",
+            tool_fn=lambda: "ok",
+        )
+        assert decision.verdict == GuardVerdict.ALLOW
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        d = guard.pre_action(outsider, "corp", "acme", "buy", 0.1)
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert str(insider.id) not in d.reason
+
+    def test_allow_reason_does_not_reveal_a_hidden_competitor(self):
+        s = self._space()
+        guard = Guard(s)
+        guard.pre_action(self._insider(), "corp/merger", "acme", "buy", 0.1)
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        d = guard.pre_action(outsider, "corp", "acme", "buy", 0.9)
+        assert d.verdict == GuardVerdict.ALLOW
+        assert d.conflicting_intents == []
+        assert d.reason == "No conflict"  # what an agent alone is told
+
+    def test_telemetry_counts_conflicts_the_agent_cannot_see(self):
+        sink = InMemorySink()
+        s = self._space()
+        guard = Guard(s, telemetry=sink)
+        guard.pre_action(self._insider(), "corp/merger", "acme", "buy", 0.9)
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        guard.execute(
+            agent=outsider,
+            scope="corp",
+            resource="acme",
+            intent_action="buy",
+            result_action="bought",
+            tool_fn=lambda: "ok",
+        )
+        execute_events = [e for e in sink.events if e.operation == "execute"]
+        assert execute_events and execute_events[-1].conflict_found is True
+
+    @staticmethod
+    def _deferred_space() -> MarkSpace:
+        from markspace import ScopeVisibility
+
+        s = MarkSpace(
+            scopes=[
+                Scope(
+                    name="legal", visibility=ScopeVisibility.CLASSIFIED, deferred=True
+                ),
+                Scope(name="corp", visibility=ScopeVisibility.PROTECTED, deferred=True),
+                Scope(name="corp/merger", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        s.set_clock(1000000.0)
+        return s
+
+    def test_deferred_decision_withholds_unreadable_winner(self):
+        s = self._deferred_space()
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"legal": ["intent", "action"]})
+        b = Agent(name="b", scopes={"legal": ["intent", "action"]})
+        guard.pre_action(a, "legal", "case", "file", 0.9)
+        guard.pre_action(b, "legal", "case", "file", 0.2)
+        decisions = guard.resolve_deferred("legal", "case", agents={a.id: a, b.id: b})
+        d = decisions[b.id]
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert d.winning_intent is None
+        assert d.conflicting_intents == []
+        assert str(a.id) not in d.reason and "0.9" not in d.reason
+
+    def test_deferred_decision_without_agents_withholds_non_open_intents(self):
+        s = self._deferred_space()
+        guard = Guard(s)
+        insider = self._insider()
+        guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9)
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        guard.pre_action(outsider, "corp", "acme", "buy", 0.1)
+        d = guard.resolve_deferred("corp", "acme")[outsider.id]
+        assert d.winning_intent is None
+        assert all(i.agent_id != insider.id for i in d.conflicting_intents)
+        assert str(insider.id) not in d.reason
+
+    def test_allow_reason_with_hidden_competitor_equals_lone_agent_reason(self):
+        s = self._space()
+        guard = Guard(s)
+        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
+        alone = guard.pre_action(outsider, "corp", "solo", "buy", 0.9)
+        guard.pre_action(self._insider(), "corp/merger", "acme", "buy", 0.1)
+        beat_hidden = guard.pre_action(outsider, "corp", "acme", "buy", 0.9)
+        assert alone.verdict == beat_hidden.verdict == GuardVerdict.ALLOW
+        assert beat_hidden.reason == alone.reason
+
+    def test_allow_names_a_visible_competitor(self):
+        s = self._space()
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"corp": ["intent", "action"]})
+        b = Agent(name="b", scopes={"corp": ["intent", "action"]})
+        guard.pre_action(a, "corp", "acme", "buy", 0.1)
+        d = guard.pre_action(b, "corp", "acme", "buy", 0.9)
+        assert d.verdict == GuardVerdict.ALLOW
+        assert d.reason == "This agent wins the conflict"
+        assert [i.agent_id for i in d.conflicting_intents] == [a.id]
+
+    def test_deferred_decision_names_a_readable_winner(self):
+        s = self._deferred_space()
+        guard = Guard(s)
+        a = Agent(
+            name="a",
+            scopes={"legal": ["intent", "action"]},
+            read_scopes=frozenset({"legal"}),
+        )
+        b = Agent(
+            name="b",
+            scopes={"legal": ["intent", "action"]},
+            read_scopes=frozenset({"legal"}),
+        )
+        guard.pre_action(a, "legal", "case", "file", 0.9)
+        guard.pre_action(b, "legal", "case", "file", 0.2)
+        d = guard.resolve_deferred("legal", "case", agents={a.id: a, b.id: b})[b.id]
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert d.winning_intent is not None and d.winning_intent.agent_id == a.id
+        assert [i.agent_id for i in d.conflicting_intents] == [a.id]
+
+    def test_deferred_decision_without_agents_names_open_intents(self):
+        s = MarkSpace(scopes=[Scope(name="desk", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"desk": ["intent", "action"]})
+        b = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        guard.pre_action(a, "desk", "d1", "book", 0.9)
+        guard.pre_action(b, "desk", "d1", "book", 0.2)
+        d = guard.resolve_deferred("desk", "d1")[b.id]
+        assert d.winning_intent is not None and d.winning_intent.agent_id == a.id
+        assert [i.agent_id for i in d.conflicting_intents] == [a.id]

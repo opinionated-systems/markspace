@@ -32,6 +32,7 @@ from markspace import (
     Severity,
     Source,
     Warning,
+    WatchPattern,
     compute_strength,
     effective_strength,
     hours,
@@ -1157,6 +1158,150 @@ class TestScopeVisibility:
         projected = project_mark(obs)
         assert projected.content is None  # type: ignore[union-attr]
         assert obs.content == "secret"  # original unchanged
+
+    # -- A defined child scope keeps its own visibility --
+
+    @staticmethod
+    def _nested_space() -> tuple[MarkSpace, Agent]:
+        """Parents with defined children of a different visibility, and a writer."""
+        s = MarkSpace(
+            scopes=[
+                Scope(name="pub"),
+                Scope(name="pub/secret", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="pub/hr", visibility=ScopeVisibility.PROTECTED),
+                Scope(name="corp", visibility=ScopeVisibility.PROTECTED),
+                Scope(name="corp/merger", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="corp/news"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(
+            name="w", scopes={"pub": ["observation"], "corp": ["observation"]}
+        )
+        for scope in ("pub/secret", "pub/hr", "corp/merger", "corp/news"):
+            s.write(
+                writer,
+                Observation(scope=scope, topic="t", content="X", source=Source.FLEET),
+            )
+        return s, writer
+
+    def test_p22_classified_child_hidden_in_open_parent_read(self) -> None:
+        """P22: Reading OPEN 'pub' must not return CLASSIFIED 'pub/secret' marks."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        marks = s.read(scope="pub", reader=outsider)
+        assert "pub/secret" not in {m.scope for m in marks}
+
+    def test_p21_protected_child_projected_in_open_parent_read(self) -> None:
+        """P21: Reading OPEN 'pub' returns PROTECTED 'pub/hr' marks projected."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        hr = [m for m in s.read(scope="pub", reader=outsider) if m.scope == "pub/hr"]
+        assert len(hr) == 1
+        assert hr[0].projected is True
+        assert hr[0].content is None  # type: ignore[union-attr]
+
+    def test_p25_classified_child_not_projected_in_protected_parent_read(
+        self,
+    ) -> None:
+        """P25: Reading PROTECTED 'corp' must not return CLASSIFIED 'corp/merger'
+        marks, not even projected."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        marks = s.read(scope="corp", reader=outsider)
+        assert "corp/merger" not in {m.scope for m in marks}
+
+    def test_p20_open_child_full_in_protected_parent_read(self) -> None:
+        """P20: A mark in OPEN 'corp/news' is read in full through PROTECTED 'corp'."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        news = [
+            m for m in s.read(scope="corp", reader=outsider) if m.scope == "corp/news"
+        ]
+        assert len(news) == 1
+        assert news[0].projected is False
+
+    def test_p26_parent_reader_sees_classified_child(self) -> None:
+        """P26: Read authorization for 'corp' covers CLASSIFIED 'corp/merger'."""
+        s, _ = self._nested_space()
+        reader = Agent(name="r", scopes={}, read_scopes=frozenset({"corp"}))
+        merger = [
+            m for m in s.read(scope="corp", reader=reader) if m.scope == "corp/merger"
+        ]
+        assert len(merger) == 1
+        assert merger[0].content == "X"  # type: ignore[union-attr]
+
+    def test_p22_open_child_of_classified_parent_read_like_direct_read(self) -> None:
+        """P22, P26: Reading CLASSIFIED 'legal' returns the marks of its OPEN
+        child 'legal/public' exactly as a direct read of 'legal/public' does."""
+        s = MarkSpace(
+            scopes=[
+                Scope(name="legal", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="legal/public"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(name="w", scopes={"legal": ["observation"]})
+        for scope in ("legal", "legal/public"):
+            s.write(
+                writer,
+                Observation(scope=scope, topic="t", content="X", source=Source.FLEET),
+            )
+        outsider = Agent(name="o", scopes={})
+        via_parent = {(m.scope, m.content) for m in s.read(scope="legal", reader=outsider)}  # type: ignore[union-attr]
+        direct = {(m.scope, m.content) for m in s.read(scope="legal/public", reader=outsider)}  # type: ignore[union-attr]
+        assert via_parent == direct == {("legal/public", "X")}
+
+    # -- Subscriptions deliver under the same visibility rules --
+
+    def test_p22_subscription_withholds_classified(
+        self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
+    ) -> None:
+        """P22: A subscription must not deliver CLASSIFIED marks to an agent
+        without read authorization."""
+        visibility_space.subscribe(
+            unauthorized_reader,
+            [WatchPattern(scope="legal", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="legal", topic="case", content="X", source=Source.FLEET),
+        )
+        assert visibility_space.get_watched_marks(unauthorized_reader) == []
+
+    def test_p21_subscription_projects_protected(
+        self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
+    ) -> None:
+        """P21: A subscription delivers PROTECTED marks projected to an agent
+        without read authorization."""
+        visibility_space.subscribe(
+            unauthorized_reader,
+            [WatchPattern(scope="hr", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="hr", topic="pay", content="X", source=Source.FLEET),
+        )
+        marks = visibility_space.get_watched_marks(unauthorized_reader)
+        assert len(marks) == 1
+        assert marks[0].projected is True
+        assert marks[0].content is None  # type: ignore[union-attr]
+
+    def test_p26_subscription_full_for_authorized_reader(
+        self, visibility_space: MarkSpace, writer: Agent, authorized_reader: Agent
+    ) -> None:
+        """P26: An authorized subscriber receives CLASSIFIED marks in full."""
+        visibility_space.subscribe(
+            authorized_reader,
+            [WatchPattern(scope="legal", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="legal", topic="case", content="X", source=Source.FLEET),
+        )
+        marks = visibility_space.get_watched_marks(authorized_reader)
+        assert len(marks) == 1
+        assert marks[0].content == "X"  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
