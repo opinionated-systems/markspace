@@ -39,6 +39,7 @@ Scenario design and agent configuration: [`design.md`](design.md).
   - [7.3 Warning injection attempts](#73-warning-injection-attempts)
   - [7.4 Key finding](#74-key-finding)
 - [8. Strengths and Limitations](#8-strengths-and-limitations)
+- [9. Re-run on DeepSeek V4.1 Flash 1017](#9-re-run-on-deepseek-v41-flash-1017)
 
 ## Summary
 
@@ -52,7 +53,7 @@ From the steps: no room, equipment item or task got ALLOW twice in one round acr
 
 **Cost: ~8.0M tokens and 470 seconds of wall clock time.** Each agent consumed an average of 76K tokens across 6.8 active rounds.
 
-All agents ran gpt-oss-120b. No model comparison; the experiment targets protocol behavior.
+All agents ran gpt-oss-120b. [Section 9](#9-re-run-on-deepseek-v41-flash-1017) adds a re-run on DeepSeek V4.1 Flash 1017 with a 2048-token thinking budget: no resource allowed twice in one round, every cross-department write denied, 64.5% mean manifest completion against 58.8% (one run each), $2.59.
 
 ---
 
@@ -460,7 +461,7 @@ The absolute week-time clock model (Mon 8:00 = 28,800s, ... Fri 12:00 = 388,800s
 | Per action mark | 8,581 | |
 | Per round (avg) | 795,471 | |
 
-Prompt tokens dominate (94.7%) because agents receive substantial context: system prompt with department info, manifest items, current bookings, warnings, and tool schemas. Completion tokens are lean; agents make tool calls with minimal reasoning.
+Prompt tokens dominate (94.7%) because agents receive substantial context: system prompt with department info, manifest items, current bookings, warnings, and tool schemas. Completion tokens are lean; agents make tool calls with minimal reasoning. A reasoning model moves the split: on DeepSeek V4.1 Flash 1017 with a 2048-token thinking budget, prompt tokens were 91.7% and output was 31% of the run's cost ([section 9](#9-re-run-on-deepseek-v41-flash-1017)).
 
 The 8,581 tokens per successful action is the protocol's coordination overhead. This includes the agent's context, failed attempts (41.8% overall waste rate), and view calls before booking. For comparison, a simple "book room X" API call would be ~100 tokens. The ~86x overhead is the cost of decentralized coordination without a central scheduler. Google's data shows centralized MAS adds 285% token overhead and decentralized (peer-to-peer) adds 263%. This architecture avoids inter-agent messaging entirely. The overhead comes from tool schemas and mark-space reads.
 
@@ -554,3 +555,50 @@ The protocol enforces invariants regardless of what the agent's prompt says. Adv
 **What the protocol cannot solve:**
 - Strategic planning: agents have no cross-round memory; each round is a fresh decision with no ability to reason about future availability
 - Demand-pressure visibility: an agent sees 3 open rooms but cannot know 40 others are about to pick the same one; the protocol shows current state, not impending contention
+
+---
+
+## 9. Re-run on DeepSeek V4.1 Flash 1017
+
+Run on 2026-11-01 with the main run's scenario (105 agents, 10 rounds, seed 42), `--adversarial 5` (in the default `confidence` mode) and `--max-concurrent 20`, on `accounts/fireworks/models/deepseek-v4p1-flash-1017` (Fireworks), with `--reasoning-effort 2048` (a 2048-token thinking budget per call) and `--pace-start-rps 0.25`. Results: [`results_deepseek_v4p1_flash_1017_r2048_paced/`](results_deepseek_v4p1_flash_1017_r2048_paced/).
+
+What the comparison holds fixed, and what it does not:
+
+- **Protocol code.** The run used the code of markspace 6d27ab3. Later changes to scope visibility and to conflicts across scope trees do not touch this scenario: it registers no parent scope next to its child scopes and uses no subscriptions. The later write-order change does: each round runs at one simulated time, so on 6d27ab3 every mark of a round had the same `created_at`, and a tie between equal intents, in the guard and in `run.py`'s parking and boardroom resolution, went to the random mark id. With `created_at` strictly increasing per resource within one scope (P32), the earlier write wins such ties, so later runs can differ. Leases (spec 6.5) change it too: in an immediate HIGHEST_CONFIDENCE scope a later intent with higher confidence no longer takes a resource whose tool still runs, and `run.py` now grants the boardroom and parking winners as the principal. The stored runs show no resource allowed twice in one round, so no such overtake happened in them.
+- **Safety metrics.** Both runs report 0 double bookings and 0 scope violations whatever happened: the harness's double-booking metric dropped every action that superseded its own intent, which every guard action does, and its scope-violation counter was never incremented. `run.py` now counts double bookings from the guard's decisions, counts the bookings that come back after a warning decays apart, and checks every mark it hands an agent. The safety rows below come from the stored steps and bot logs (`stored_run_safety.py`).
+- **Harness.** The main run (sections 1 to 8) was made with an earlier `run.py`, which wrote a need mark for every boardroom request: 94 of its 126 need marks. The `run.py` of 6d27ab3 writes none for boardroom requests. The main run's parking bot pre-booked 14 visitor spots; in this run it pre-booked none, because the `run.py` of 6d27ab3 defers the parking scope and the bot's `execute` gets BLOCKED, so agents received 150 parking spots here against 136 in the main run. The main run's request rate is not recorded.
+- **Pacing.** The run used the first version of the pacer: it raised the rate by 0.25 requests per second every 60 s while no 429 arrived and the last minute's generated tokens stayed below 60% of the limit the provider reported, halved the rate on a 429, and did not read the over-limit header. The current pacer (`pacing.py`) adds: a cut or a Retry-After also delays callers already waiting; no request starts before a Retry-After has passed; the over-limit header cuts the rate; and a step needs a 200 in its window, no 5xx or timeout, and callers that used about the whole rate.
+- **Earlier attempts.** Two earlier attempts on the same model are not counted. Without pacing, 429s opened the client's circuit breaker after 4 consecutive failures, and 874 of 1,418 steps failed: 1 on HTTP 429 and 873 on the open breaker (manifest completion 10.7% to 14.5%). A second attempt at a fixed 2.5 requests per second (`--requests-per-second 2.5`) was stopped before it finished a round.
+
+| | gpt-oss-120b (main run) | DeepSeek V4.1 Flash 1017 |
+|---|---|---|
+| Resources allowed twice in one round, lunch windows over capacity (from the steps) | 0, 0 | 0, 0 |
+| Cross-department writes denied | 158 of 158 | 90 of 90 |
+| Agents with two parking spots on one day (bot logs; each spot went to one agent) | 8 | 0 |
+| Action marks | 927 | 903 |
+| Projected reads | 8,197 | 9,833 |
+| Steps (wasted) | 2,620 (1,096, 41.8%) | 2,862 (818, 28.6%) |
+| Steps per agent per round | 3.68 | 4.09 |
+| Verdicts: allow, conflict, blocked, denied | 767, 475, 431, 190 | 743, 318, 393, 107 |
+| Need marks for lunch | 32 | 17 |
+| Manifest completion, mean of departments | 58.8% | 64.5% |
+| Lunch preference satisfied, mean of departments | 70.8% | 68.5% |
+| Wall clock | 470 s | 1,258 s (paced) |
+| Prompt tokens | 7,531,757 | 7,502,517 (21.5% served from cache) |
+| Completion tokens | 422,956 | 680,778 (62.8% thinking) |
+| Input-to-output ratio | 17.8:1 | 11.0:1 |
+| LLM calls | not recorded | 2,555 |
+| Cost at the [guide's](../guide.md#cost) prices | $1.38 ($1.13 input, $0.25 output; no cached tokens recorded) | $2.59 ($1.78 input, $0.82 output) |
+
+| Department | gpt-oss-120b | DeepSeek V4.1 Flash 1017 |
+|---|---|---|
+| eng | 61.6% | 65.5% |
+| design | 56.0% | 64.2% |
+| product | 52.7% | 64.2% |
+| sales | 58.8% | 60.6% |
+| ops | 64.8% | 68.0% |
+
+- **No double booking and no cross-department write found.** From the stored steps: no resource got ALLOW twice in one round and no lunch window went over capacity, in this run, the main run and all 27 [trial](../trials/analysis.md#6-cross-experiment-safety) runs; every cross-department write was denied (in the trial runs, 6 of them by the harness before the guard). Rooms that another agent booked again in a later round of the same week (4 here, 6 in the main run) all follow a building-ops warning on that room, which frees the first booking until it decays. Read leaks were not measured in these runs.
+- **Completion was higher in every department** (by 1.8 to 11.5 points) with fewer wasted steps. The 5.7-point gap in the mean is large against the seed-to-seed standard deviation of the [trials](../trials/analysis.md) (0.7 points for gpt-oss-120b, 1.4 for mercury-2; five seeds, 20 rounds). It is still one run per model, and the runs differ in more than the model: the DeepSeek run was paced, and the main run used an earlier `run.py`. The gap is not the model's alone.
+- **Reasoning moves cost toward output.** Thinking tokens were 62.8% of the output, 167 per call on average; 31 of 2,555 calls reached the 2048-token budget, and 18 went over it by 12 or 13 tokens. Output cost $0.82 of $2.59 (31%), against $0.25 of $1.38 (18%) for gpt-oss-120b in the main run, and 20% (gpt-oss-120b) and 5% (mercury-2) in the [multi-trial runs](../trials/results/multi_trial/analysis.md#6-token-economics). Prices: $0.30 per million uncached prompt tokens, $0.006 per million cached, $1.20 per million output tokens (the model's Fireworks page, read 2026-10-29 and 2026-10-30).
+- **No rate cut.** The client reported every response that was not a 200 to the pacer, and that pacer halved the rate and logged it on each 429. `pacer.jsonl` records 19 steps, from 0.25 to 5 requests per second, and no cut, so no call got HTTP 429. Over-limit signals are not known: that pacer did not read the header, and the run stored no response headers. At the step checks, the last minute's generated tokens peaked at 58,576, 42% of the reported limit of 140,625 tokens per minute (per-call usage has no timestamps, so the peak between checks is not known). The wall clock was 2.7 times the main run's: the pacing, the model and the larger output (680,778 against 422,956 completion tokens) all add to it, and one run does not separate them. Pacing also spaces the agents' calls, so contention timing differs from the main run.

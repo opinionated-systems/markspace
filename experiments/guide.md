@@ -90,7 +90,7 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--model` | `gpt-oss-120b` | Model short name |
 | `--max-concurrent` | 20 | Max concurrent agent executions |
 | `--requests-per-second` | 0 | Fixed rate limit (0 = unlimited); not together with `--pace-start-rps` |
-| `--reasoning-effort` | none | Sent as `reasoning_effort`: a level name, or an integer token budget. Fireworks' chat-completions reference calls an integer of 1024 or more a hard thinking budget on DeepSeek V4.1 |
+| `--reasoning-effort` | none | Sent as `reasoning_effort`: a level name, or an integer token budget. Fireworks' chat-completions reference calls an integer of 1024 or more a hard thinking budget on DeepSeek V4.1; in a run at 2048, 18 of 2,555 calls went over it by 12 or 13 tokens |
 | `--pace-start-rps` | none | Turn on pacing ([`pacing.py`](stress_test/pacing.py)), starting at this many requests per second |
 | `--pace-step-rps` | 0.25 | Rate added per step |
 | `--pace-step-seconds` | 60 | Length of a step window |
@@ -285,6 +285,7 @@ Model pricing per million tokens (check provider pages for current rates):
 |-------|--------|------------|----------|
 | [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 | $0.60 | [Fireworks](https://fireworks.ai/) |
 | [mercury-2](https://docs.inceptionlabs.ai/) | $0.25 | $0.75 | [Inception AI](https://www.inceptionlabs.ai/) |
+| deepseek-v4p1-flash-1017 | $0.30 ($0.006 cached) | $1.20 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-10-30) |
 
 Actual costs from trial data (105 agents, 20 rounds, averaged across 5 seeds):
 
@@ -295,3 +296,5 @@ Actual costs from trial data (105 agents, 20 rounds, averaged across 5 seeds):
 | 1,050 agents | ~$132 | - |
 
 Mercury-2 uses ~80% fewer completion tokens than gpt-oss-120b but has a higher per-token prompt rate, so baseline per-run cost is similar. Scaling costs are dominated by prompt tokens - context grows with agent count.
+
+Measured single run, DeepSeek V4.1 Flash 1017 (105 agents, 10 rounds, thinking budget 2048, paced; the prices above): $2.59, of which $0.82 for output ([stress test, section 9](stress_test/analysis.md#9-re-run-on-deepseek-v41-flash-1017)).
