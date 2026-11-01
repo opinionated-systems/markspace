@@ -3,7 +3,7 @@
 **Version**: 2026-03-23-draft
 **Status**: Working draft
 
-This document is the formal specification for the markspace protocol. For the ideas and motivation behind it, see [framework.md](framework.md).
+This document is the formal specification for the markspace protocol. For the ideas and the motivation behind the protocol, read [framework.md](framework.md).
 
 ## Contents
 
@@ -85,33 +85,37 @@ This document is the formal specification for the markspace protocol. For the id
 
 ## Abstract
 
-This document specifies a coordination protocol for autonomous agent fleets based on indirect coordination through marks left in a shared environment (stigmergy). The protocol defines five mark types, their lifecycle semantics, and the operations agents perform on them. A conforming implementation enables N agents to coordinate without direct communication, central scheduling, or consensus protocols.
+This document specifies a coordination protocol for fleets of autonomous agents. The agents coordinate indirectly, through marks that they leave in a shared environment (stigmergy). The protocol defines five mark types, the lifecycle semantics of these mark types, and the operations that agents do on the marks. An implementation that conforms to this specification lets N agents coordinate without direct communication, a central scheduler or consensus protocols.
 
-The specification is accompanied by a Python reference implementation and property tests. Every normative statement (MUST, SHOULD, MAY) maps to an executable test. The reference implementation demonstrates that these properties hold together consistently; any language can reimplement it by satisfying the same test suite.
+A Python reference implementation and property tests accompany this specification. Every normative statement (MUST, SHOULD, MAY) maps to an executable test. The reference implementation shows that these properties hold together consistently. Any language can reimplement it, if the new implementation satisfies the same test suite.
 
-**Verification level.** The 46 mandatory properties (P1-P39, P47 and P71-P76) are verified empirically through Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)), not through formal model checking (e.g., [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47), or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests exercise each property across randomized inputs and edge cases, and the [stress test](../experiments/stress_test/analysis.md) exercises P1-P39 and P47 under realistic concurrent load (its stored runs predate P71-P76) - up to 1,050 agents across 20 rounds with adversarial participants, no double booking found across all 21 trial runs and 4,010 agent instances (from their stored steps) ([trial results](../experiments/trials/analysis.md)). This provides high confidence that the properties hold in practice but does not constitute a formal proof. A formal verification effort would strengthen the safety guarantees, particularly for P11 (Determinism) and P12 (Progress), which make claims about all possible states.
+**Verification level.** Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)) verify the 46 mandatory properties (P1-P39, P47 and P71-P76) empirically. The verification does not use formal model checking (for example, [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47) or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests apply randomized inputs and edge cases to each property.
+
+The [stress test](../experiments/stress_test/analysis.md) tests P1-P39 and P47 under a realistic concurrent load. Its stored runs are older than P71-P76. It uses up to 1,050 agents across 20 rounds, with adversarial participants. The [trial results](../experiments/trials/analysis.md) show no double booking across all 21 trial runs and 4,010 agent instances (from their stored steps).
+
+This evidence gives high confidence that the properties hold in practice. It is not a formal proof. A formal verification effort would make the safety guarantees stronger, particularly for P11 (Determinism) and P12 (Progress). These two properties make claims about all possible states.
 
 ## 1. Terminology
 
-The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
+In this document, the key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" have the meanings that [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) describes.
 
-**Mark**: A typed record written to a shared space by an agent. The fundamental unit of coordination.
+**Mark**: A typed record that an agent writes to a shared space. The mark is the basic unit of coordination.
 
-**Mark Space**: The shared environment where marks are stored. Agents interact only through the mark space, never directly with each other.
+**Mark Space**: The shared environment that stores the marks. Agents interact only through the mark space. Agents never interact directly with each other.
 
 **Agent**: An autonomous process with an identity and a set of scope permissions. Agents read and write marks. Agents do not communicate with other agents.
 
-**Scope**: A namespace that defines what kinds of marks can exist within it, their decay parameters, and conflict resolution rules.
+**Scope**: A namespace that defines the kinds of marks that can exist in it, their decay parameters and the conflict resolution rules.
 
-**Strength**: A non-negative real number representing a mark's current influence. Computed at read time from the mark's initial strength, age, decay function, and trust source.
+**Strength**: A non-negative real number that represents the current influence of a mark. An implementation computes it at read time from the initial strength, age, decay function and trust source of the mark.
 
-**Principal**: The human (or system) that agents serve. The principal interacts with the system by writing action marks that resolve needs.
+**Principal**: The human (or system) that the agents serve. To interact with the system, the principal writes action marks that resolve needs.
 
-**Freshness**: The time-dependent component of strength. All marks except actions and unresolved needs decay over time.
+**Freshness**: The component of strength that depends on time. All marks except actions and unresolved needs decay over time.
 
 ## 2. Mark Types
 
-There are exactly five mark types. An implementation MUST support all five. An implementation MUST NOT define additional mark types at the protocol level. (Domain-specific semantics are expressed through scope definitions, not new mark types.)
+There are exactly five mark types. An implementation MUST support all five. An implementation MUST NOT define additional mark types at the protocol level. (Scope definitions, not new mark types, express domain-specific semantics.)
 
 ### 2.1 Common Fields
 
@@ -163,11 +167,18 @@ message IntentMark {
 ```
 
 **Lifecycle**:
-- An intent mark MUST have a TTL, defined by the scope.
-- An intent mark MUST be removed (strength → 0) when its TTL expires.
-- An intent mark SHOULD be superseded by a corresponding action mark when the agent executes the planned action.
-- An intent mark that is not followed by an action mark before TTL expiry indicates the agent abandoned the plan. No cleanup is required; expiry handles cleanup.
-- Before an agent may act on its intent, the guard gives the intent a **lease**: the right to use the resource for a limited time (Section 6.5). Until then the intent waits; the guard can also turn it down. The lease ends when the agent's action is recorded, when the agent's tool fails, when the agent supersedes the intent with a mark that is not an action, when the principal ends it, or when its time runs out. The guard keeps its leases in its own table, not as marks: an agent that reads the mark space does not see them. A lease can last longer than its intent mark.
+- An intent mark MUST have a TTL that the scope defines.
+- The strength of an intent mark MUST become 0 (the mark is removed) when its TTL expires.
+- When the agent does the planned action, a corresponding action mark SHOULD supersede the intent mark.
+- An intent mark that no action mark follows before its TTL expires shows that the agent abandoned the plan. No cleanup is necessary. The expiry does the cleanup.
+- Before an agent can act on its intent, the guard gives the intent a **lease** (Section 6.5). A lease is the right to use the resource for a limited time. Until the guard gives the lease, the intent waits. The guard can also reject the intent.
+- The lease ends when one of these events occurs:
+  - The mark space records the agent's action.
+  - The agent's tool fails.
+  - The agent supersedes the intent with a mark that is not an action.
+  - The principal ends the lease.
+  - The lease expires.
+- The guard keeps its leases in its own lease table, not as marks. An agent that reads the mark space does not see the leases. A lease can last longer than its intent mark.
 
 **Conflict semantics**: See [Section 6](#6-conflict-resolution).
 
@@ -194,14 +205,14 @@ message ActionMark {
 **Lifecycle**:
 - Action marks MUST NOT decay. Their strength is constant for all time.
 - Action marks are historical facts. They are the ground truth of the system.
-- An action mark MAY supersede a prior mark (action or intent). A superseded mark's effective strength becomes 0.
-- An action mark with `failed = true` records that the tool threw an exception. Failed actions MUST NOT claim the resource - the guard treats them as non-blocking so other agents can proceed ([Section 9](#9-guard-deterministic-enforcement-layer)).
+- An action mark MAY supersede a prior mark (an action or an intent). The effective strength of a superseded mark becomes 0.
+- An action mark with `failed = true` records that the tool threw an exception. Failed actions MUST NOT claim the resource. The guard treats failed actions as non-blocking, so other agents can proceed ([Section 9](#9-guard-deterministic-enforcement-layer)).
 
 Ref: [`markspace/core.py::Action`](../markspace/core.py)
 
 ### 2.4 Observation
 
-An observation mark records something an agent perceived about the world.
+An observation mark records something that an agent perceived about the world.
 
 Additional fields (all MUST):
 
@@ -222,11 +233,11 @@ message ObservationMark {
 ```
 
 **Lifecycle**:
-- Observation marks MUST decay over time according to the scope's `observation_half_life`.
+- Observation marks MUST decay over time, as the scope's `observation_half_life` specifies.
 - Decay MUST be exponential: `strength(t) = initial_strength * 0.5^(age / half_life)`.
-- An observation mark with strength below a threshold (RECOMMENDED: 0.01) MAY be garbage collected.
+- An implementation MAY garbage collect an observation mark with strength below a threshold (RECOMMENDED: 0.01).
 
-**Reinforcement**: Multiple observation marks on the same scope + topic combine via the reinforcement function ([Section 5](#5-reinforcement)). Independent convergent observations strengthen the signal.
+**Reinforcement**: Multiple observation marks on the same scope and topic combine through the reinforcement function ([Section 5](#5-reinforcement)). Independent observations that agree make the signal stronger.
 
 Ref: [`markspace/core.py::Observation`](../markspace/core.py)
 
@@ -253,9 +264,9 @@ message WarningMark {
 ```
 
 **Lifecycle**:
-- Warning marks MUST decay over time with a shorter half-life than observations (RECOMMENDED: scope's `warning_half_life`, typically < `observation_half_life`).
-- Decay MUST be exponential, same formula as observations.
-- A warning mark that references `invalidates` MUST reduce the effective strength of the target mark. The reduction amount equals the warning's current strength.
+- Warning marks MUST decay over time with a shorter half-life than observations (RECOMMENDED: the scope's `warning_half_life`, typically < `observation_half_life`).
+- Decay MUST be exponential, with the same formula as for observations.
+- A warning mark that references `invalidates` MUST reduce the effective strength of the target mark. The reduction is equal to the current strength of the warning.
 
 Ref: [`markspace/core.py::Warning`](../markspace/core.py)
 
@@ -277,19 +288,19 @@ message NeedMark {
 ```
 
 **Lifecycle**:
-- Unresolved need marks (resolved_by is None) MUST NOT decay. They persist at full strength indefinitely.
+- Unresolved need marks (resolved_by is None) MUST NOT decay. They keep full strength for an unlimited time.
 - Resolved need marks (resolved_by is set) MUST immediately have strength 0.
-- Need marks are resolved when the principal writes an action mark scoped to the need.
+- A need mark becomes resolved when the principal writes an action mark scoped to the need.
 
 Ref: [`markspace/core.py::Need`](../markspace/core.py)
 
 ## 3. Decay
 
-Decay is the mechanism that keeps the mark space current. It is the stigmergic equivalent of pheromone evaporation. The exponential decay model has theoretical grounding in the [Age of Information](https://doi.org/10.1109/ISIT.2012.6283535) (AoI) literature (Kaul et al., 2012), which shows that monotonically decreasing freshness functions are optimal for status-update systems.
+Decay is the mechanism that keeps the mark space current. It is the stigmergic equivalent of pheromone evaporation. The exponential decay model has a theoretical basis in the [Age of Information](https://doi.org/10.1109/ISIT.2012.6283535) (AoI) literature (Kaul et al., 2012). This literature shows that monotonically decreasing freshness functions are optimal for status-update systems.
 
 ### 3.1 Decay Rules
 
-An implementation MUST compute mark strength at **read time**, not write time. Marks are not modified in storage; their effective strength is a pure function of the mark's properties and the current time.
+An implementation MUST compute mark strength at **read time**, not at write time. Marks stay unchanged in storage. The effective strength of a mark is a pure function of the properties of the mark and the current time.
 
 ```
 strength(mark, now) → float
@@ -311,29 +322,29 @@ Ref: [`markspace/core.py::compute_strength`](../markspace/core.py)
 
 **P1: Decay Monotonicity**: For observation and warning marks, strength MUST be a monotonically non-increasing function of time. For all `t2 > t1`: `strength(mark, t2) <= strength(mark, t1)`.
 
-**P2: Action Permanence**: For non-superseded action marks, base strength MUST be constant. For all `t1, t2`: `compute_strength(action_mark, t1) == compute_strength(action_mark, t2)`. A superseded action's effective strength is 0 (Section 10), but its base strength remains unchanged - supersession affects visibility, not the underlying record.
+**P2: Action Permanence**: For non-superseded action marks, base strength MUST be constant. For all `t1, t2`: `compute_strength(action_mark, t1) == compute_strength(action_mark, t2)`. The effective strength of a superseded action is 0 (Section 10). Its base strength does not change. Supersession changes whether the action is visible, not the underlying record.
 
-**P3: Convergence**: Given no new marks, the total strength of all transient marks (observations + warnings) in the space MUST converge to 0 as t -> infinity.
+**P3: Convergence**: If the mark space receives no new marks, the total strength of all its transient marks MUST converge to 0 as t -> infinity. The transient marks are the observations and the warnings.
 
-**P4: Intent Expiry**: An intent mark's strength MUST be 0 for all `t > created_at + ttl`.
+**P4: Intent Expiry**: The strength of an intent mark MUST be 0 for all `t > created_at + ttl`.
 
-**P5: Need Persistence**: An unresolved need mark's strength MUST equal its initial strength for all t.
+**P5: Need Persistence**: The strength of an unresolved need mark MUST equal its initial strength for all t.
 
 Ref: [`tests/test_properties.py::TestDecayProperties`](../tests/test_properties.py)
 
 ## 4. Trust
 
-Trust is source-based weighting applied to marks when computing their effective strength.
+Trust is a weight that depends on the source of a mark. An implementation applies the trust weight when it computes the effective strength of a mark.
 
 ### 4.1 Source Levels
 
-Three source levels, in strict total order:
+There are three source levels, in a strict total order:
 
 ```
 fleet  >  external_verified  >  external_unverified
 ```
 
-An implementation MUST assign trust weights that preserve this order. The RECOMMENDED weights:
+An implementation MUST assign trust weights that preserve this order. The RECOMMENDED weights are:
 
 | Source | Weight |
 |--------|--------|
@@ -343,31 +354,31 @@ An implementation MUST assign trust weights that preserve this order. The RECOMM
 
 ### 4.2 Effective Strength
 
-The effective strength of a mark, incorporating both decay and trust:
+The effective strength of a mark includes both decay and trust:
 
 ```
 effective_strength(mark, now) = compute_strength(mark, now) * trust_weight(mark.source)
 ```
 
-For mark types that don't have a `source` field (intent, action, warning, need), trust weight MUST be 1.0 (these marks are always fleet-internal).
+For mark types that do not have a `source` field (intent, action, warning, need), the trust weight MUST be 1.0. These marks are always fleet-internal.
 
 ### 4.3 Formal Properties
 
-**P6: Trust Ordering**: For two marks with identical properties except source, a mark with a higher-trust source MUST have higher effective strength. For all t: `effective_strength(fleet_mark, t) >= effective_strength(verified_mark, t) >= effective_strength(unverified_mark, t)`.
+**P6: Trust Ordering**: If two marks have identical properties except their source, the mark with the higher-trust source MUST have a higher effective strength. For all t: `effective_strength(fleet_mark, t) >= effective_strength(verified_mark, t) >= effective_strength(unverified_mark, t)`.
 
-**P7: Trust Bounds**: Effective strength MUST be in [0.0, max_strength * 1.0]. Trust weighting MUST NOT amplify strength beyond the base decay value.
+**P7: Trust Bounds**: Effective strength MUST be in [0.0, max_strength * 1.0]. The trust weight MUST NOT increase strength above the base decay value.
 
 Ref: [`markspace/core.py::trust_weight`](../markspace/core.py), [`tests/test_properties.py::TestTrustProperties`](../tests/test_properties.py)
 
 ## 5. Reinforcement
 
-When multiple marks exist on the same scope + topic, they combine to produce an aggregate signal. The reinforcement function is a utility: `read()` returns individual marks with their effective strengths; callers wanting an aggregate signal call `reinforce()` on the returned strengths. This separation keeps reads simple and lets callers choose whether to aggregate.
+When multiple marks exist on the same scope and topic, they combine into an aggregate signal. The reinforcement function is a utility. `read()` returns individual marks with their effective strengths. A caller that wants an aggregate signal calls `reinforce()` on the returned strengths. This separation keeps reads simple and lets callers choose whether to aggregate.
 
 ### 5.1 Combination Rule
 
-Reinforcement MUST be **sublinear**. N identical marks MUST produce aggregate strength less than N times a single mark's strength. This prevents mark flooding.
+Reinforcement MUST be **sublinear**. N identical marks MUST produce an aggregate strength less than N times the strength of a single mark. This rule prevents a flood of marks.
 
-The RECOMMENDED combination:
+The RECOMMENDED combination is:
 
 ```
 Given marks [m1, m2, ..., mn] on the same scope+topic, sorted by effective_strength descending:
@@ -385,7 +396,11 @@ Where:
 
 ### 5.2 Grouping
 
-Marks are grouped for reinforcement by `(scope, topic)` for observations and warnings, and by `(scope, resource)` for intents and actions. Need marks are not reinforced (each need is unique to an agent).
+Reinforcement groups marks by these keys:
+- Observations and warnings: `(scope, topic)`.
+- Intents and actions: `(scope, resource)`.
+
+Reinforcement does not apply to need marks (each need is unique to an agent).
 
 ### 5.3 Formal Properties
 
@@ -393,152 +408,350 @@ Marks are grouped for reinforcement by `(scope, topic)` for observations and war
 
 **P9: Boundedness**: `aggregate_strength(any number of marks) <= REINFORCEMENT_CAP`.
 
-**P10: Monotonic Addition**: Adding a positive-strength mark MUST NOT decrease aggregate strength. `aggregate_strength(marks + [new_mark]) >= aggregate_strength(marks)` when `effective_strength(new_mark) > 0`.
+**P10: Monotonic Addition**: The addition of a mark with positive strength MUST NOT decrease the aggregate strength. `aggregate_strength(marks + [new_mark]) >= aggregate_strength(marks)` when `effective_strength(new_mark) > 0`.
 
 Ref: [`markspace/core.py::reinforce`](../markspace/core.py), [`tests/test_properties.py::TestReinforcementProperties`](../tests/test_properties.py)
 
 ## 6. Conflict Resolution
 
-When two or more agents write intent marks targeting the same resource in the same scope, or in two scopes where one contains the other (`corp` and `corp/merger`), a conflict exists. Sibling scopes (`corp/a` and `corp/b`) do not compete. An intent's **competing set** is every active intent on the resource in its own scope, its ancestors and its descendants; in this section and in Section 9, `(scope, resource)` means that set. Competing is not transitive (`corp/a` and `corp/b` both compete with `corp`, not with each other), so each intent is judged against its own competing set (Section 6.1). Conflict resolution is deterministic. The guard decides from the marks and from its own table of leases: which intents may act now, and which it turned down (Section 6.5). The table is not part of the mark space, so an agent that reads only the marks can anticipate the guard's decision but cannot tell an intent that holds a lease from one that waits.
+A conflict exists when two or more agents write intent marks on the same resource in the same scope. A conflict also exists when the intent marks are in two scopes and one scope contains the other (`corp` and `corp/merger`). Sibling scopes (`corp/a` and `corp/b`) do not compete.
+
+The **competing set** of an intent is every active intent on the resource in its own scope, its ancestors and its descendants. In this section and in Section 9, `(scope, resource)` means that set. Competition is not transitive. For example, `corp/a` and `corp/b` both compete with `corp`, but they do not compete with each other. Thus the judgment of each intent uses its own competing set (Section 6.1).
 
 <p align="center"><img src="../figures/competing_scopes.svg" alt="Competing set of an intent in corp/a: corp and corp/a/x compete, the sibling corp/b does not" width="320"></p>
 
+Conflict resolution is deterministic. The guard decides from the marks and from its own lease table (Section 6.5). The lease table records which intents can act now, and which intents the guard rejected. An agent that reads only the marks can predict the decision of the guard. But the lease table is not part of the mark space. Thus that agent cannot tell an intent that holds a lease from an intent that waits.
+
 ### 6.1 Resolution Protocol
 
-When an agent reads intent marks on a resource it also intends to modify:
+When an agent reads intent marks on a resource that it also intends to change, the agent does these steps:
 
-1. Collect the intent's competing set: all active intent marks (strength > 0) on `(scope, resource)`.
-2. If no other intents and no other agent's lease exist, proceed.
-3. If other intents exist, compare the intent with each of them. If either scope of a pair uses YIELD_ALL, the pair goes to the principal (YIELD_ALL below), unless another competitor beats the intent: then the intent loses. Otherwise the intent in the outer scope, the one that contains the other, wins; inside one scope, the scope's policy decides. The intent proceeds only if it wins every comparison. Every win points to an outer scope or follows one scope's order, so wins never form a cycle: no decision allows two competing intents, an intent's outcome does not depend on which scope's decision computes it, and if X beats a competitor of the intent, and that competitor beats the intent, then X also competes with and beats the intent. Within one scope this is the same as applying the scope's policy to the whole set. An implementation MAY judge a whole set at once: every intent in an outer scope beats every intent below it unless either scope is YIELD_ALL, so sorting each scope's intents once by its policy gives every intent's outcome, as in multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976); a beaten intent names the first intent of the outermost scope that beats it. Consequences: among waiting claims, an outer-scope intent pre-empts inner-scope intents whatever their order or confidence. A granted claim is not pre-empted: a guard grants the winning intent a lease (Section 6.5), and an intent that would beat another agent's live lease waits for it or yields. An intent whose competing set holds another agent's completed action (P39) cannot proceed and is closed for good, so it holds off no other intent.
+1. Collect the competing set of the intent: all active intent marks (strength > 0) on `(scope, resource)`.
+2. If there are no other intents and no lease of another agent, proceed.
+3. If other intents exist, compare the intent with each of them. Use these rules for each pair:
+   - If one or both scopes of the pair use YIELD_ALL, the pair goes to the principal (see YIELD_ALL below). But if another competitor beats the intent, the intent loses instead.
+   - Otherwise, the intent in the outer scope wins. The outer scope is the scope that contains the other scope.
+   - If the two intents are in one scope, the policy of that scope decides.
 
-The policies:
+   The intent proceeds only if it wins every comparison.
+
+Each win goes to the intent in the outer scope, or follows the order of one scope. Thus the wins never make a cycle. This has these results:
+
+- No decision allows two competing intents.
+- The outcome of an intent does not depend on which scope's decision computes it.
+- If X beats a competitor of the intent, and that competitor beats the intent, then X also competes with the intent and beats it.
+
+Inside one scope, these comparisons give the same result as one application of the policy of the scope to the whole set.
+
+An implementation MAY judge a whole set at once. Every intent in an outer scope beats every intent below it, unless one or both scopes are YIELD_ALL. Thus one sort of the intents of each scope, by the policy of that scope, gives the outcome of every intent. This method follows multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976). The judgment of a beaten intent names the first intent of the outermost scope that beats it.
+
+In this section, an intent, a lease or an action **blocks** an intent when it prevents a grant to that intent. This is not the verdict BLOCKED.
+
+This order has these consequences:
+
+- Among waiting claims, an intent in an outer scope pre-empts the intents in inner scopes. The order and the confidence of the intents do not change this result.
+- Nothing pre-empts a granted claim. A guard grants a lease to the winning intent (Section 6.5). An intent that would beat the live lease of another agent waits until that lease ends, or it yields.
+- An intent cannot proceed if its competing set holds a completed action of another agent (P39). The guard closes this intent permanently. Thus this intent blocks no other intent.
+
+These are the policies:
 
 **FIRST_WRITER**: The intent with the earliest `created_at` wins. All other agents MUST yield.
 
-**HIGHEST_CONFIDENCE**: The intent with the highest `confidence` wins. Ties broken by `created_at` (earliest wins). Losing agents MUST yield.
+**HIGHEST_CONFIDENCE**: The intent with the highest `confidence` wins. If two intents have the same confidence, the intent with the earliest `created_at` wins. The agents that lose MUST yield.
 
-**YIELD_ALL**: Each agent whose intent goes to the principal (step 3) MUST write a need mark requesting principal resolution; an intent that another competitor beats loses and writes none. No agent of such a pair proceeds until the principal decides.
+**YIELD_ALL**: Each agent whose intent goes to the principal (step 3) MUST write a need mark that requests a resolution from the principal. If another competitor beats an intent, that intent loses, and its agent writes no need mark. No agent of such a pair proceeds until the principal decides.
 
-"Yield" means: the agent MUST NOT write an action mark on the contested resource. The agent MAY write a new intent on an alternative resource, wait and retry after the winning claim ends, or write a need mark.
+"Yield" means that the agent MUST NOT write an action mark on the contested resource. The agent MAY do any of these:
+
+- Write a new intent on a different resource.
+- Wait until the winning claim ends, and then try again.
+- Write a need mark.
 
 ### 6.2 Deferred Resolution
 
-Lock-based guards ([Section 9](#9-guard-deterministic-enforcement-layer)) serialize access: at most one agent enters `pre_action` at a time per scope. Under serialization, HIGHEST_CONFIDENCE degenerates to FIRST_WRITER because the second agent finds an already-committed action, not a competing intent. The guard returns CONFLICT (resource taken), never performing the confidence comparison. This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html): a low-priority agent holding the lock blocks a higher-priority agent.
+Lock-based guards ([Section 9](#9-guard-deterministic-enforcement-layer)) serialize access. In each scope, at most one agent at a time enters `pre_action`. With serialized access, HIGHEST_CONFIDENCE becomes the same as FIRST_WRITER. The cause is that the second agent finds an action that is already committed, not a competing intent. The guard returns CONFLICT (resource taken), and it never does the confidence comparison.
 
-Deferred resolution fixes this by separating claim collection from allocation.
+This is [priority inversion](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html). A low-priority agent that holds the lock blocks a higher-priority agent.
+
+Deferred resolution corrects this problem. It separates the collection of claims from the allocation of the resource.
 
 #### 6.2.1 Protocol
 
 The deferred resolution protocol has three phases:
 
-**Phase 1: Claim collection.** Agents write intent marks to the mark space. The guard operates in advisory mode during this phase: it MAY acquire a lock for serializing writes (implementation-defined), but no resource allocation or ALLOW verdicts are issued: an intent it writes receives BLOCKED, and the checks before the write can still return CONFLICT or DENIED (Section 9.2). Each intent carries the agent's confidence (priority) for the resource.
+**Phase 1: Claim collection.** Agents write intent marks to the mark space. During this phase, the guard operates in advisory mode. The guard MAY take a lock to serialize writes (the implementation defines this). But the guard does not allocate the resource, and it issues no ALLOW verdict. An intent that the guard writes receives BLOCKED. The checks before the write can still return CONFLICT or DENIED (Section 9.2). Each intent contains the confidence (priority) of the agent for the resource.
 
-**Phase 2: Resolution boundary.** A resolution boundary is triggered by an external event: end of a scheduling round, a timer, a principal action, or an explicit `resolve_deferred(scope, resource)` call. The trigger mechanism is deployment-defined; the spec only requires that a boundary eventually occurs for any scope with pending intents.
+**Phase 2: Resolution boundary.** An external event starts a resolution boundary. The external event can be:
 
-**Phase 3: Batch resolution.** At the boundary, the guard:
+- The end of a scheduling round.
+- A timer.
+- An action of the principal.
+- An explicit `resolve_deferred(scope, resource)` call.
 
-1. Collects all pending intent marks on `(scope, resource)`: strength > 0, not granted or closed (Section 6.5).
-2. Judges each intent against its own competing set as in Section 6.1. Inside one scope this applies the scope's policy to the full set: for HIGHEST_CONFIDENCE, the intent with the highest confidence wins; ties broken by `created_at`.
-3. Each winning intent is granted a lease (Section 6.5), at most one per agent per boundary; a winning intent that another agent's live lease holds off waits (BLOCKED).
-4. Intents that a granted intent beats receive CONFLICT and are closed; intents beaten only by waiting intents wait (BLOCKED); intents that go to the principal (YIELD_ALL) receive BLOCKED. Losing intents remain in the mark space until TTL expiry (they are not forcibly removed).
+The deployment defines the trigger mechanism. The spec requires only that a boundary eventually occurs for each scope that has pending intents.
+
+**Phase 3: Batch resolution.** At the boundary, the guard does these steps:
+
+1. The guard collects all pending intent marks on `(scope, resource)`. A pending intent mark has strength > 0, and it is not granted or closed (Section 6.5).
+2. The guard judges each intent against its own competing set, as in Section 6.1. Inside one scope, this judgment applies the policy of the scope to the full set. For HIGHEST_CONFIDENCE, the intent with the highest confidence wins. If two intents have the same confidence, `created_at` breaks the tie.
+3. The guard grants a lease to each winning intent (Section 6.5). At each boundary, the guard grants at most one lease to each agent. If a live lease of another agent blocks a winning intent, that intent waits (BLOCKED).
+4. The other intents get these results:
+   - An intent that a granted intent beats receives CONFLICT, and the guard closes it.
+   - An intent that only waiting intents beat waits (BLOCKED).
+   - An intent that goes to the principal (YIELD_ALL) receives BLOCKED.
+
+   Losing intents stay in the mark space until their TTL expires. Nothing removes them by force.
 
 <p align="center"><img src="../figures/deferred_resolution.svg" alt="Deferred resolution: three intents wait, the boundary grants B a lease, A and C lose" width="600"></p>
 
 #### 6.2.2 Applicability
 
-Deferred resolution is REQUIRED for scopes that use HIGHEST_CONFIDENCE with a lock-based guard. Without it, HIGHEST_CONFIDENCE is operationally equivalent to FIRST_WRITER (whichever thread acquires the lock first wins).
+Deferred resolution is REQUIRED for scopes that use HIGHEST_CONFIDENCE with a lock-based guard. Without deferred resolution, HIGHEST_CONFIDENCE operates the same as FIRST_WRITER. The thread that takes the lock first wins.
 
-Deferred resolution is OPTIONAL for FIRST_WRITER scopes (serialized first-come-first-served is already the intended semantics) and for YIELD_ALL scopes (all intents are escalated to the principal regardless).
+Deferred resolution is OPTIONAL for FIRST_WRITER scopes and for YIELD_ALL scopes. In FIRST_WRITER scopes, serialized first-come-first-served is already the intended behavior. In YIELD_ALL scopes, all intents go to the principal in all cases.
 
 #### 6.2.3 Relationship to Guard
 
-During Phase 1, the guard operates in **advisory mode**: it writes intent marks but returns no ALLOW; whether it takes a lock is implementation-defined (Section 6.2.1). An agent whose intent is written receives BLOCKED (pending resolution); the checks before the write can still return CONFLICT or DENIED (Section 9.2). During Phase 3, the guard operates normally: it acquires the lock, judges each intent, and returns ALLOW only for intents that win their own competing sets (intents in sibling scopes can both win).
+During Phase 1, the guard operates in **advisory mode**. In this mode, the guard writes intent marks, but it does not return ALLOW. The implementation defines whether the guard takes a lock (Section 6.2.1). An agent whose intent the guard writes receives BLOCKED (pending resolution). The checks before the write can still return CONFLICT or DENIED (Section 9.2).
 
-An implementation MAY combine deferred and immediate resolution within the same mark space. Some scopes (e.g., room bookings with FIRST_WRITER) resolve immediately; others (e.g., parking with HIGHEST_CONFIDENCE) defer. The scope's conflict policy and a per-scope `deferred: bool` flag determine which path is taken.
+During Phase 3, the guard operates normally. It takes the lock, judges each intent, and returns ALLOW only for intents that win their own competing sets. Intents in sibling scopes can both win.
 
-**Verdict delivery.** `resolve_deferred(scope, resource)` returns a mapping of agent_id to verdict (ALLOW for winners, CONFLICT for losers, BLOCKED for intents sent to the principal, DENIED for refused agents). The delivery mechanism is deployment-defined: the harness MAY use callbacks, polling, subscription notifications (Section 13.3), or direct return values. The spec requires only that (a) no two agents whose intents compete receive ALLOW at a resolution boundary (agents in sibling scopes may both receive it), and (b) all losing agents eventually receive their verdict. A boundary judges only pending intents (Section 6.5): an intent that `pre_action`, an earlier boundary or the principal granted or closed receives no verdict again. The mapping holds one verdict per agent, for the best of its intents (each verdict names its `intent_id`); the agent's other pending intents get their verdicts at a later boundary or expire.
+An implementation MAY use deferred resolution and immediate resolution in the same mark space. Some scopes resolve immediately, for example room bookings with FIRST_WRITER. Other scopes defer, for example parking with HIGHEST_CONFIDENCE. The conflict policy of the scope and a per-scope `deferred: bool` flag determine which path the guard uses.
 
-**Re-verification.** A boundary MAY check each compared intent's agent again: its authorization for the intent's own scope, and its barrier. Each intent is checked once per boundary, against one copy of the caller's agent registry, taken when the boundary starts, and one copy of each agent's barrier, taken once the boundary holds its resource lock. An intent whose agent fails the check receives DENIED and takes no part in any comparison. An agent the boundary cannot check (missing from the caller's agent registry) also receives DENIED, but its intent stays pending and still counts against the intents it beats until its TTL ends.
+**Verdict delivery.** `resolve_deferred(scope, resource)` returns a mapping of agent_id to verdict:
 
-**Atomicity.** A boundary holds the mark space for all its reads and judgments: no write, gc or read by another agent runs until it returns, so every competing set it reads shows one state, at one time, the need marks a barrier check reads and the guard's lease table included. The guard takes its resource lock, then reads each agent's barrier, then holds the mark space: a barrier restricted while the boundary waits for the resource lock counts, and no thread holds the mark space while it waits for a guard lock.
+- ALLOW for winners.
+- CONFLICT for losers.
+- BLOCKED for intents that go to the principal.
+- DENIED for refused agents.
 
-**Wildcard topic matching.** When a scope's `observation_topics` or `warning_topics` contains `"*"`, any topic string matches. The `"*"` is a literal wildcard (not a glob or regex) - it means "this scope accepts any topic." Named topics in the same list are redundant when `"*"` is present but not an error.
+The deployment defines the delivery mechanism. The harness MAY use callbacks, polling, subscription notifications (Section 13.3), or direct return values. The spec requires only these two conditions:
+
+- (a) No two agents whose intents compete receive ALLOW at a resolution boundary. Agents in sibling scopes can both receive ALLOW.
+- (b) All losing agents eventually receive their verdict.
+
+A boundary judges only pending intents (Section 6.5). An intent that `pre_action`, an earlier boundary or the principal granted or closed does not receive a verdict again. The mapping holds one verdict for each agent, for the best of its intents. Each verdict names its `intent_id`. The other pending intents of the agent get their verdicts at a later boundary, or they expire.
+
+**Re-verification.** A boundary MAY check the agent of each compared intent again. This check covers the authorization of the agent for the scope of the intent, and the barrier of the agent. When a boundary does this check, it checks each intent once. The check uses these copies:
+
+- One copy of the agent registry of the caller. The boundary takes this copy when it starts.
+- One copy of the barrier of each agent. The boundary takes this copy after it holds its resource lock.
+
+An intent whose agent fails the check receives DENIED. That intent has no part in any comparison.
+
+The boundary cannot check an agent that is missing from the agent registry of the caller. This agent also receives DENIED. But the intent of this agent stays pending. Until its TTL ends, that intent still counts against the intents that it beats.
+
+**Atomicity.** A boundary holds the mark space for all its reads and judgments. Until the boundary returns, no write, gc or read by another agent runs. Thus every competing set that the boundary reads shows one state, at one time. This state includes the need marks that a barrier check reads, and the lease table of the guard. The guard does these steps in this order:
+
+1. The guard takes its resource lock.
+2. The guard reads the barrier of each agent.
+3. The guard holds the mark space.
+
+Thus, if a barrier gets a restriction while the boundary waits for the resource lock, that restriction counts. Also, no thread holds the mark space while that thread waits for a guard lock.
+
+**Wildcard topic matching.** If the `observation_topics` or the `warning_topics` of a scope contains `"*"`, any topic string matches. The `"*"` is a literal wildcard, not a glob or a regex. It means "this scope accepts any topic." When `"*"` is in a list, the named topics in that list are redundant. They are not an error.
 
 ### 6.3 Post-Action Resolution
 
-An action written through the guard is recorded only under its intent's live lease, or as a direct claim on an uncontested resource (Section 6.5, G6). Two competing actions written through the guard therefore never both land: the later one is refused, and no action supersedes another agent's action. The exception is a warning (P75): while a warning hides an action, another agent may be granted and act, and when the warning decays or its author retracts it, both actions hold. Intents and grants prevent conflicts; the fencing token carries the same order to outside systems (G8).
+When an agent writes an action through the guard, the guard records the action only in one of these cases:
+
+- Under the live lease of the intent of the action.
+- As a direct claim on an uncontested resource (Section 6.5, G6).
+
+Thus two competing actions written through the guard never both land. The guard refuses the later action. No action supersedes an action of another agent.
+
+A warning is the exception (P75). While a warning hides an action, another agent can get a grant and act. When the warning decays or its author retracts it, both actions hold.
+
+Intents and grants prevent conflicts. The fencing token carries the same order to outside systems (G8).
 
 ### 6.4 Formal Properties
 
-**P11: Determinism**: Given the same set of intent marks and the same lease table (Section 6.5), the guard MUST reach the same conclusion about which intents win, whichever scope's decision computes it; an agent that reads only the marks reaches it when no intent on the resource is granted or closed. The judgement is pure: `judge(intent, competing set)` → wins, loses to a named winner, or goes to the principal.
+**P11: Determinism**: The inputs are a set of intent marks and a lease table (Section 6.5). For the same inputs, the guard MUST reach the same conclusion about which intents win, whichever scope's decision computes it. An agent that reads only the marks reaches the same conclusion when no intent on the resource is granted or closed. The judgment is pure. `judge(intent, competing set)` returns one of these results:
 
-**P12: Progress**: On each contested (scope, resource), at least one agent MUST be able to proceed, at the latest when the intents and leases that hold it off end (TTL; a lease runs one TTL from its grant, Section 6.5). The protocol MUST NOT deadlock. *Proof sketch*: Under HIGHEST_CONFIDENCE and FIRST_WRITER, the order of Section 6.1 (outer scope first, then one scope's policy) has no cycle, so in every competing set, an intent in the outermost scope that its scope's policy ranks first wins its own competing set; a winner always exists. Another agent's live lease makes that winner wait until the lease ends, and the lease's expiry bounds the wait (P74, P76), as P16 bounds YIELD_ALL. If a completed action holds the winner (P39), the winner is closed and holds no other intent off. Under YIELD_ALL, agents are blocked pending principal input - progress depends on the principal responding (P16 provides the liveness bound via TTL expiry). Circular dependency deadlock cannot occur because conflict resolution operates on individual (scope, resource) pairs independently, not across resources.
+- The intent wins.
+- The intent loses to a named winner.
+- The intent goes to the principal.
 
-**P13: Consistency (Yield Recovery)**: If agent A yields to agent B's intent, and agent B later abandons (intent expires), agent A MUST NOT be permanently prevented from acting on that resource. Specifically, once no higher-priority intent, lease or action exists on (scope, resource), a new intent from A MUST be evaluable by the guard without reference to the expired yielding history.
+**P12: Progress**: On each contested (scope, resource), at least one agent MUST be able to proceed, at the latest when the intents and leases that block it end. These intents and leases end at their TTL at the latest. A lease runs one TTL from its grant (Section 6.5). The protocol MUST NOT deadlock.
 
-**P14: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL pending intents on `(scope, resource)` at the resolution boundary: active intents that no guard granted or closed (Section 6.5). An intent written before the boundary and still within its TTL MUST NOT be excluded from the comparison.
+*Proof sketch*: Under HIGHEST_CONFIDENCE and FIRST_WRITER, the order of Section 6.1 (outer scope first, then the policy of one scope) has no cycle. Thus in every competing set, an intent in the outermost scope that its scope's policy ranks first wins its own competing set. A winner therefore always exists.
 
-**P15: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent among the candidates in one scope MUST be the one with the highest confidence; an intent in an outer scope still wins against inner-scope intents (Section 6.1). The result MUST be identical to what HIGHEST_CONFIDENCE would produce if all intents were evaluated simultaneously (no serialization effects).
+A live lease of another agent makes that winner wait until the lease ends. The expiry of the lease limits the wait (P74, P76), as P16 limits YIELD_ALL. If a completed action blocks the winner (P39), the guard closes the winner, and the winner blocks no other intent.
 
-**P16: Deferred Liveness**: For any scope with `deferred: true` and at least one active intent, a resolution boundary MUST eventually occur. The protocol MUST NOT allow intents to accumulate indefinitely without resolution (intents still expire via TTL as a safety net, but the resolution mechanism SHOULD fire before TTL expiry under normal operation).
+Under YIELD_ALL, the agents wait until the principal gives input. Progress depends on the response of the principal. P16 gives the liveness limit through TTL expiry. A deadlock from a circular dependency cannot occur. The reason is that conflict resolution operates on each (scope, resource) pair independently, not across resources.
 
-**P17: Deferred Mutual Exclusion**: Under deferred resolution, no two agents whose intents compete may both receive ALLOW, at any resolution boundary, and no intent receives ALLOW while another agent's live lease competes with it (P71); an agent whose competing set holds another agent's completed action receives CONFLICT (P39). Agents in sibling scopes may both receive ALLOW. Each intent is judged against its own competing set (Section 6.1): an intent wins only if it beats every competitor, losers receive CONFLICT, and an intent that a YIELD_ALL pair sends to the principal receives BLOCKED. If N agents in one scope compete only with each other, at most one of them wins: none when the scope uses YIELD_ALL, when a completed action holds the resource, or when the intent that would win belongs to an agent the boundary cannot check (Section 6.2.3, Re-verification).
+**P13: Consistency (Yield Recovery)**: Agent A yields to the intent of agent B. Later, agent B abandons its plan, and its intent expires. In this case, the protocol MUST NOT make agent A permanently unable to act on that resource. Specifically, consider the condition that no higher-priority intent, lease or action exists on (scope, resource). When this condition is true, the guard MUST be able to evaluate a new intent from A without reference to the expired yield history.
 
-**P18: Deferred Inclusion**: All pending intents (strength > 0, not granted or closed) on (scope, resource) at the resolution boundary MUST be included in the comparison. An implementation MUST NOT exclude an intent that was written before the boundary and is still within its TTL. Note: perpetual outbidding (an agent always writing a higher-confidence intent just before each boundary) is not prevented by the protocol - it is an acknowledged limitation analogous to priority inversion in real-time systems. TTL expiry provides the safety net: an outbidding agent that never executes will eventually have its intent expire.
+**P14: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL pending intents on `(scope, resource)` at the resolution boundary. These are the active intents that no guard granted or closed (Section 6.5). The batch resolution step MUST NOT exclude from the comparison an intent written before the boundary and still within its TTL.
+
+**P15: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent among the candidates in one scope MUST be the one with the highest confidence. An intent in an outer scope still wins against the intents in inner scopes (Section 6.1). The result MUST be identical to the result that HIGHEST_CONFIDENCE gives when it evaluates all intents at the same time (no serialization effects).
+
+**P16: Deferred Liveness**: For each scope with `deferred: true` and at least one active intent, a boundary MUST eventually occur. The protocol MUST NOT allow intents to accumulate for an unlimited time without resolution. Intents still expire through their TTL as a safety net. But under normal operation, the resolution mechanism SHOULD fire before the TTL expires.
+
+**P17: Deferred Mutual Exclusion**: Under deferred resolution, at any boundary, no two agents whose intents compete can both receive ALLOW. No intent receives ALLOW while a live lease of another agent competes with it (P71). An agent receives CONFLICT if the competing set of its intent holds a completed action of another agent (P39). Agents in sibling scopes can both receive ALLOW. The boundary judges each intent against its own competing set (Section 6.1):
+
+- An intent wins only if it beats every competitor.
+- Losers receive CONFLICT.
+- An intent that a YIELD_ALL pair sends to the principal receives BLOCKED.
+
+If N agents in one scope compete only with each other, at most one of them wins. None of them wins in these cases:
+
+- The scope uses YIELD_ALL.
+- A completed action holds the resource.
+- The intent that would win belongs to an agent that the boundary cannot check (Section 6.2.3, Re-verification).
+
+**P18: Deferred Inclusion**: The comparison MUST include all pending intents (strength > 0, not granted or closed) on (scope, resource) at the boundary. An implementation MUST NOT exclude an intent that an agent wrote before the boundary and that is still within its TTL.
+
+Note: the protocol does not prevent an agent that outbids the other agents perpetually. Such an agent always writes a higher-confidence intent just before each boundary. This is an acknowledged limitation, similar to priority inversion in real-time systems. TTL expiry gives the safety net. If such an agent never executes, its intent eventually expires.
 
 Ref: [`markspace/core.py::resolve_conflict`](../markspace/core.py), [`tests/test_properties.py::TestConflictProperties`](../tests/test_properties.py)
 
 ### 6.5 Grants
 
-ALLOW alone is neither exclusive over time nor checked when the action lands: a later claim could overtake one whose tool still runs. A guard therefore grants the winning intent a **lease**: a grant with an expiry, which holds the resource until the agent's action, its failed action, a principal release or its expiry (Gray, Cheriton, "Leases", SOSP 1989). Each grant carries a **fencing token**, a pair (epoch, n) whose n grows with every grant on the resource, so that a stale holder is rejected (Burrows, "The Chubby lock service", sequencers, OSDI 2006). Which claims compete follows multiple-granularity locking (Section 6.1).
+ALLOW alone is not exclusive over time. Also, nothing checks ALLOW when the action lands. Thus a later claim can overtake a claim whose tool still runs. Therefore, a guard grants a **lease** to the winning intent. A lease is a grant with an expiry (Gray, Cheriton, "Leases", SOSP 1989). The lease holds the resource until one of these events occurs:
 
-The guard keeps its record of grants in its own table, as it keeps its barriers and budgets. The record is not a mark: a read of the mark space does not show it. A mark space has at most one guard: a second guard would grant the same resource again. In the record, each intent is **pending** (written, not granted), **granted** (holds a lease), or closed: **acted** (its agent's action superseded it), **released** (the principal, or, while granted, a failed action or another mark of its agent that superseded it), **expired**, or **lost** (refused or beaten). A closed intent never competes again.
+- The action of the agent.
+- A failed action of the agent.
+- A release by the principal.
+- The expiry of the lease.
+
+Each grant carries a **fencing token** (Burrows, "The Chubby lock service", sequencers, OSDI 2006). A fencing token is a pair (epoch, n). The value n increases with every grant on the resource. The token makes it possible to reject a stale holder. The rule for which claims compete follows multiple-granularity locking (Section 6.1).
+
+The guard keeps its record of grants in its own table, the lease table. The guard keeps its barriers and budgets in the same way. The record is not a mark. A read of the mark space does not show it. A mark space has at most one guard. A second guard would grant the same resource again.
+
+In the record, each intent is in one of these claim states:
+
+- **pending**: written, not granted.
+- **granted**: holds a lease.
+- closed, in one of these states:
+  - **acted**: the action of its agent superseded it.
+  - **released**: the principal released it, or its agent superseded it during its lease with a failed action or a mark that is not an action.
+  - **expired**.
+  - **lost**: refused or beaten.
+
+A closed intent never competes again.
 
 <p align="center"><img src="../figures/claim_states.svg" alt="Claim states: a pending intent is granted, released or lost, and a granted one is acted, expired or released" width="700"></p>
 
-**Lease clock.** The guard reads leases on a clock that never goes back: the maximum of every time it has read. A lease is live while it is granted, no mark of its agent has superseded its intent, and the lease clock is before its expiry; a lease found past its expiry is recorded as expired for good. Marks are still read at the space's time. A forward clock step expires every lease the step passes; after a backward step, a lease granted lasts its TTL on the lease clock, which is longer in the space's time.
+**Lease clock.** The guard reads leases on a clock that never moves backward. This lease clock shows the maximum of all times that the guard has read. A lease is live while all of these conditions are true:
 
-**G1 (grant condition).** An intent may be granted only if no other agent holds a live lease or a held action (P39) on its resource in its own scope, an ancestor or a descendant. An agent's own leases and actions do not hold it off. Sibling scopes never hold each other off.
+- The lease is granted.
+- No mark of its agent has superseded its intent.
+- The lease clock is before the expiry of the lease.
 
-**G2 (judging).** Pending intents are judged as in Section 6.1, one sort per scope.
+When the guard finds a lease past its expiry, the guard records the lease as expired permanently.
 
-**G3 (immediate mode).** `pre_action` in an immediate scope, in order: (1) authorization, barrier, envelope and scope rate; (2) another agent's held action: CONFLICT, no intent is written; (3) the intent is written; (4) another agent's live lease, or another agent's pending intent in an ancestor deferred scope, that beats the intent: CONFLICT, the intent is lost (a pending intent that a held action holds off is lost first and does not count); (5) a YIELD_ALL pair with another agent's pending intent or live lease: BLOCKED and a need mark, the intent stays pending; (6) another agent's live lease that the intent would beat: CONFLICT, the intent is lost, as a lease is not pre-empted; (7) otherwise the intent is granted: ALLOW with the token and expiry. In an immediate HIGHEST_CONFIDENCE scope the first granted claim therefore holds the resource: a later intent with higher confidence receives CONFLICT.
+The guard still reads marks at the time of the mark space. A forward clock step expires every lease that the step passes. After a backward step, a granted lease lasts its TTL on the lease clock. This duration is longer in the time of the mark space.
 
-**G4 (deferred boundary).** A boundary judges the pending intents in its scope, its ancestors and its descendants, atomically (Section 6.2.3), and grants only intents in deferred scopes: an intent pending in an immediate scope went to the principal (G3 rule 5), still counts, and only the principal grants it; it is lost when its agent fails the boundary's checks. A refused intent is lost (an intent whose agent the boundary cannot check is denied and stays pending). An intent that another agent's held action holds off is lost. A winner that another agent's live lease holds off waits. Each agent is granted at most one winner per boundary: in the outermost scope, then the earliest, then by id; its other winners wait. An intent that a granted intent beats is lost; one beaten only by waiting intents waits. The boundary writes no marks.
+**G1 (grant condition).** An intent can get a grant only if no other agent holds a live lease or a held action (P39) on the same resource. This condition covers the scope of the intent, its ancestor scopes and its descendant scopes. The leases and actions of an agent do not block that agent. Sibling scopes never block each other.
 
-**G5 (principal).** The principal grants a pending intent if G1 holds, and releases a lease or a pending intent.
+**G2 (judging).** The guard judges pending intents as in Section 6.1, with one sort for each scope.
 
-**G6 (fencing at the action).** `post_action` records an action only under its intent's live lease of the same agent, scope and resource while G1 still holds (a warning on another agent's action may have decayed). With no intent id, it uses the agent's own live lease on this scope and resource if it holds one; otherwise it is a direct claim, recorded only in an immediate scope that is not YIELD_ALL, when G1 holds and no other agent's pending intent competes. Otherwise it writes nothing and raises `NotGrantedError`. A failed action is always recorded, holds nothing and ends the lease. An agent whose lease is lost while its tool runs receives CONFLICT ("lease lost"); `execute` leaves a failed action as a trace.
+**G3 (immediate mode).** In an immediate scope, `pre_action` does these steps in this order:
 
-**G7 (lease length).** A lease lasts the intent TTL of its scope, counted on the lease clock from the grant. A tool that runs longer loses its lease.
+1. Check the authorization, the barrier, the envelope and the scope rate limit.
+2. If another agent has a held action, return CONFLICT. Do not write an intent.
+3. Write the intent.
+4. If one of these beats the intent, return CONFLICT and close the intent as lost:
+   - A live lease of another agent.
+   - A pending intent of another agent in an ancestor deferred scope.
 
-**G8 (fencing token).** A token is the pair (epoch, n): n grows with every grant on one resource in one scope tree, and the epoch is fixed per guard. The tool receives the token; an outside system SHOULD reject a token lower than one it has seen for the resource. Harnesses MUST NOT show the token to agents: a token counts the grants on its resource, also in sibling scopes the agent may not read (P25), and so does an outside system that receives tokens. Sibling scopes may hold leases on one resource at once, so an outside system that serves both MUST NOT compare their tokens with each other; fencing outside the mark space is exact when one outside resource is claimed from one chain of scopes. An epoch taken from a clock that reads lower after a restart makes an outside system reject new tokens until the clock passes the old epoch; a deployment that fences across restarts passes an epoch from a persisted counter.
+   Before this check, close as lost each such pending intent that a held action blocks. That pending intent does not count.
 
-**G9 (write order).** Unchanged: P32.
+5. If the intent makes a YIELD_ALL pair with a pending intent of another agent, or with a live lease of another agent, return BLOCKED. Write a need mark. The intent stays pending.
+6. If another agent has a live lease that the intent would beat, return CONFLICT and close the intent as lost. Nothing pre-empts a lease.
+7. Otherwise, grant the intent. Return ALLOW with the fencing token and the expiry.
 
-**G10 (supersession by its author).** Only a mark's author may supersede it (Section 10).
+Thus, in an immediate HIGHEST_CONFIDENCE scope, the first granted claim holds the resource. A later intent with higher confidence receives CONFLICT.
 
-**Limits.** An action written directly with `write()` is not fenced (Section 9.1). A warning can hide an action; another agent may then be granted and act, and when the warning decays or its author retracts it, both actions hold the resource. A warning that hides an action is accepted only from an agent that may write warnings in the action's own scope (Section 9.5). A crashed holder blocks the resource until its lease expires. Revoking an agent does not end its running lease; the principal can release it.
+**G4 (deferred boundary).** A resolution boundary judges the pending intents in its scope, its ancestors and its descendants. It judges them atomically (Section 6.2.3). It grants only intents in deferred scopes. These rules apply at the boundary:
+
+- An intent pending in an immediate scope went to the principal (G3 step 5). This intent still counts, and only the principal grants it. The intent is lost when its agent fails the checks of the boundary.
+- A refused intent is lost. But if the boundary cannot check the agent of an intent, the boundary denies the intent, and the intent stays pending.
+- If a held action of another agent blocks an intent, the intent is lost.
+- If a live lease of another agent blocks a winner, the winner waits.
+- At each boundary, the guard grants at most one winner of each agent. It orders the winners of one agent by scope (the outermost first), then by time (the earliest first), then by id. It grants the first winner. The other winners of the agent wait.
+- If a granted intent beats an intent, that intent is lost. If only waiting intents beat an intent, that intent waits.
+- The boundary writes no marks.
+
+**G5 (principal).** The principal grants a pending intent if G1 holds. The principal also releases a lease or a pending intent.
+
+**G6 (fencing at the action).** `post_action` always records a failed action. A failed action holds nothing, and it ends the lease. For any other action, `post_action` does these steps:
+
+1. If the call gives an intent id, record the action only if all these conditions are true:
+   - The intent holds a live lease.
+   - The lease is of the same agent, scope and resource as the action.
+   - G1 still holds. G1 can change after the grant, because a warning on an action of another agent can decay.
+2. If the call gives no intent id, find the live lease of the agent on this scope and resource. If the agent holds one, use its intent as in step 1.
+3. If the call gives no intent id and the agent holds no such lease, the action is a direct claim. Record a direct claim only if all these conditions are true:
+   - The scope is immediate.
+   - The scope is not YIELD_ALL.
+   - G1 holds.
+   - No pending intent of another agent competes.
+4. Otherwise, write nothing and raise `NotGrantedError`.
+
+If an agent loses its lease while its tool runs, the agent receives CONFLICT ("lease lost"). In this case, `execute` leaves a failed action as a trace.
+
+**G7 (lease length).** A lease lasts the intent TTL of its scope. The guard counts this time on the lease clock, from the grant. A tool that runs longer loses its lease.
+
+**G8 (fencing token).** A token is the pair (epoch, n). The value n increases with every grant on one resource in one scope tree. Each guard has one fixed epoch. The tool receives the token. An outside system SHOULD reject a token lower than a token that it has seen for the resource.
+
+Harnesses MUST NOT show the token to agents. The reason is that a token counts the grants on its resource, also in sibling scopes that the agent cannot read (P25). An outside system that receives tokens also counts these grants.
+
+Sibling scopes can hold leases on one resource at the same time. Thus an outside system that serves both sibling scopes MUST NOT compare their tokens with each other. Outside the mark space, fencing tokens are exact when agents claim one outside resource from one chain of scopes.
+
+If the epoch comes from a clock that reads lower after a restart, an outside system rejects new tokens. This continues until the clock passes the old epoch. A deployment that fences across restarts passes an epoch from a persisted counter.
+
+**G9 (write order).** The write order of P32 applies without change.
+
+**G10 (supersession by its author).** Only the author of a mark can supersede it (Section 10).
+
+**Limits.**
+
+- The guard does not fence an action that an agent writes directly with `write()` (Section 9.1).
+- A warning can hide an action. Then another agent can get a grant and act. When the warning decays or its author retracts it, both actions hold the resource.
+- Only an agent that is authorized to write warnings in the scope of the action can write a warning that hides the action (Section 9.5).
+- A crashed holder blocks the resource until its lease expires.
+- A revocation of an agent does not end its running lease. The principal can release that lease.
 
 #### 6.5.1 Formal Properties
 
-**P71: Lease Exclusion**: No two live leases of different agents on one resource in competing scopes.
+**P71: Lease Exclusion**: No two live leases of different agents exist on one resource in competing scopes.
 
-**P72: Fenced Actions**: A successful action written through the guard is recorded only under a live lease of its own agent, scope and resource while G1 holds, or as a direct claim under G6.
+**P72: Fenced Actions**: The guard records a successful action written through the guard only in one of these cases:
 
-**P73: Token Order**: Fencing tokens increase per scope-tree root and resource within an epoch, and never repeat within it.
+- Under a live lease of its own agent, scope and resource, while G1 holds.
+- As a direct claim under G6.
 
-**P74: Lease End**: A lease ends at its agent's action, its failed action, another mark of its agent that supersedes its intent, a principal release or its expiry, and an ended lease never becomes live again, also when the clock goes back.
+**P73: Token Order**: Within an epoch, fencing tokens increase for each scope-tree root and resource. For one scope-tree root and resource, they never repeat within an epoch.
 
-**P75: Action Exclusion**: No two held actions of different agents on one resource in competing scopes, among actions written through the guard, except while a warning hid one of them when the other was recorded, and that warning then decays (P35) or its author supersedes it.
+**P74: Lease End**: A lease ends at one of these events:
 
-**P76: No Starvation**: A pending intent in a deferred scope that only live leases hold off, and that no pending intent beats, is granted at the first boundary after those leases end at which its agent receives no other grant.
+- The action of its agent.
+- A failed action of its agent.
+- A mark of its agent that supersedes its intent and is not an action.
+- A release by the principal.
+- The expiry of the lease.
+
+An ended lease never becomes live again. This is also true when the clock moves backward.
+
+**P75: Action Exclusion**: Among actions written through the guard, no two held actions of different agents exist on one resource in competing scopes. The only exception is this case:
+
+- A warning hid one of the two actions when the guard recorded the other action.
+- Then that warning decays (P35), or its author supersedes it.
+
+**P76: No Starvation**: This property applies to a pending intent in a deferred scope when these conditions are true:
+
+- Only live leases block the intent.
+- No pending intent beats the intent.
+
+The guard grants this intent at a boundary after those leases end. It is the first such boundary at which the agent of the intent receives no other grant.
 
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_leases.py`](../tests/test_leases.py), [`tests/test_lease_histories.py`](../tests/test_lease_histories.py)
 
 ## 7. Scope
 
-A scope defines a namespace, the allowed mark actions within it, decay parameters, and conflict resolution policy.
+A scope defines a namespace, the mark actions that it allows, its decay parameters and its conflict resolution policy.
 
 ### 7.1 Scope Definition
 
@@ -579,15 +792,19 @@ message DecayConfig {
 
 ### 7.3 Scope Authorization
 
-An agent's permissions are defined as:
-- **Write permissions**: a set of (scope, mark_type) pairs. An agent MUST NOT write a mark to a scope it is not authorized for. An implementation MUST reject unauthorized writes.
-- **Read permissions**: a set of scope names granting full content access. Only relevant for PROTECTED and CLASSIFIED scopes (see [Section 7.4](#74-scope-visibility)).
+An agent has these permissions:
+- **Write permissions**: a set of (scope, mark_type) pairs. An agent MUST NOT write a mark to a scope for which it has no authorization. An implementation MUST reject unauthorized writes.
+- **Read permissions**: a set of scope names. This set gives full access to the content in these scopes. Read permissions have an effect only in PROTECTED and CLASSIFIED scopes (see [Section 7.4](#74-scope-visibility)).
 
-For OPEN scopes, reads are unrestricted and any agent reads full marks. This mirrors biological stigmergy where any ant can smell any pheromone. For PROTECTED and CLASSIFIED scopes, read authorization controls content access.
+In an OPEN scope, reads have no restriction. Any agent reads full marks. This is like biological stigmergy, where any ant can smell any pheromone. In a PROTECTED or CLASSIFIED scope, read authorization controls access to the content.
 
 ### 7.4 Scope Visibility
 
-Scopes declare a **visibility level** that controls read access. The three levels are a simplified [Bell-LaPadula](https://apps.dtic.mil/sti/citations/AD0770768) lattice (Bell & LaPadula, 1973), reduced from arbitrary security levels to exactly three because the use case is coordination visibility, not military classification. The novel element is the projected read (PROTECTED): Bell-LaPadula has no analogue for "you can see that a mark exists but not what it says." Three levels, in order of increasing restriction:
+A scope declares a **visibility level** that controls read access. The three levels are a simplified [Bell-LaPadula](https://apps.dtic.mil/sti/citations/AD0770768) lattice (Bell & LaPadula, 1973). The protocol reduces the arbitrary security levels of Bell-LaPadula to exactly three. The reason is that the use case is coordination visibility, not military classification.
+
+The new element is the projection (PROTECTED). Bell-LaPadula has no equivalent for "you can see that a mark exists but not what it says."
+
+The three levels, in order of increasing restriction, are:
 
 ```
 OPEN  >  PROTECTED  >  CLASSIFIED
@@ -596,14 +813,14 @@ OPEN  >  PROTECTED  >  CLASSIFIED
 | Visibility | Unauthorized Reader Sees | Authorized Reader Sees |
 |------------|--------------------------|----------------------|
 | `OPEN` | Full marks | Full marks |
-| `PROTECTED` | Projected marks (content redacted) | Full marks |
+| `PROTECTED` | Projections (content redacted) | Full marks |
 | `CLASSIFIED` | No mark of that scope | Full marks |
 
-**Default**: OPEN. Scopes that don't specify visibility are OPEN.
+**Default**: OPEN. A scope that does not specify a visibility level is OPEN.
 
-**Projected reads** (PROTECTED scopes, unauthorized reader):
+**Projections** (a PROTECTED scope and an unauthorized reader):
 
-A projected mark preserves all **structural/coordination metadata** but redacts **content fields**. This allows coordination (conflict avoidance, resource tracking) while hiding sensitive business data.
+A projection preserves all **structural and coordination metadata** of a mark. It redacts the **content fields**. Thus agents can coordinate (avoid conflicts, track resources). The sensitive business data stays hidden.
 
 | Category | Fields | Projected? |
 |----------|--------|-----------|
@@ -611,9 +828,9 @@ A projected mark preserves all **structural/coordination metadata** but redacts 
 | Coordination | resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by | Preserved |
 | Content | result (Action), content (Observation), reason (Warning), question (Need), context (Need) | **Redacted** |
 
-A projected mark MUST have `projected = true` so downstream code can distinguish it from a mark that genuinely has empty content fields.
+A projection MUST have `projected = true`. This lets downstream code distinguish a projection from a mark that really has empty content fields.
 
-**Infrastructure access**: Internal components (guard, aggregator) that pass `reader=None` to the read operation MUST receive full marks regardless of scope visibility. The guard cannot enforce coordination if it can't see marks.
+**Infrastructure access**: Internal components (the guard, the aggregator) that pass `reader=None` to the read operation MUST receive full marks at every visibility level. The guard cannot enforce coordination if it cannot see the marks.
 
 **Examples**:
 
@@ -630,37 +847,39 @@ hr = Scope(name="hr", visibility=ScopeVisibility.PROTECTED)
 legal = Scope(name="legal", visibility=ScopeVisibility.CLASSIFIED)
 ```
 
-**When to use PROTECTED vs CLASSIFIED**:
-- PROTECTED: the existence of marks is not sensitive, but their content is. Agents can still coordinate around protected resources (see marks exist, avoid conflicts) without seeing the data.
-- CLASSIFIED: even the existence of marks is sensitive. An agent shouldn't know that a legal investigation mark exists for employee-X. Coordination in classified scopes is limited to authorized agents. Unauthorized agents cannot avoid conflicts they can't see, so the guard becomes the sole coordination mechanism.
+**How to choose PROTECTED or CLASSIFIED**:
+- PROTECTED: The existence of the marks is not sensitive. Their content is sensitive. Agents without read authorization do not see the data, but they can still coordinate on protected resources. They can see that marks exist, and they can avoid conflicts.
+- CLASSIFIED: Even the existence of the marks is sensitive. An agent should not know that a legal investigation mark exists for employee-X. Only authorized agents can coordinate in a CLASSIFIED scope. Unauthorized agents cannot avoid conflicts that they cannot see. Thus the guard becomes the only coordination mechanism.
 
 ### 7.5 Hierarchical Scopes
 
-Scope names MAY use `/` as a hierarchy separator. Authorization for a parent scope (e.g., `research`) implies authorization for all child scopes (e.g., `research/topic/X`). An implementation MUST support this inheritance.
+A scope name MAY use `/` as a hierarchy separator. Authorization for a parent scope (for example, `research`) includes authorization for all its child scopes (for example, `research/topic/X`). An implementation MUST support this inheritance.
 
 ### 7.6 Formal Properties
 
 **P19: Scope Isolation**: An agent without authorization for scope S MUST be unable to write any mark to S. `write(unauthorized_agent, mark_in_S) → Error`.
 
-**P20: Structural Visibility**: For OPEN scopes, any agent MUST be able to read full marks regardless of authorization. For PROTECTED scopes, any agent MUST be able to read projected marks (structural metadata preserved, content redacted). `reader=None` (infrastructure) MUST receive full marks regardless of visibility.
+**P20: Structural Visibility**: In an OPEN scope, any agent MUST be able to read full marks, with or without authorization. In a PROTECTED scope, any agent MUST be able to read projections (structural metadata preserved, content redacted). The infrastructure reader, `reader=None`, MUST receive full marks at every visibility level.
 
-**P21: Content Access**: For PROTECTED scopes, an agent MUST have read authorization to access content fields. Without read authorization, an implementation MUST return projected marks with content fields redacted and `projected=true`.
+**P21: Content Access**: In a PROTECTED scope, an agent MUST have read authorization to access the content fields. If the agent has no read authorization, an implementation MUST return projections, with the content fields redacted and `projected=true`.
 
-**P22: Classified Opacity**: For CLASSIFIED scopes, an agent without read authorization MUST receive no mark of that scope, whether it reads the scope itself or a parent of it. CLASSIFIED scopes MUST NOT fall back to projected reads. It is all-or-nothing.
+**P22: Classified Opacity**: In a CLASSIFIED scope, an agent without read authorization MUST receive no mark of that scope. This applies when the agent reads the scope itself and when it reads a parent of the scope. A CLASSIFIED scope MUST NOT use projections as a fallback. Access is all or nothing.
 
-**P23: Hierarchy**: Write authorization for scope `"a"` MUST imply write authorization for `"a/b"` and `"a/b/c"` for all b, c. Read authorization MUST follow the same rule.
+**P23: Hierarchy**: Write authorization for scope `"a"` MUST include write authorization for `"a/b"` and `"a/b/c"`, for all b and c. Read authorization MUST follow the same rule.
 
-**P24: Projection Preservation**: A projected mark MUST retain all structural and coordination metadata (id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes). Only content fields (result, content, reason, question, context) are redacted. `projected` MUST be `true`. *Note: P24 refines P20 (Structural Visibility) by specifying exactly which fields are structural vs content.*
+**P24: Projection Preservation**: A projection MUST preserve all structural and coordination metadata. These fields hold that metadata: id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes. The projection redacts only the content fields (result, content, reason, question, context). `projected` MUST be `true`. *Note: P24 refines P20 (Structural Visibility). It specifies exactly which fields are structural and which are content.*
 
-**P25: Classified No Fallback**: CLASSIFIED scopes MUST NOT provide projected reads as a fallback. An unauthorized reader MUST receive no mark of a CLASSIFIED scope, not projected marks. This prevents existence leakage. *Note: P25 strengthens P22 (Classified Opacity) by explicitly ruling out projected reads as a fallback path. A fencing token counts grants on its resource in a scope tree (Section 6.5, G8): an outside system that receives tokens learns how many grants sibling scopes received, so harnesses MUST NOT show tokens to agents.*
+**P25: Classified No Fallback**: A CLASSIFIED scope MUST NOT provide projections as a fallback. An unauthorized reader MUST receive no mark of a CLASSIFIED scope, and no projection of such a mark. This rule prevents a leak of the existence of marks.
 
-**P26: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the parent scope's visibility level. A child scope with its own definition keeps its own visibility level, also when its marks are read through a parent scope or delivered by a subscription. Read authorization for a parent scope MUST imply read authorization for all child scopes.
+*Note: P25 strengthens P22 (Classified Opacity). It explicitly excludes projections as a fallback path. A fencing token counts the grants on its resource in a scope tree (Section 6.5, G8). Thus an outside system that receives tokens learns how many grants the sibling scopes received. For this reason, harnesses MUST NOT show tokens to agents.*
+
+**P26: Visibility Hierarchy Inheritance**: A child scope without its own definition MUST inherit the visibility level of its parent scope. A child scope with its own definition keeps its own visibility level. This also applies when a read of a parent scope returns the marks of the child scope, or when a subscription delivers them. Read authorization for a parent scope MUST include read authorization for all its child scopes.
 
 Ref: [`markspace/core.py::Scope, Agent, ScopeVisibility, project_mark`](../markspace/core.py), [`tests/test_properties.py::TestScopeVisibility`](../tests/test_properties.py)
 
 ## 8. Mark Space
 
-The mark space is the shared environment. It stores marks and provides read/write operations.
+The mark space is the shared environment. It stores marks. It provides read and write operations.
 
 ### 8.1 Write
 
@@ -691,7 +910,9 @@ read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader
     - Agent: respects scope visibility rules (OPEN/PROTECTED/CLASSIFIED)
 ```
 
-Read is a pure query with no side effects. Reading marks MUST NOT modify them. For PROTECTED scopes with an unauthorized reader, the returned marks are projections (content redacted, `projected=true`). For CLASSIFIED scopes with an unauthorized reader, no mark of that scope is returned. A read of a parent scope also returns marks of its child scopes; each mark is returned under the visibility of its own scope's definition (P26), never the parent's, so a read of a CLASSIFIED parent still returns the marks of an OPEN child exactly as a direct read of that child does.
+A read is a pure query with no side effects. A read MUST NOT modify the marks that it reads. In a PROTECTED scope with an unauthorized reader, the read returns projections (content redacted, `projected=true`). In a CLASSIFIED scope with an unauthorized reader, the read returns no mark of that scope.
+
+A read of a parent scope also returns the marks of its child scopes. The read returns each mark under the visibility of its own scope's definition (P26), never under the visibility of the parent. Thus a read of a CLASSIFIED parent still returns the marks of an OPEN child exactly as a direct read of that child does.
 
 ### 8.3 Resolve
 
@@ -720,65 +941,78 @@ message NeedCluster {
 }
 ```
 
-Need aggregation:
-1. Group unresolved need marks by scope.
-2. Within each scope, cluster needs with similar questions (implementation-defined similarity).
-3. For each cluster: `effective_priority = max(individual priorities) + log(cluster_size) * 0.1`.
-4. Sort clusters by effective_priority descending.
+To aggregate needs, the aggregator does these steps:
+1. Group the unresolved need marks by scope.
+2. In each scope, cluster the needs that have similar questions (the implementation defines the similarity).
+3. For each cluster, calculate `effective_priority = max(individual priorities) + log(cluster_size) * 0.1`.
+4. Sort the clusters by effective_priority, in descending order.
 
 The aggregator is deliberately simple. It groups, scores, and sorts. It has no intelligence.
 
 ### 8.5 Formal Properties
 
-**P27: Write Visibility**: A mark written at time t MUST be visible to authorized reads at any time t' > t (within the mark's active lifetime), subject to scope visibility rules (Section 7.4). For CLASSIFIED scopes, visibility is limited to authorized readers; for PROTECTED scopes, unauthorized readers see projected marks.
+**P27: Write Visibility**: A mark written at time t MUST be visible to authorized reads at any time t' > t, within the mark's active lifetime. This is subject to the scope visibility rules (Section 7.4). In a CLASSIFIED scope, only authorized readers can see the mark. In a PROTECTED scope, unauthorized readers see a projection of the mark.
 
-**P28: Read Purity**: Reading marks MUST NOT change any mark's stored state. *Note: trivially true by the compute-at-read-time design (Section 3.1), but stated explicitly to prevent implementations from introducing write-on-read side effects (e.g., eagerly pruning expired marks during reads).*
+**P28: Read Purity**: A read of marks MUST NOT change the stored state of any mark. *Note: The compute-at-read-time design (Section 3.1) makes this property trivially true. The specification states it explicitly to prevent write-on-read side effects in implementations. An example is a read that eagerly prunes expired marks.*
 
-**P29: Resolution Immediacy**: Resolving a need mark MUST immediately reduce its effective strength to 0 on the next read.
+**P29: Resolution Immediacy**: The resolution of a need mark MUST immediately reduce its effective strength to 0 on the next read.
 
-**P30: Mark Immutability**: A mark's fields MUST NOT be mutated after write. All marks are frozen. Need resolution creates a new mark (with `resolved_by` set) that supersedes the original, consistent with the supersession mechanism used for all mark updates. All other state changes (decay, warning invalidation, supersession) are computed at read time from immutable data.
+**P30: Mark Immutability**: The fields of a mark MUST NOT change after the write. All marks are frozen. The resolution of a need mark makes a new mark (with `resolved_by` set) that supersedes the original. This is consistent with the supersession mechanism that all mark updates use. An implementation computes all other state changes (decay, warning invalidation, supersession) at read time, from immutable data.
 
-**P31: Mark ID Uniqueness**: Every call to write() MUST assign a unique id. Two marks in the same mark space MUST NOT share an id. Broken uniqueness would corrupt supersession chains and warning invalidation references.
+**P31: Mark ID Uniqueness**: Every call to write() MUST assign a unique id. Two marks in the same mark space MUST NOT share an id. Duplicate ids corrupt supersession chains and warning invalidation references.
 
-**P32: Total Write Ordering**: Marks MUST be totally ordered by (created_at, id). created_at is the mark space's clock at write. Among intents and actions on the same resource in one scope, the mark space MUST assign strictly increasing created_at: when its clock has not passed the latest such mark's created_at (writes within clock resolution, a fixed or stepped clock, or a clock that goes back), the next one gets the next representable time after it. Conflict resolution (FIRST_WRITER, and ties under HIGHEST_CONFIDENCE) therefore follows write order: an earlier intent wins every tie it breaks by created_at. Other marks get the clock's time (a resolved need keeps its need's), and id breaks their ties. Conflict resolution breaks ties only within one scope (a pair in two scopes is decided by which scope contains the other), so this order serves every tie-break, and no other scope's writes show in a claim's created_at. Write-order delivery (P52) follows the order of `write()` calls, not created_at.
+**P32: Total Write Ordering**: Marks MUST have a total order by (created_at, id). The created_at of a mark is the time of the mark space clock at the write.
+
+For intents and actions on the same resource in one scope, the mark space MUST assign strictly increasing created_at values. If its clock has not passed the created_at of the latest such mark, the next such mark gets the next representable time after it. This occurs with:
+- writes within the clock resolution
+- a fixed or stepped clock
+- a clock that goes backward
+
+Thus conflict resolution (FIRST_WRITER, and ties under HIGHEST_CONFIDENCE) follows the write order. In every tie that created_at breaks, the earlier intent wins. Other marks get the time of the clock. A resolved need keeps the created_at of the original need. The id breaks ties between these other marks.
+
+Conflict resolution breaks ties only within one scope. For a pair in two scopes, the decision depends on which scope contains the other. Thus this order serves every tie-break. For the same reason, no write in another scope shows in the created_at of a claim. Write-order delivery (P52) follows the order of the `write()` calls, not created_at.
 
 Ref: [`markspace/space.py::MarkSpace._created_at_for`](../markspace/space.py), [`tests/test_properties.py::TestP32TotalWriteOrdering`](../tests/test_properties.py), [`tests/test_guard.py::TestEqualTimeIntents`](../tests/test_guard.py)
 
 ### 8.6 Write Hooks
 
-The mark space supports post-write hooks - callbacks invoked after every successful `write()` call. Hooks enable the adaptive monitoring layer (Section 9.7) to observe all writes without modifying the write path itself.
+The mark space supports write hooks. A write hook is a callback that the mark space calls after every successful `write()` call. With write hooks, the adaptive monitoring layer (Section 9.7) can observe all writes without a change to the write path itself.
 
 ```
 add_write_hook(callback) -> handle_uuid
 remove_write_hook(handle_uuid) -> bool
 ```
 
-Hooks receive `(agent_id, stored_mark)` after the mark is committed. Key semantics:
+A write hook receives `(agent_id, stored_mark)` after the mark space commits the mark. The key semantics are:
 
-1. **Fire outside lock.** Hooks execute after the space's write lock is released, and after a guard's resource lock taken around the write, so a slow or failing hook cannot block subsequent writes.
-2. **Handle-based removal.** `add_write_hook()` returns a UUID handle. `remove_write_hook(handle)` removes by handle in O(1).
-3. **Silent failure.** If a hook raises an exception, it is silently caught. The stored mark and all subsequent reads are unaffected (P33).
-4. **Snapshot semantics.** The set of hooks to fire is snapshotted inside the lock, so hooks added or removed during firing do not affect the current write's hook dispatch.
+1. **Fire outside lock.** The hooks run after the mark space releases its write lock. If a guard took a resource lock around the write, the hooks also run after the guard releases that lock. Thus a slow or failing hook cannot block later writes.
+2. **Handle-based removal.** `add_write_hook()` returns a UUID handle. `remove_write_hook(handle)` removes the hook by its handle in O(1).
+3. **Silent failure.** If a hook raises an exception, the mark space catches it silently. The exception does not affect the stored mark or any later read (P33).
+4. **Snapshot semantics.** The mark space takes a snapshot of the set of hooks to fire while it holds its write lock. Thus if code adds or removes a hook while the hooks fire, the hook dispatch of the current write does not change.
 
-The primary consumer is the statistical envelope (Section 9.7), which registers a hook to record every write for anomaly detection.
+The main user of write hooks is the statistical envelope (Section 9.7). The envelope registers a hook that records every write for anomaly detection.
 
-**P33: Hook Non-Interference**: A post-write hook failure MUST NOT affect the stored mark or subsequent reads. Hooks are informational observers, not gatekeepers.
+**P33: Hook Non-Interference**: A failure of a write hook MUST NOT affect the stored mark or later reads. Hooks are informational observers. They are not gatekeepers.
 
 Ref: [`markspace/space.py::MarkSpace.add_write_hook`](../markspace/space.py)
 
 ## 9. Guard (Deterministic Enforcement Layer)
 
-Agents cannot be trusted to voluntarily read marks before acting. LLMs are non-deterministic and may forget or ignore instructions. The guard moves coordination enforcement from the agent (unreliable) to the harness (deterministic). The guard is a descendant of [Hoare monitors](https://doi.org/10.1145/355620.361161) (1974): a monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. Here, the guard wraps the mark space, ensuring every tool call passes through `pre_action` before execution.
+A deployment cannot trust agents to read marks voluntarily before they act. An LLM is not deterministic. It can forget or ignore instructions. The guard moves coordination enforcement from the agent, which is not reliable, to the harness, which is deterministic.
+
+The guard is a descendant of [Hoare monitors](https://doi.org/10.1145/355620.361161) (1974). A monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. Here, the guard wraps the mark space. The guard makes sure that `pre_action` checks every tool call before execution.
 
 <p align="center"><img src="../figures/guard_flow.svg" alt="Guard flow: pre_action grants a lease, the tool runs with the fencing token, post_action records the action under the lease" width="480"></p>
 
 ### 9.1 Principle
 
-Marks are WRITTEN by agents (voluntary, through LLM reasoning) but ENFORCED by the guard (deterministic, wrapping every tool call). The agent writes intents and observations as part of its reasoning. The guard reads intents and enforces conflict resolution mechanically before any tool executes.
+Agents WRITE marks voluntarily, through LLM reasoning. The guard ENFORCES the marks. The guard is deterministic and wraps every tool call. The agent writes intents and observations as part of its reasoning. The guard reads intents. Before any tool executes, the guard enforces conflict resolution mechanically.
 
-Coordination reliability MUST NOT depend on the LLM being reliable.
+Coordination reliability MUST NOT depend on the reliability of the LLM.
 
-**Architectural note.** The guard is a wrapper around the mark space, not a mandatory gateway. Code with direct access to the MarkSpace can call `write()` without passing through the guard, bypassing conflict resolution entirely. This is by design - the guard is infrastructure that the harness wires in, not a security boundary enforced by the mark space itself. Safety properties (P36-P39, P71-P76) hold only when the harness routes all tool-triggered writes through the guard; an action written directly with `write()` is not fenced (Section 6.5). Implementations SHOULD document this constraint and MAY add an optional enforcement flag if the deployment requires it.
+**Architectural note.** The guard is a wrapper around the mark space, not a mandatory gateway. Code that has direct access to the mark space can call `write()` without the guard. Such a write does not use conflict resolution at all. This is intentional. The guard is infrastructure that the harness installs. It is not a security boundary that the mark space itself enforces.
+
+The safety properties (P36-P39, P71-P76) hold only when the harness sends all tool-triggered writes through the guard. The guard does not fence an action that code writes directly with `write()` (Section 6.5). Implementations SHOULD document this constraint. Implementations MAY add an optional enforcement flag if the deployment requires it.
 
 ### 9.2 Guard Operations
 
@@ -846,60 +1080,69 @@ message GuardDecision {
 }
 ```
 
-The decision is informational for the agent's reasoning ("I was blocked because another agent has higher priority on this resource, I'll try a different one"). The agent cannot override the verdict; the harness enforces it.
+The agent uses the decision as information for its reasoning. For example, the agent can reason: "I was blocked because another agent has higher priority on this resource. I will try a different one." The agent cannot override the verdict. The harness enforces the verdict.
 
 ### 9.4 What the Agent Still Does
 
-The guard handles conflict enforcement. The agent still voluntarily:
-- Writes observation marks (sharing knowledge with the fleet)
-- Writes warning marks (invalidating stale information)
-- Writes need marks (requesting principal input for non-conflict decisions)
-- Chooses which resources to target (the guard only checks, it doesn't choose)
+The guard is responsible for conflict enforcement. The agent still does these tasks voluntarily:
+- It writes observation marks to share knowledge with the fleet.
+- It writes warning marks to invalidate stale information.
+- It writes need marks to request principal input for decisions that are not about conflicts.
+- It chooses which resources to target. The guard only checks. The guard does not choose.
 
-The division: **the agent decides WHAT to do. The guard decides WHETHER it's allowed.**
+The division of work is: **the agent decides WHAT to do. The guard decides WHETHER it is allowed.**
 
 ### 9.5 Warning Invalidation
 
-When a warning mark references `invalidates: mark_id`, it reduces the target mark's effective strength. Each mark, the warning included, decays by the decay configuration of its own scope.
+When a warning mark references `invalidates: mark_id`, the warning reduces the effective strength of the target mark. Each mark decays by the decay configuration of its own scope. This is also true for the warning.
 
 ```
 effective_strength_with_warnings(mark, now) =
   max(0, effective_strength(mark, now) - sum(effective_strength(w, now) for w in warnings_targeting(mark)))
 ```
 
-A warning at full strength completely cancels a mark of equal base strength. As the warning decays, the invalidated mark's effective strength recovers. This models the biological pattern: a repellent pheromone suppresses an attractant, but as the repellent evaporates, the attractant becomes detectable again (if it hasn't also evaporated).
+A warning at full strength fully cancels a mark of equal base strength. As the warning decays, the effective strength of the invalidated mark recovers. This models a biological pattern. A repellent pheromone suppresses an attractant. As the repellent evaporates, the attractant becomes detectable again, if it has not also evaporated.
 
-**Warning vs action marks.** Warnings MAY target action marks. While actions are "facts" (Section 2.3), a warning targeting an action does not erase the fact - it signals that the fact is contested or its consequences are problematic. The action's base strength remains constant (P2), but its effective-strength-with-warnings may be temporarily reduced. This allows agents to express "this action happened, but something went wrong" without requiring supersession. A warning that invalidates an action MUST come from an agent that may write warnings in the action's own scope: otherwise an agent could hide a booking from any scope it may warn in, and take the resource (Section 6.5). If a deployment requires actions to be immune to warning invalidation, the guard SHOULD reject warnings where `invalidates` references an action mark.
+**Warning vs action marks.** Warnings MAY target action marks. Actions are "facts" (Section 2.3). A warning that targets an action does not erase the fact. The warning signals that the fact is contested or that its consequences are problematic. The base strength of the action stays constant (P2), but the warnings can temporarily reduce its effective-strength-with-warnings. Thus an agent can express "this action happened, but something went wrong" without supersession.
+
+A warning that invalidates an action MUST come from an agent that is authorized to write warnings in the action's own scope. Otherwise, an agent could hide a booking from any scope where it is authorized to write warnings. Then it could take the resource (Section 6.5). If a deployment requires that warnings cannot invalidate actions, the guard SHOULD reject warnings where `invalidates` references an action mark.
 
 Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestWarningProperties`](../tests/test_properties.py)
 
 ### 9.6 Formal Properties
 
-**P34: Invalidation Bound**: A warning MUST NOT reduce a mark's effective strength below 0.
+**P34: Invalidation Bound**: A warning MUST NOT reduce the effective strength of a mark below 0.
 
-**P35: Invalidation Decay**: As a warning decays, the invalidated mark's effective strength MUST recover (assuming the mark itself hasn't fully decayed).
+**P35: Invalidation Decay**: As a warning decays, the effective strength of the invalidated mark MUST recover, if the mark itself has not fully decayed.
 
-**P36: Guard Determinism**: Given the same mark space state and lease table, `pre_action` MUST return the same verdict for the same inputs.
+**P36: Guard Determinism**: For the same mark space state, the same lease table and the same inputs, `pre_action` MUST return the same verdict.
 
-**P37: Guard Atomicity**: If `pre_action` returns CONFLICT or BLOCKED, `tool_fn` MUST NOT be called. The tool function is never invoked unless the guard explicitly allows it.
+**P37: Guard Atomicity**: If `pre_action` returns CONFLICT or BLOCKED, `tool_fn` MUST NOT be called. Nothing calls the tool function unless the guard explicitly allows it.
 
-**P38: Guard Transparency**: The `GuardDecision` MUST contain sufficient information for the agent to reason about why it was blocked and choose an alternative. Specifically: a CONFLICT verdict MUST include `winning_intent` (the intent that won the resource); a BLOCKED verdict MUST include a non-empty `reason` string; a DENIED verdict MUST include `reason` specifying which authorization check failed. Exception (P22): a decision MUST NOT name an intent or action from a CLASSIFIED scope the deciding agent has no read authorization for. When the deciding agent is not known (deferred resolution without the agents mapping), a decision names only intents in OPEN scopes. For a hidden winner, `winning_intent` is null and the reason says the agent yields to an intent in a scope it cannot read; `conflicting_intents` leaves hidden intents out, and an ALLOW reason does not mention a conflict the agent cannot see. The verdict itself still counts every intent the decision considers.
+**P38: Guard Transparency**: The `GuardDecision` MUST contain sufficient information for the agent to reason about why it was blocked and to choose an alternative. Specifically:
+- A CONFLICT verdict MUST include `winning_intent`, the intent that won the resource.
+- A BLOCKED verdict MUST include a non-empty `reason` string.
+- A DENIED verdict MUST include a `reason` that specifies which authorization check failed.
 
-**P39: Action Precedence**: If an action mark exists on a resource from agent X, in the acting scope, an ancestor or a descendant, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
+Exception (P22): a decision MUST NOT name an intent or action from a CLASSIFIED scope for which the deciding agent has no read authorization. When the deciding agent is not known, a decision names only intents in OPEN scopes. The deciding agent is not known in deferred resolution without the agents mapping.
+
+If the winner is hidden, `winning_intent` is null. The reason then says that the agent yields to an intent in a scope that it cannot read. The list `conflicting_intents` does not include hidden intents. An ALLOW reason does not mention a conflict that the agent cannot see. The verdict itself still counts every intent that the decision considers.
+
+**P39: Action Precedence**: Consider an action mark from agent X on a resource, in the acting scope, an ancestor or a descendant. If such a mark exists, the guard MUST return CONFLICT for the intent of any other agent on that resource. Completed actions take precedence over new intents. Without this rule, conflict resolution that uses only intents would not detect resources that executed actions already claimed.
 
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_guard.py`](../tests/test_guard.py)
 
 ### 9.7 Statistical Envelope
 
-The statistical envelope provides behavioral anomaly detection for agent write patterns. It tracks per-agent write rates using [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)) for streaming mean and variance, detecting three categories of anomaly: rate spikes, type distribution shifts, and cross-agent concentration.
+The statistical envelope gives behavioral anomaly detection for the write patterns of agents. It tracks the write rate of each agent. To compute a streaming mean and variance, it uses [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)). It detects three categories of anomaly: rate spikes, type distribution shifts, and cross-agent concentration.
 
-**Detection algorithm.** The envelope divides time into tumbling windows (default 300 seconds). At each window boundary, the window's per-type counts are fed into Welford accumulators. Three checks run on every `check(agent)` call:
+**Detection algorithm.** The envelope divides time into tumbling windows. The default window is 300 seconds. At the end of each window, the envelope adds the per-type counts of the window to Welford accumulators. Each `check(agent)` call runs three checks:
 
-1. **Rate anomaly** (per-agent, per-type): Current window count exceeds `mean + k * stddev` (default k=3.5). Also checks boundary-straddling bursts where `current + previous > 2 * threshold`.
-2. **Type shift** (per-agent): The fraction of mark types in the current window deviates from the historical distribution by more than `type_shift_threshold` (default 0.5).
-3. **Concentration** (cross-agent): Three or more agents wrote to the same `(scope, topic)` in the current window.
+1. **Rate anomaly** (per-agent, per-type): the count in the current window is more than `mean + k * stddev` (default k=3.5). This check also finds bursts that span the end of a window, where `current + previous > 2 * threshold`.
+2. **Type shift** (per-agent): the fraction of mark types in the current window differs from the historical distribution by more than `type_shift_threshold` (default 0.5).
+3. **Concentration** (cross-agent): three or more agents wrote to the same `(scope, topic)` in the current window.
 
-**Verdicts.** `check(agent)` returns one of:
+**Verdicts.** `check(agent)` returns one of these verdicts:
 
 | Verdict | Trigger | Consequence |
 |---------|---------|-------------|
@@ -907,32 +1150,36 @@ The statistical envelope provides behavioral anomaly detection for agent write p
 | FLAGGED | Concentration detected (cross-agent pattern) | Warning mark written; no barrier |
 | RESTRICTED | Individual anomaly (rate spike or type shift) | Barrier created/narrowed on the flagged scope |
 
-**Escalation policy.** When the guard receives a RESTRICTED verdict, it applies scope-scoped barrier narrowing via `_apply_restriction()`:
+**Escalation policy.** When the guard receives a RESTRICTED verdict, it uses `_apply_restriction()` to narrow the barrier by scope:
 
-1. First flag on a scope: revoke the triggering mark type in that scope only.
-2. Subsequent flags on different scopes: each narrows one additional scope.
-3. After `global_escalation_threshold` total flags (default 3): require Need marks before any action in any scope.
-4. Each restriction writes invalidation warnings on the agent's recent observations in the flagged scope, plus an audit Need mark for the principal.
+1. At the first flag on a scope, the guard revokes the triggering mark type in that scope only.
+2. Each subsequent flag on a different scope narrows one more scope.
+3. After `global_escalation_threshold` flags in total (default 3), the guard requires need marks before any action in any scope.
+4. Each restriction writes invalidation warnings on the recent observations of the agent in the flagged scope. It also writes an audit need mark for the principal.
 
-**Declared baselines.** Agents can declare expected activity in their manifest via `expected_activity: dict[str, float]` (mark type value to expected marks per hour). The rate is window-independent - the envelope converts to per-window counts using `window_seconds`, so agent creators don't need to know the window size. When present, the envelope calls `detector.seed_baseline()` at registration time, pre-loading the detector with the declared baseline. This eliminates the cold-start blind spot for agents with known behavior - deviations from the declared baseline are flagged immediately. Real observations refine the seeded baseline over time. The synthetic variance is set to 25% of the mean squared (stddev = 0.5 * mean), so small natural deviations from the declared rates do not trigger false positives.
+**Declared baselines.** An agent can declare its expected activity in its manifest with `expected_activity: dict[str, float]`. This field maps a mark type value to the expected marks per hour. The rate does not depend on the window. The envelope uses `window_seconds` to convert the rate to counts per window. Thus agent creators do not need to know the window size.
 
-**Exempt agents.** The guard's system agent and the diagnostic probe agent (Section 9.9) are added to the envelope's `exempt_agents` set. Their writes are invisible to the envelope, preventing feedback loops where the guard's own warning/need marks trigger further anomalies. Exemption should be used sparingly - external bots and integrations should be monitored with their own baselines (using `expected_activity` declarations), not exempted.
+When `expected_activity` is present, the envelope calls `detector.seed_baseline()` at registration time. This call loads the declared baseline into the detector in advance. It removes the cold-start blind spot for agents with known behavior. The envelope flags deviations from the declared baseline immediately.
 
-**`write_mark()` as single enforcement boundary.** All agent writes pass through `Guard.write_mark()`, which checks the barrier, envelope, rate limit, and content policies (for Observation marks) before delegating to `space.write()`. Intent and Action marks are rejected by `write_mark()` with a ValueError - they flow through `pre_action()`/`post_action()` instead. This ensures every observation, warning, and need write is monitored.
+Real measurements refine the seeded baseline over time. The synthetic variance of the seed is 25% of the mean squared (stddev = 0.5 * mean). Thus small natural deviations from the declared rates do not cause false positives.
 
-**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until `reset(agent, principal_token)` is called. The `restricted` flag is sticky.
+**Exempt agents.** The `exempt_agents` set of the envelope contains the system agent of the guard and the diagnostic probe agent (Section 9.9). The envelope does not see their writes. This prevents feedback loops in which the warning and need marks of the guard cause more anomalies. A deployment should use exemption rarely. The envelope should monitor external bots and integrations with their own baselines (with `expected_activity` declarations). A deployment should not exempt them.
 
-**P41: Envelope Cold Start Safety**: `check(agent)` MUST return NORMAL for any agent whose detector reports `is_ready() == False`. For the default `WelfordDetector`, this means fewer than `min_samples` completed windows. New agents are not flagged while the baseline is being established.
+**`write_mark()` as single enforcement point.** Every agent write uses `Guard.write_mark()`. This method checks the barrier, the envelope, the rate limit and, for observation marks, the content policies. Then it delegates the write to `space.write()`. `write_mark()` rejects intent and action marks with a ValueError. These marks use `pre_action()`/`post_action()` instead. This makes sure that the guard monitors every observation, warning and need write.
 
-**P42: Write-Mark Atomicity**: A `write_mark()` rejection (barrier check or envelope restriction) MUST prevent the mark from being stored. No partial writes.
+**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until a call to `reset(agent, principal_token)`. The `restricted` flag stays set.
 
-**P43: Escalation Boundedness**: Automatic barrier escalation from envelope MUST NOT restrict more than one scope per envelope flag. Global restriction (require-need-all) MUST require `global_escalation_threshold` flags.
+**P41: Envelope Cold Start Safety**: `check(agent)` MUST return NORMAL for any agent whose detector reports `is_ready() == False`. For the default `WelfordDetector`, this means that the detector has fewer than `min_samples` completed windows. The envelope does not flag a new agent while its baseline is not yet ready.
+
+**P42: Write-Mark Atomicity**: A `write_mark()` rejection, from a barrier check or an envelope restriction, MUST prevent storage of the mark. There are no partial writes.
+
+**P43: Escalation Boundedness**: Automatic barrier escalation from the envelope MUST NOT restrict more than one scope for each envelope flag. Global restriction (require-need-all) MUST require `global_escalation_threshold` flags.
 
 Ref: [`markspace/envelope.py::StatisticalEnvelope`](../markspace/envelope.py), [`tests/test_envelope.py`](../tests/test_envelope.py), [`tests/test_defense_integration.py`](../tests/test_defense_integration.py)
 
 ### 9.8 Absorbing Barrier
 
-The absorbing barrier provides monotonic permission restriction for agents. It is a mutable overlay on the frozen Agent model - agents are immutable (their scope permissions are set at creation), but barriers track runtime revocations without modifying the agent.
+The absorbing barrier gives monotonic permission restriction for agents. It is a mutable overlay on the frozen Agent model. Agents are immutable. An agent gets its scope permissions at creation. Barriers record runtime revocations and do not modify the agent.
 
 **Barrier operations:**
 
@@ -945,28 +1192,28 @@ restore(scope, mark_type, token)   -- re-grant (principal-only)
 restore_all(token)                 -- clear all restrictions (principal-only)
 ```
 
-**Monotonicity.** `narrow()` only adds to the revocation set. There is no `un-narrow()`. The only way to re-grant a revoked permission is `restore()` with the correct principal token. This makes barriers safe under concurrent access - the set of revocations can only grow, never shrink, without principal intervention.
+**Monotonicity.** `narrow()` only adds to the revocation set. There is no `un-narrow()`. Only `restore()` with the correct principal token can re-grant a revoked permission. This makes barriers safe under concurrent access. Without principal intervention, the set of revocations can only grow and never shrink.
 
-**Wildcard support.** `narrow_all(mark_type)` stores `("*", mark_type)` in the revocation set. `is_allowed_checked()` checks both the exact `(scope, mark_type)` and the wildcard `("*", mark_type)` entries.
+**Wildcard support.** `narrow_all(mark_type)` stores `("*", mark_type)` in the revocation set. `is_allowed_checked()` checks the exact `(scope, mark_type)` entry and the wildcard `("*", mark_type)` entry.
 
-**Escalation counter.** Each barrier tracks a `flag_count` that increments on every envelope flag. The guard uses this counter to decide escalation level (scope-scoped narrowing vs global need requirement).
+**Escalation counter.** Each barrier records a `flag_count`. The count increases by one at every envelope flag. The guard uses this counter to decide between two escalation levels: to narrow one scope, or to require need marks globally.
 
-**P44: Barrier Monotonicity**: If `is_allowed(scope, mark_type)` returns False, it MUST return False for all subsequent calls until `restore(scope, mark_type, principal_token)` succeeds. Narrowing is irreversible without principal authentication.
+**P44: Barrier Monotonicity**: If `is_allowed(scope, mark_type)` returns False, it MUST return False for all subsequent calls until `restore(scope, mark_type, principal_token)` succeeds. Without principal authentication, no operation can reverse a revocation.
 
-**P45: Barrier Principal Exclusivity**: `restore()` MUST reject any token that does not match the barrier's `_principal_token`. Only the principal who created the barrier can lift restrictions.
+**P45: Barrier Principal Exclusivity**: `restore()` MUST reject any token that does not match the `_principal_token` of the barrier. Only the principal who created the barrier can remove restrictions.
 
 Ref: [`markspace/barrier.py::AgentBarrier`](../markspace/barrier.py), [`tests/test_barrier.py`](../tests/test_barrier.py)
 
 ### 9.9 Diagnostic Probe
 
-The diagnostic probe verifies agent health through canary injection and acknowledgment gating. It writes a synthetic observation mark to an isolated diagnostic scope; the harness reads this mark back from the space when building each agent's system prompt, and gates all tool calls on acknowledgment.
+The diagnostic probe verifies the health of agents with canary injection and an acknowledgment gate. The probe writes a synthetic observation mark to an isolated diagnostic scope. When the harness builds the system prompt of each agent, it reads this mark from the mark space. The harness also allows tool calls only after the agent acknowledges the canary.
 
 **Probe cycle:**
 
-1. **Inject canary.** Write an observation mark with topic `probe-canary` to the diagnostic scope via `space.write()`. Returns the mark's UUID.
-2. **Build prompt from space.** The harness reads the diagnostic scope for active canary marks and embeds the canary ID in the agent's system prompt. The canary originates from the mark space - not a separate parameter - matching production deployments where agent context is derived from shared state.
-3. **Gate tool calls.** All tool calls except `acknowledge_canary` are blocked until the agent calls `acknowledge_canary` with the correct canary ID. An agent that does not acknowledge gets zero actions that round.
-4. **Check visibility.** Verify the canary mark is readable from the space (sanity check on the space itself).
+1. **Inject canary.** The probe writes an observation mark with topic `probe-canary` to the diagnostic scope through `space.write()`. The call returns the UUID of the mark.
+2. **Build prompt from space.** The harness reads the active canary marks in the diagnostic scope. It puts the canary ID in the system prompt of the agent. The canary comes from the mark space, not from a separate parameter. This matches production deployments, where the agent context comes from shared state.
+3. **Gate tool calls.** The harness blocks all tool calls except `acknowledge_canary` until the agent calls `acknowledge_canary` with the correct canary ID. An agent that does not acknowledge the canary gets zero actions in that round.
+4. **Check visibility.** Verify that the canary mark is readable from the mark space. This is a sanity check on the mark space itself.
 
 **Verdicts:**
 
@@ -975,11 +1222,13 @@ The diagnostic probe verifies agent health through canary injection and acknowle
 | HEALTHY | Agent called `acknowledge_canary` with correct ID | No action |
 | COMPROMISED | Agent was active but did not acknowledge | Blocking Need + barrier applied |
 
-**Scope isolation.** The probe writes only to a dedicated diagnostic scope (default `"diagnostics"`). The probe agent's permissions are restricted to this scope - it has no write access to production scopes. This prevents probe infrastructure from polluting production mark data.
+**Scope isolation.** The probe writes only to a dedicated diagnostic scope (default `"diagnostics"`). The permissions of the probe agent cover only this scope. The probe agent has no write access to production scopes. Thus probe infrastructure does not pollute production mark data.
 
-**Envelope exemption.** The probe agent is in the envelope's `exempt_agents` set. Probe writes (which can be frequent during health checks) do not contribute to the envelope's anomaly detection statistics.
+**Envelope exemption.** The probe agent is in the `exempt_agents` set of the envelope. Probe writes can be frequent during health checks. They are not part of the anomaly detection statistics of the envelope.
 
-**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means the agent's system prompt was overridden - it ignored a trusted-channel instruction. The probe writes a blocking Need for principal review and the guard applies a global barrier: observation and action permissions revoked, only Need marks remain writable until the principal restores access. Single miss, immediate lockdown - no grace period, because a compromised agent that gets even one action can cause harm.
+**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. The guard applies a global barrier, which revokes the observation and action permissions. Until the principal restores access, the agent can write only need marks.
+
+One miss causes immediate lockdown. There is no grace period, because a compromised agent can cause harm with even one action.
 
 **P46: Probe Mark Isolation**: Probe-injected marks MUST be writable only to the configured diagnostic scope. The probe agent MUST NOT have write access to production scopes.
 
@@ -987,7 +1236,7 @@ Ref: [`markspace/probe.py::DiagnosticProbe`](../markspace/probe.py), [`tests/tes
 
 ### 9.10 Token Budgets
 
-An agent MAY carry a `TokenBudget` in its manifest that limits token consumption. All fields are optional - omitted fields mean no limit. The guard tracks cumulative usage and enforces limits at activation time.
+An agent MAY carry a `TokenBudget` in its manifest that limits token consumption. All fields are optional. An omitted field means no limit. The guard tracks cumulative usage and enforces the limits at activation time.
 
 ```protobuf
 message TokenBudget {
@@ -1006,36 +1255,43 @@ message AgentManifest {
 
 **Enforcement rules:**
 
-1. **Per-round input budget.** When `max_input_tokens_per_round` is set, the mark space returns marks ranked by effective strength (which incorporates recency through decay) and truncates at the token limit.
-2. **Per-round output budget.** When `max_output_tokens_per_round` is set, the LLM call is configured with a matching `max_tokens` parameter.
-3. **Lifetime tracking.** The guard maintains running totals for input and output tokens across all rounds. Usage is monotonically non-decreasing (P63).
-4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking Need mark (`blocking=False`). Exactly one warning per dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where R is the expected rounds before the principal responds, T is tokens per round, and B is the total budget. Default 4/5 assumes approximately one round of runway.
-5. **Hard stop at limit.** When lifetime usage reaches the total budget in either dimension, the guard rejects all further activations (P61). The agent's existing marks persist.
-6. **Principal resumption.** The principal MAY increase the budget by updating the manifest. If the new total exceeds consumption, the agent resumes (P62).
+1. **Per-round input budget.** When the manifest sets `max_input_tokens_per_round`, the mark space returns marks ranked by effective strength. Effective strength includes recency through decay. The mark space truncates the list at the token limit.
+2. **Per-round output budget.** When the manifest sets `max_output_tokens_per_round`, the LLM call gets a matching `max_tokens` parameter.
+3. **Lifetime tracking.** The guard keeps running totals of the input and output tokens across all rounds. Usage is monotonically non-decreasing (P63).
+4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking need mark (`blocking=False`). The guard writes exactly one such need mark for each dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where:
+   - R is the expected number of rounds before the principal responds.
+   - T is the number of tokens per round.
+   - B is the total budget.
 
-Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor and are driven by mark space size. Output tokens reflect agent verbosity and model choice. The protocol controls tokens - the measurable quantity at the guard boundary. Cost depends on model pricing, which varies across providers and changes over time. Operators derive cost externally from telemetry using their own pricing tables.
+   The default 4/5 assumes approximately one round of runway.
+5. **Hard stop at limit.** When lifetime usage reaches the total budget in either dimension, the guard rejects all further activations (P61). The existing marks of the agent stay in the mark space.
+6. **Principal resumption.** The principal MAY increase the budget with an update to the manifest. If the new total is more than the consumption, the agent resumes (P62).
+
+Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor. The size of the mark space drives them. Output tokens reflect agent verbosity and model choice.
+
+The protocol controls tokens. Tokens are the measurable quantity at the guard. Cost depends on model pricing. Model pricing varies across providers and changes over time. Operators calculate cost outside the protocol from telemetry, with their own pricing tables.
 
 **P57: Telemetry Non-Interference**: Telemetry emission MUST NOT affect guard verdicts, mark storage, or coordination semantics. A telemetry sink failure MUST NOT block writes or reads.
 
-**P58: Telemetry Completeness**: Every `write_mark()` and `execute()` call that passes through the guard MUST emit a structured log event, regardless of whether the operation was accepted or rejected.
+**P58: Telemetry Completeness**: Every `write_mark()` and `execute()` call through the guard MUST emit a structured log event, whether the guard accepted or rejected the operation.
 
-**P59: Budget Backward Compatibility**: An AgentManifest with no `budget` field MUST behave identically to the pre-budget protocol. No enforcement, no tracking.
+**P59: Budget Backward Compatibility**: An AgentManifest with no `budget` field MUST behave identically to the pre-budget protocol. There is no enforcement and no tracking.
 
-**P60: Budget Warning Threshold**: When lifetime token usage crosses `warning_fraction` of the total budget in any dimension, the guard MUST write exactly one non-blocking Need mark for that dimension. The Need mark MUST have `blocking=False`.
+**P60: Budget Warning Threshold**: When lifetime token usage crosses `warning_fraction` of the total budget in any dimension, the guard MUST write exactly one non-blocking need mark for that dimension. The need mark MUST have `blocking=False`.
 
-**P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. Once stopped, the agent stays stopped until the principal increases the budget.
+**P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. After the stop, the agent stays stopped until the principal increases the budget.
 
-**P62: Budget Resumption**: A principal MAY increase an agent's budget by updating the manifest. After a budget increase that makes the new total exceed cumulative usage, the agent MUST be eligible for activation again.
+**P62: Budget Resumption**: A principal MAY increase the budget of an agent with an update to the manifest. After a budget increase makes the new total more than the cumulative usage, the agent MUST be eligible for activation again.
 
-**P63: Budget Tracking Accuracy**: The guard's cumulative token tracking MUST be monotonically non-decreasing. Token usage once recorded MUST NOT be decremented. A principal increases the budget ceiling, not resets consumption - the agent resumes with its full history intact.
+**P63: Budget Tracking Accuracy**: The cumulative token tracking of the guard MUST be monotonically non-decreasing. The guard MUST NOT decrement token usage after it records it. A principal increases the budget ceiling. A principal does not reset consumption. The agent resumes with its full history intact.
 
 Ref: [`markspace/budget.py`](../markspace/budget.py), [`markspace/guard.py::record_round_tokens`](../markspace/guard.py), [`tests/test_budget.py`](../tests/test_budget.py)
 
 ### 9.11 Telemetry
 
-The guard MAY emit structured telemetry on every decision. The telemetry interface is [OpenTelemetry](https://opentelemetry.io/)-compatible: metrics as instruments, structured logs as log records, optional trace context propagation.
+The guard MAY emit structured telemetry on every decision. The telemetry interface is compatible with [OpenTelemetry](https://opentelemetry.io/). It gives metrics as instruments and structured logs as log records. Trace context propagation is optional.
 
-Telemetry goes to a configurable sink - not into the mark space. Marks are coordination signals between agents; telemetry is operational data for humans.
+Telemetry goes to a configurable sink. Telemetry does not go into the mark space. Marks are coordination signals between agents. Telemetry is operational data for humans.
 
 **Metrics:**
 
@@ -1052,13 +1308,19 @@ Telemetry goes to a configurable sink - not into the mark space. Marks are coord
 | `markspace.agent.round.duration` | Histogram | `agent_id` |
 | `markspace.needs.pending` | Gauge | `scope` |
 
-**Sink implementations:** `NullSink` (no-op, default), `StructuredLogSink` (JSON via Python logging), `InMemorySink` (testing), `FailingSink` (P57 verification). Deployments MAY provide custom sinks (e.g., OTel SDK wrapper).
+**Sink implementations:**
+- `NullSink`: no-op, the default.
+- `StructuredLogSink`: JSON through Python logging.
+- `InMemorySink`: for testing.
+- `FailingSink`: for P57 verification.
+
+Deployments MAY provide custom sinks, for example an OTel SDK wrapper.
 
 Ref: [`markspace/telemetry.py`](../markspace/telemetry.py), [`tests/test_telemetry.py`](../tests/test_telemetry.py)
 
 ### 9.12 Scope Rate Limits
 
-A scope MAY define per-agent and fleet-wide write rate limits. The guard enforces these at write time, independently of the statistical envelope and token budgets (P66).
+A scope MAY define per-agent and fleet-wide write rate limits. The guard enforces these limits at write time. It enforces them independently of the statistical envelope and the token budgets (P66).
 
 ```protobuf
 message ScopeRateLimit {
@@ -1068,27 +1330,29 @@ message ScopeRateLimit {
 }
 ```
 
-The `rate_limit` field is added to the Scope definition. When omitted, no rate limiting applies.
+This section adds the `rate_limit` field to the Scope definition. When a scope omits this field, no rate limit applies.
 
-**P64: Rate Limit Enforcement**: When a scope has a rate limit and an agent exceeds `max_writes_per_agent_per_window`, the write MUST be rejected. The rejection MUST be visible to the envelope via `record_attempt()`.
+**P64: Rate Limit Enforcement**: When a scope has a rate limit and an agent exceeds `max_writes_per_agent_per_window`, the guard MUST reject the write. The rejection MUST be visible to the envelope through `record_attempt()`.
 
-**P65: Rate Limit Fleet Cap**: When total writes to a scope exceed `max_total_writes_per_window`, ALL further writes MUST be rejected until the window rotates, regardless of per-agent usage.
+**P65: Rate Limit Fleet Cap**: When the total writes to a scope exceed `max_total_writes_per_window`, the guard MUST reject ALL further writes until the window rotates. Per-agent usage has no effect on this rule.
 
-**P66: Rate Limit Independence**: Rate limits operate independently of the statistical envelope and token budgets. An agent within its rate limit but flagged by the envelope is still subject to envelope restrictions; an agent within its envelope baseline but exceeding its rate limit is still rejected.
+**P66: Rate Limit Independence**: Rate limits operate independently of the statistical envelope and token budgets:
+- If the envelope flags an agent that is within its rate limit, envelope restrictions still apply to the agent.
+- If an agent is within its envelope baseline but exceeds its rate limit, the guard still rejects the agent.
 
 Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.py::_check_rate_limit`](../markspace/guard.py), [`tests/test_rate_limit.py`](../tests/test_rate_limit.py)
 
 ### 9.13 Content Policies
 
-The guard's existing enforcement layers operate on structural properties of marks - who wrote it, which scope, what type, how many. None inspect mark content. Content policies add a pluggable content inspection layer for Observation marks, positioned between rate limiting and scope validation in the `write_mark()` enforcement stack:
+The enforcement layers that the guard already has operate on structural properties of marks: the author, the scope, the type and the count. None of these layers inspects mark content. Content policies add a pluggable content inspection layer for observation marks. This layer is between the rate limit check and scope validation in the `write_mark()` enforcement stack:
 
 ```
 authorization -> barrier -> envelope -> rate limit -> CONTENT POLICY -> scope validation -> write
 ```
 
-Content policies run late in the stack because they may be expensive (LLM calls). Cheap structural checks gate first.
+Content policies run late in the stack because they can be expensive (LLM calls). Cheap structural checks filter writes first.
 
-**Scope.** Content policies apply to Observation marks only. Warning and Need marks are system-facing and principal-facing respectively - blocking or rewriting them would suppress safety signals or escalation. Intent and Action marks have no free-text content field; their fields (`resource`, `action`, `confidence`, `result`) carry structural meaning for conflict resolution and historical record.
+**Mark types.** Content policies apply only to observation marks. Warning marks are for the system, and need marks are for the principal. If a policy blocked or rewrote them, it would suppress safety signals or escalation. Intent and action marks have no free-text content field. Their fields (`resource`, `action`, `confidence`, `result`) carry structural meaning for conflict resolution and the historical record.
 
 **Interface.**
 
@@ -1110,49 +1374,51 @@ message PolicyResult {
 
 A `ContentPolicy` is an abstract class with an `evaluate(agent, mark, scope) -> PolicyResult` method. Implementations must be thread-safe.
 
-**Composition.** The guard accepts an ordered list of content policies. Policies compose as a pipeline:
+**Composition.** The guard accepts an ordered list of content policies. The policies compose as a pipeline:
 
-- A REWRITE from policy N replaces the mark's `content` field and feeds the rewritten mark into policy N+1.
-- The first REJECT terminates the pipeline. Subsequent policies are not evaluated.
-- FLAG verdicts accumulate. The mark is written, and a Warning is emitted to the `_system` scope with the aggregated flag reasons.
-- ALLOW passes the mark through unchanged.
+- A REWRITE from policy N replaces the `content` field of the mark. The pipeline then gives the rewritten mark to policy N+1.
+- The first REJECT stops the pipeline. The pipeline does not evaluate the subsequent policies.
+- FLAG verdicts accumulate. The guard writes the mark. It also emits a warning to the `_system` scope with the combined flag reasons.
+- ALLOW lets the mark continue unchanged.
 
-Order matters: cheap checks (length limits, regex) should precede expensive checks (LLM calls) to minimize cost on the common path.
+The order is important. Cheap checks (length limits, regex) should come before expensive checks (LLM calls). This minimizes the cost on the common path.
 
-**FLAG behavior.** A FLAG verdict writes the Observation mark (the write succeeds) and emits a Warning to the `_system` scope recording the flag reason. FLAG does not feed into the statistical envelope - the envelope already observes the written mark through the post-write hook, and calling `record_attempt()` would double-count the write, distorting the agent's anomaly baseline. FLAG is an observability signal, not an enforcement signal.
+**FLAG behavior.** After a FLAG verdict, the write of the observation mark succeeds. The guard also emits a warning to the `_system` scope. This warning records the flag reason.
 
-**P67: Content Policy Atomicity**: A REJECT verdict MUST prevent the Observation mark from being stored. No partial writes.
+A FLAG gives no input to the statistical envelope. The envelope already sees the written mark through the write hook. A call to `record_attempt()` would count the write twice. This double count would distort the anomaly baseline of the agent. FLAG is an observability signal, not an enforcement signal.
 
-**P68: Content Policy Composition**: Policies MUST execute in declaration order. A REWRITE from policy N MUST feed the rewritten mark into policy N+1. The first REJECT MUST terminate the pipeline.
+**P67: Content Policy Atomicity**: A REJECT verdict MUST prevent storage of the observation mark. There are no partial writes.
 
-**P69: Content Policy Scope**: Content policies MUST only be evaluated for Observation marks. Content policies MUST only modify the `content` field via REWRITE. Mark identity (`id`, `agent_id`, `scope`, `mark_type`, `created_at`) and structural fields (`topic`, `confidence`, `source`) MUST NOT be altered by a policy.
+**P68: Content Policy Composition**: Policies MUST execute in declaration order. A REWRITE from policy N MUST give the rewritten mark to policy N+1. The first REJECT MUST stop the pipeline.
 
-**P70: Content Policy Independence**: Content policies operate independently of the envelope, barrier, and rate limits. A REJECT from a content policy does not trigger barrier narrowing or envelope recording. A FLAG does not feed into `record_attempt()`.
+**P69: Content Policy Scope**: Content policies MUST apply only to observation marks. Content policies MUST only modify the `content` field, through REWRITE. A policy MUST NOT change the mark identity (`id`, `agent_id`, `scope`, `mark_type`, `created_at`) or the structural fields (`topic`, `confidence`, `source`).
+
+**P70: Content Policy Independence**: Content policies operate independently of the envelope, the barrier and the rate limits. A REJECT from a content policy does not narrow the barrier. The envelope does not record the REJECT. A FLAG does not cause a call to `record_attempt()`.
 
 Ref: [`markspace/guard.py::ContentPolicy`](../markspace/guard.py), [`markspace/guard.py::_check_content_policies`](../markspace/guard.py), [`tests/test_guard.py::TestContentPolicies`](../tests/test_guard.py)
 
 ## 10. Generalized Supersession
 
-All mark types MAY carry a `supersedes` field. An observation can supersede a prior observation on the same topic. An intent can supersede the same agent's prior intent on the same resource. This provides explicit versioning alongside continuous decay.
+All mark types MAY carry a `supersedes` field. An observation can supersede an earlier observation on the same topic. An intent can supersede an earlier intent of the same agent on the same resource. Supersession gives explicit versions of a mark, in addition to continuous decay.
 
-Any mark type MAY include an `optional string supersedes` field. When set, the referenced mark becomes invisible:
+Any mark type MAY include an `optional string supersedes` field. When a mark sets this field, the mark that the field identifies becomes invisible:
 
-- A superseded mark's effective strength is 0 on all subsequent reads.
-- The superseding mark's own lifecycle (decay, TTL) applies normally.
-- Supersession chains: if A supersedes B, and C supersedes A, then both A and B are invisible.
-- Only the author of a mark MAY supersede it: an implementation MUST refuse a mark that supersedes another agent's mark. Otherwise an agent could erase another agent's action, or the warning that hides one, from any scope it may write in (Section 6.5, G10).
+- The effective strength of a superseded mark is 0 on all later reads.
+- The lifecycle (decay, TTL) of the superseding mark applies normally.
+- Supersession chains: if A supersedes B, and C supersedes A, then A and B are both invisible.
+- Only the author of a mark MAY supersede it. An implementation MUST refuse a mark that supersedes a mark of another agent. Without this rule, an agent could erase another agent's action, or the warning that hides an action. It could do this from any scope where it has permission to write (Section 6.5, G10).
 
-**When to use supersession vs warnings**: Supersession replaces a mark quietly (the old version vanishes). Warnings loudly declare that something is wrong (the invalidation is itself a mark other agents can read). Use supersession for routine updates ("new price observation"), warnings for notable corrections ("previous data was wrong").
+**When to use supersession vs warnings**: Supersession replaces a mark quietly. The old version becomes invisible. A warning declares openly that something is wrong. The invalidation is itself a mark that other agents can read. Use supersession for routine updates ("new price observation"). Use warnings for important corrections ("previous data was wrong").
 
 ### 10.1 Formal Properties
 
-**P47: Supersession Transitivity**: If mark C supersedes B, and B supersedes A, then A, B are both invisible and C is the only visible mark.
+**P47: Supersession Transitivity**: If mark C supersedes B, and B supersedes A, then A and B are both invisible. C is the only visible mark.
 
 Ref: [`tests/test_guard.py::TestGeneralizedSupersession`](../tests/test_guard.py)
 
 ## 11. Agent
 
-An agent is an identity with scope permissions and local rules. The protocol does not specify what agents do internally, only how they interact with the mark space.
+An agent is an identity with scope permissions and local rules. The protocol does not specify what an agent does internally. The protocol specifies only how an agent interacts with the mark space.
 
 ### 11.1 Agent Definition
 
@@ -1171,25 +1437,25 @@ message Agent {
 }
 ```
 
-`read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` is irrelevant. Both `permissions` and `read_scopes` support hierarchical matching.
+`read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` has no effect. `permissions` and `read_scopes` both support hierarchical matching.
 
 ### 11.2 Agent-Local Rules
 
-The protocol does not prescribe agent-internal logic. An agent's behavior is defined by:
+The protocol does not specify the internal logic of an agent. These items define the behavior of an agent:
 
-1. **Which marks it reads**: filtered by scope, topic, resource.
-2. **How it reacts**: implementation-defined. The spec only constrains interactions with the mark space (authorization, conflict resolution).
-3. **Which marks it writes**: constrained by its permissions.
+1. **Which marks it reads**: the agent filters marks by scope, topic and resource.
+2. **How it reacts**: the implementation defines the reaction. This specification limits only the interactions with the mark space (authorization, conflict resolution).
+3. **Which marks it writes**: the permissions of the agent limit these marks.
 
-The decomposability guarantee follows from this. You can test an agent in isolation by mocking the mark space. You can add new agents without changing existing ones. The mark space is the only coupling point.
+This gives the decomposability guarantee. You can test an agent in isolation with a mock of the mark space. You can add new agents and keep the existing agents unchanged. The mark space is the only coupling point.
 
 ### 11.3 Agent Manifests
 
-An agent MAY carry an `AgentManifest` that declares its input/output contract. The manifest makes the agent's interface explicit - what marks it reads and what marks it writes - enabling composition validation without runtime state. See [Section 13](#13-agent-composition) for details.
+An agent MAY carry an `AgentManifest` that declares its input/output contract. The manifest makes the interface of the agent explicit: which marks it reads and which marks it writes. Thus composition validation is possible without runtime state. See [Section 13](#13-agent-composition) for details.
 
 ## 12. Reference Implementation
 
-The reference implementation is in Python (3.11+), with pydantic and httpx as runtime dependencies. It is structured as:
+The reference implementation is in Python (3.11+). Its runtime dependencies are pydantic and httpx. It has this structure:
 
 ```
 markspace/
@@ -1300,13 +1566,18 @@ marks = space.read(scope="calendar", resource="thu-14:00")
 
 ## 13. Agent Composition
 
-The protocol follows the Unix philosophy: small agents that do one thing well, composed through the shared mark space. Marks are the universal interface (like stdin/stdout), the mark space is the composition mechanism (like pipes), and scopes are the namespaces (like the filesystem). Agents don't know about each other - they read from the mark space and write to it. The principal composes them by defining scopes and permissions.
+The protocol follows the Unix philosophy. In this philosophy, each agent is small and does one thing well. Marks are the universal interface (like stdin/stdout). The shared mark space is the composition mechanism (like pipes). Scopes are the namespaces (like the filesystem).
 
-This section defines two mechanisms that make composition explicit and reactive: **watch patterns** for declaring interest in marks, and **agent manifests** for declaring input/output contracts.
+Agents do not know about each other. They read from the mark space and write to it. To compose the agents, the principal defines the scopes and the permissions.
+
+This section defines two mechanisms that make composition explicit and reactive:
+
+- **Watch patterns** declare the interest of an agent in marks.
+- **Agent manifests** declare input/output contracts.
 
 ### 13.1 Watch Patterns
 
-A watch pattern describes a set of marks an agent is interested in.
+A watch pattern describes a set of marks that an agent is interested in.
 
 ```protobuf
 message WatchPattern {
@@ -1317,11 +1588,11 @@ message WatchPattern {
 }
 ```
 
-Pattern matching: a mark matches a WatchPattern if all specified fields match. Unspecified optional fields match any value. Scope matching is hierarchical: a pattern with scope "sensors" matches marks in "sensors", "sensors/temperature", "sensors/pressure", etc.
+A mark matches a WatchPattern if each field that the pattern specifies matches the mark. An optional field that the pattern does not specify matches any value. The scope match is hierarchical. For example, a pattern with scope "sensors" matches marks in "sensors", "sensors/temperature", "sensors/pressure" and so on.
 
 ### 13.2 Agent Manifests
 
-An agent manifest declares the agent's input/output contract.
+An agent manifest declares the input/output contract of the agent.
 
 ```protobuf
 message ManifestOutput {
@@ -1338,15 +1609,15 @@ message AgentManifest {
 }
 ```
 
-The manifest is purely declarative. It does not execute anything. It is used by:
+The manifest is purely declarative. It does not execute anything. It has these uses:
 - **Composition validation**: check that a sequence of agents forms a connected pipeline.
-- **Permission validation**: check that declared outputs are consistent with the agent's write permissions.
-- **Anomaly detection**: `expected_activity` pre-seeds the statistical envelope's baseline, eliminating the cold-start blind spot for agents with known behavior ([Section 9.7](#97-statistical-envelope)).
-- **Documentation**: understand what an agent does by reading its manifest, without reading its code.
+- **Permission validation**: check that the declared outputs agree with the write permissions of the agent.
+- **Anomaly detection**: `expected_activity` gives the statistical envelope an initial baseline. For agents with known behavior, the initial baseline removes the cold-start blind spot ([Section 9.7](#97-statistical-envelope)).
+- **Documentation**: read the manifest of an agent to understand what the agent does. You do not have to read its code.
 
 ### 13.3 Subscription
 
-An agent registers interest in mark patterns via `subscribe()`.
+An agent registers its interest in mark patterns with `subscribe()`.
 
 ```
 subscribe(agent, patterns: list[WatchPattern]) -> void
@@ -1370,7 +1641,7 @@ Postconditions:
 
 ### 13.4 Watched Marks
 
-An agent retrieves queued marks via polling.
+An agent polls the mark space to get its queued marks.
 
 ```
 get_watched_marks(agent, clear=true) -> list[Mark]
@@ -1383,46 +1654,48 @@ Postconditions:
   - Marks are returned in write order (P52)
 ```
 
-Agents are not notified about their own writes. If agent A writes a mark and agent A is subscribed to a matching pattern, the mark is not queued for A.
+The mark space does not notify an agent about its own writes. If agent A writes a mark that matches a pattern of its own subscription, the mark space does not queue that mark for A.
 
 ### 13.5 Composition Validation
 
 Two validation functions operate on manifests without runtime state.
 
-**Pipeline validation**: given a sequence of agents `[A, B, C]`, check that A's outputs can feed B's inputs, and B's outputs can feed C's inputs. A connection exists when at least one output `(scope, mark_type)` matches an input WatchPattern (scope match, mark_type match or wildcard).
+**Pipeline validation**: for a sequence of agents `[A, B, C]`, check that the outputs of A can feed the inputs of B. Also check that the outputs of B can feed the inputs of C. A connection exists when at least one output `(scope, mark_type)` matches an input WatchPattern (scope match, mark_type match or wildcard).
 
-**Manifest-permission validation**: check that every output `(scope, mark_type)` in an agent's manifest is covered by the agent's write permissions. This is a static check - if it fails, the agent's manifest promises something it cannot deliver.
+**Manifest-permission validation**: check that the write permissions of an agent cover every output `(scope, mark_type)` in the manifest of that agent. This is a static check. If the check fails, the manifest of the agent promises something that the agent cannot deliver.
 
 ### 13.6 Formal Properties
 
-**P48: Subscription Idempotency**: Calling `subscribe(agent, patterns)` MUST replace any previous subscription for that agent. Re-subscribing MUST NOT cause duplicate deliveries.
+**P48: Subscription Idempotency**: A call to `subscribe(agent, patterns)` MUST replace any previous subscription of that agent. A repeated subscription of the agent MUST NOT cause duplicate deliveries.
 
-**P49: Subscription Prospective**: `subscribe()` MUST NOT retroactively deliver marks written before the subscription. Only marks written after `subscribe()` are candidates for delivery.
+**P49: Subscription Prospective**: `subscribe()` MUST NOT deliver marks written before the subscription. Only marks written after `subscribe()` are candidates for delivery.
 
-**P50: Watch Subset**: `get_watched_marks()` MUST return only marks that match at least one of the agent's subscribed patterns. Marks that do not match any pattern MUST NOT be delivered.
+**P50: Watch Subset**: `get_watched_marks()` MUST return only marks that match at least one pattern in the subscription of the agent. The mark space MUST NOT deliver a mark that matches no pattern.
 
-**P51: At-Most-Once Delivery**: When `get_watched_marks(agent, clear=true)` is called, each mark MUST be delivered at most once. Subsequent calls MUST NOT return the same marks.
+**P51: At-Most-Once Delivery**: `get_watched_marks(agent, clear=true)` MUST deliver each mark at most once. Later calls MUST NOT return the same marks.
 
-**P52: Write-Order Delivery**: Marks returned by `get_watched_marks()` MUST be ordered by write time (the order in which `write()` was called). Within a single poll, earlier writes appear before later writes.
+**P52: Write-Order Delivery**: `get_watched_marks()` MUST return marks ordered by write time (the order of the calls to `write()`). In one poll, earlier writes appear before later writes.
 
-**P53: Pipeline Structural Validation**: Pipeline validation MUST depend only on agent manifests, not on runtime mark space state. It is a pure function of the agents' declared inputs and outputs.
+**P53: Pipeline Structural Validation**: Pipeline validation MUST depend only on agent manifests, not on the runtime state of the mark space. It is a pure function of the declared inputs and outputs of the agents.
 
-**P54: Manifest-Permission Consistency**: Every output declared in an agent's manifest MUST be a subset of the agent's write permissions. An agent MUST NOT declare an output it is not authorized to produce.
+**P54: Manifest-Permission Consistency**: Every output that an agent declares in its manifest MUST be a subset of the write permissions of that agent. An agent MUST NOT declare an output that it has no authorization to produce.
 
-**P55: Pattern Match Purity**: `WatchPattern.matches(mark)` MUST be a pure function. It MUST NOT modify the mark, the pattern, or any external state. *Note: trivially true by construction (the implementation is a field comparison), but stated to prevent implementations from introducing stateful matching (e.g., rate limiting or deduplication inside the matcher).*
+**P55: Pattern Match Purity**: `WatchPattern.matches(mark)` MUST be a pure function. It MUST NOT modify the mark, the pattern or any external state. *Note: This property is true by construction, because the implementation only compares fields. This specification states it so that no implementation makes the matcher stateful (for example, with a rate limit or deduplication inside the matcher).*
 
 Ref: [`markspace/core.py::WatchPattern, AgentManifest`](../markspace/core.py), [`markspace/space.py::subscribe, get_watched_marks`](../markspace/space.py), [`markspace/compose.py`](../markspace/compose.py), [`tests/test_composition.py`](../tests/test_composition.py)
 
-**Note on source agents.** The subscription mechanism activates downstream agents reactively when upstream marks appear. Source agents - those at the start of a pipeline with no upstream marks - need a different trigger. [Section 14 (Scheduling)](#14-scheduling) provides this through the agent manifest: the principal sets `schedule_interval` on the agent's manifest, and the Scheduler infrastructure determines when the agent is due for activation. No marks are involved - scheduling is a property of the agent, not a signal in the environment.
+**Note on source agents.** The subscription mechanism activates downstream agents reactively when upstream marks appear. Source agents (agents at the start of a pipeline, with no upstream marks) need a different trigger.
+
+[Section 14 (Scheduling)](#14-scheduling) gives this trigger through the agent manifest. The principal sets `schedule_interval` on the manifest of the agent. The Scheduler infrastructure decides when the agent is due for activation. Scheduling involves no marks. Scheduling is a property of the agent, not a signal in the environment.
 
 
 ## 14. Scheduling
 
-Downstream agents activate reactively through subscription ([Section 13.3](#133-subscription)). Source agents - agents with no upstream marks - need an external trigger. Scheduling provides this trigger through the agent manifest: the principal sets `schedule_interval` when creating or configuring an agent, and the Scheduler infrastructure determines when each agent is due.
+Downstream agents activate reactively through subscription ([Section 13.3](#133-subscription)). Source agents (agents with no upstream marks) need an external trigger. Scheduling gives this trigger through the agent manifest. The principal sets `schedule_interval` when it creates or configures an agent. The Scheduler infrastructure decides when each agent is due.
 
 ### 14.1 Schedule Configuration
 
-A schedule is a property of the agent manifest. The principal sets `schedule_interval` (in seconds) when creating or updating an agent:
+A schedule is a property of the agent manifest. The principal sets `schedule_interval` (in seconds) when it creates or updates an agent:
 
 ```python
 agent = Agent(
@@ -1435,23 +1708,23 @@ agent = Agent(
 )
 ```
 
-- `schedule_interval` (float, > 0, or None): seconds between activations.
-- The principal can change the schedule by creating a new agent configuration with a different interval.
-- Agents without `schedule_interval` (or with None) are not scheduled.
+- `schedule_interval` (float, > 0, or None): the number of seconds between activations.
+- The principal can change the schedule with a new agent configuration that has a different interval.
+- An agent without `schedule_interval` (or with None) has no schedule.
 
 ### 14.2 Scheduler
 
-The Scheduler is infrastructure, like the Guard. It reads agent manifests and tracks activation timing. No marks are involved - scheduling is a property of the agent, not a signal in the environment.
+The Scheduler is infrastructure, like the Guard. It reads agent manifests and tracks the activation times. Scheduling involves no marks. Scheduling is a property of the agent, not a signal in the environment.
 
-**`register(agent)`**: Register an agent for scheduling. Reads `schedule_interval` from the agent's manifest. Agents without a manifest or interval are ignored.
+**`register(agent)`**: Registers an agent for scheduling. It reads `schedule_interval` from the manifest of the agent. It ignores an agent that has no manifest or no interval.
 
-**`due()`**: Return agents whose `schedule_interval` has elapsed since their last activation. Newly registered agents (never activated) are immediately due.
+**`due()`**: Returns the agents whose `schedule_interval` has elapsed since their last activation. A newly registered agent (never activated) is due immediately.
 
-**`tick_all()`**: Return due agents and mark them all as activated. Convenience method combining `due()` + `mark_activated()`.
+**`tick_all()`**: Returns the due agents and records all of them as activated. It is a convenience method that combines `due()` + `mark_activated()`.
 
-**`update(agent)`**: Update an existing schedule with a new manifest. Preserves last activation time so the agent is not prematurely re-triggered.
+**`update(agent)`**: Updates an existing schedule with a new manifest. It keeps the last activation time, so that the Scheduler does not trigger the agent again too early.
 
-**`start(poll_interval, on_due=None)` / `stop()`**: Background thread that calls `tick_all()` periodically. The optional `on_due` callback is invoked with the list of due agents each tick. The timer is the only non-deterministic component; all other methods are testable without real time.
+**`start(poll_interval, on_due=None)` / `stop()`**: These methods start and stop a background thread that calls `tick_all()` periodically. At each tick, the thread calls the optional `on_due` callback with the list of due agents. The timer is the only non-deterministic component. You can test all other methods without real time.
 
 ### 14.3 Formal Properties
 
@@ -1462,9 +1735,20 @@ Ref: [`markspace/schedule.py`](../markspace/schedule.py), [`tests/test_schedule.
 
 ## 15. Properties Summary
 
-All normative properties, collected. A conforming implementation MUST satisfy P1-P39, P47 and P71-P76. Properties P40-P45 (adaptive layer), P46 (diagnostic probe), P48-P55 (composition), P56 (scheduling), P57-P58 (telemetry), P59-P63 (token budgets), P64-P66 (scope rate limits), and P67-P70 (content policies) are OPTIONAL - required only if the implementation supports that feature. The reference implementation's test suite verifies each one.
+This section collects all normative properties. A conforming implementation MUST satisfy P1-P39, P47 and P71-P76. These properties are OPTIONAL:
 
-Property numbers are stable identifiers; the table gives each property's section.
+- P40-P45 (adaptive layer)
+- P46 (diagnostic probe)
+- P48-P55 (composition)
+- P56 (scheduling)
+- P57-P58 (telemetry)
+- P59-P63 (token budgets)
+- P64-P66 (scope rate limits)
+- P67-P70 (content policies)
+
+Each of these properties is required only if the implementation supports its feature. The test suite of the reference implementation verifies each property.
+
+Property numbers are stable identifiers. The table gives the section of each property.
 
 | ID | Property | Section |
 |----|----------|---------|
@@ -1569,31 +1853,33 @@ An implementation is conformant if:
 
 1. It supports all five mark types with the required fields ([Section 2](#2-mark-types)).
 2. It computes strength at read time according to the decay rules ([Section 3](#3-decay)).
-3. It applies trust weighting that preserves the source total order ([Section 4](#4-trust)).
+3. It applies trust weights that preserve the total order of the source levels ([Section 4](#4-trust)).
 4. It implements sublinear, bounded reinforcement ([Section 5](#5-reinforcement)).
-5. It resolves intent conflicts deterministically according to the scope's policy ([Section 6](#6-conflict-resolution)), including deferred resolution for HIGHEST_CONFIDENCE under lock-based serialization ([Section 6.2](#62-deferred-resolution)).
+5. It resolves intent conflicts deterministically according to the policy of the scope ([Section 6](#6-conflict-resolution)). This includes deferred resolution for HIGHEST_CONFIDENCE under lock-based serialization ([Section 6.2](#62-deferred-resolution)).
 6. It enforces scope-based write authorization ([Section 7](#7-scope)).
-7. It provides a deterministic guard layer that enforces coordination without depending on agent compliance ([Section 9](#9-guard-deterministic-enforcement-layer)).
+7. It provides a deterministic guard layer that enforces coordination and does not depend on agent compliance ([Section 9](#9-guard-deterministic-enforcement-layer)).
 8. It supports generalized supersession across all mark types ([Section 10](#10-generalized-supersession)).
-9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projected reads and content redaction ([Section 7.4](#74-scope-visibility)).
-10. It supports post-write hooks ([Section 8.6](#86-write-hooks)).
+9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projections and content redaction ([Section 7.4](#74-scope-visibility)).
+10. It supports write hooks ([Section 8.6](#86-write-hooks)).
 11. It satisfies all mandatory formal properties P1-P39, P47 and P71-P76 ([Section 15](#15-properties-summary)).
-12. It grants leases with fencing tokens and records a successful action written through the guard only under its lease or as an uncontested direct claim ([Section 6.5](#65-grants)).
+12. It grants leases with fencing tokens. It records a successful action written through the guard only in these two cases ([Section 6.5](#65-grants)):
+    - under a live lease of the action's own agent, scope and resource
+    - as an uncontested direct claim
 
-An implementation MAY differ from the reference implementation in storage backend, concurrency model, garbage collection strategy, or internal data structures, provided the properties hold.
+An implementation MAY differ from the reference implementation in storage backend, concurrency model, garbage collection strategy or internal data structures, if the properties hold.
 
-An implementation MAY additionally support the adaptive monitoring layer: statistical envelope ([Section 9.7](#97-statistical-envelope)) and absorbing barrier ([Section 9.8](#98-absorbing-barrier)). If it does, it MUST satisfy P40-P45. Adaptive layer support is OPTIONAL for conformance.
+An implementation MAY also support the adaptive monitoring layer: the statistical envelope ([Section 9.7](#97-statistical-envelope)) and the absorbing barrier ([Section 9.8](#98-absorbing-barrier)). If it supports this layer, it MUST satisfy P40-P45. Adaptive layer support is OPTIONAL for conformance.
 
-An implementation MAY additionally support diagnostic probes ([Section 9.9](#99-diagnostic-probe)). If it does, it MUST satisfy P46. Probe support is OPTIONAL for conformance.
+An implementation MAY also support diagnostic probes ([Section 9.9](#99-diagnostic-probe)). If it supports them, it MUST satisfy P46. Probe support is OPTIONAL for conformance.
 
-An implementation MAY additionally support telemetry ([Section 9.11](#911-telemetry)). If it does, it MUST satisfy P57-P58. Telemetry support is OPTIONAL for conformance.
+An implementation MAY also support telemetry ([Section 9.11](#911-telemetry)). If it supports telemetry, it MUST satisfy P57-P58. Telemetry support is OPTIONAL for conformance.
 
-An implementation MAY additionally support token budgets ([Section 9.10](#910-token-budgets)). If it does, it MUST satisfy P59-P63. Token budget support is OPTIONAL for conformance.
+An implementation MAY also support token budgets ([Section 9.10](#910-token-budgets)). If it supports them, it MUST satisfy P59-P63. Token budget support is OPTIONAL for conformance.
 
-An implementation MAY additionally support scope rate limits ([Section 9.12](#912-scope-rate-limits)). If it does, it MUST satisfy P64-P66. Rate limit support is OPTIONAL for conformance.
+An implementation MAY also support scope rate limits ([Section 9.12](#912-scope-rate-limits)). If it supports them, it MUST satisfy P64-P66. Rate limit support is OPTIONAL for conformance.
 
-An implementation MAY additionally support content policies ([Section 9.13](#913-content-policies)). If it does, it MUST satisfy P67-P70. Content policy support is OPTIONAL for conformance.
+An implementation MAY also support content policies ([Section 9.13](#913-content-policies)). If it supports them, it MUST satisfy P67-P70. Content policy support is OPTIONAL for conformance.
 
-An implementation MAY additionally support agent composition ([Section 13](#13-agent-composition)). If it does, it MUST satisfy P48-P55. Composition support is OPTIONAL for conformance.
+An implementation MAY also support agent composition ([Section 13](#13-agent-composition)). If it supports composition, it MUST satisfy P48-P55. Composition support is OPTIONAL for conformance.
 
-An implementation MAY additionally support manifest-based scheduling ([Section 14](#14-scheduling)). If it does, it MUST satisfy P56. Scheduling support is OPTIONAL for conformance.
+An implementation MAY also support manifest-based scheduling ([Section 14](#14-scheduling)). If it supports this scheduling, it MUST satisfy P56. Scheduling support is OPTIONAL for conformance.
