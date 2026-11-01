@@ -10,11 +10,17 @@ This is the cross-experiment analysis covering:
 """
 
 import json
+import sys
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(HERE.parent / "stress_test"))
+from stored_run_safety import check_run, cross_dept_summary  # noqa: E402
+
 RESULTS_DIR = HERE / "results"
 MODELS = ["gpt-oss-120b", "mercury-2"]
 SEEDS = [42, 43, 44, 45, 46]
@@ -183,16 +189,15 @@ def main():
     # ================================================================
     print("\n## 2. Adversarial Robustness\n")
     adv_records = load_all_trials("adversarial")
-    print(
-        f"  {'Mode':<12} {'Model':<15} {'Comp':>7} {'Dbl':>5} {'Scope':>6} {'Denied':>7}"
-    )
+    print(f"  {'Mode':<12} {'Model':<15} {'Comp':>7} {'Dbl':>5} {'Denied':>7}  Xdept")
     for r in sorted(adv_records, key=lambda x: (x["_variant"], x["_model"])):
         comp = completion_rate(r)
         vc = r.get("verdict_counts", {})
+        safety = check_run(Path(r["_path"]).parent)
         print(
             f"  {r['_variant']:<12} {r['_model']:<15} {comp:>6.1f}% "
-            f"{r['double_bookings']:>5} {r['scope_violations']:>6} "
-            f"{vc.get('denied', 0):>7}"
+            f"{safety['double_bookings']:>5} {vc.get('denied', 0):>7}  "
+            f"{cross_dept_summary(safety['cross_dept'])}"
         )
 
     # Comparison to baseline
@@ -388,24 +393,44 @@ def main():
         ],
         "Scaling contention": sc_records,
         "Scaling proportional": sp_records,
+        "Defense-in-depth": load_all_trials("defense"),
     }
     total_runs = 0
     total_agents = 0
     total_db = 0
-    total_sv = 0
-    print(f"  {'Experiment':<30} {'Runs':>5} {'Agents':>8} {'Dbl':>5} {'Scope':>6}")
+    total_xd: Counter[str] = Counter()
+    all_checks = []
+    print(f"  {'Experiment':<30} {'Runs':>5} {'Agents':>8} {'Dbl':>5}  Xdept")
     for name, records in experiments.items():
         runs = len(records)
         agents_sum = sum(r.get("total_agents", 0) for r in records)
-        db = sum(r.get("double_bookings", 0) for r in records)
-        sv = sum(r.get("scope_violations", 0) for r in records)
+        checks = [check_run(Path(r["_path"]).parent) for r in records]
+        db = sum(c["double_bookings"] for c in checks)
+        xd: Counter[str] = Counter()
+        for c in checks:
+            xd.update(c["cross_dept"])
         total_runs += runs
         total_agents += agents_sum
         total_db += db
-        total_sv += sv
-        print(f"  {name:<30} {runs:>5} {agents_sum:>8,} {db:>5} {sv:>6}")
+        total_xd.update(xd)
+        all_checks += checks
+        print(
+            f"  {name:<30} {runs:>5} {agents_sum:>8,} {db:>5}  {cross_dept_summary(xd)}"
+        )
     print(
-        f"  {'TOTAL':<30} {total_runs:>5} {total_agents:>8,} {total_db:>5} {total_sv:>6}"
+        f"  {'TOTAL':<30} {total_runs:>5} {total_agents:>8,} {total_db:>5}  {cross_dept_summary(total_xd)}"
+    )
+    print(f"  Cross-department verdicts: {dict(total_xd)}")
+
+    def per_run(key: str) -> str:
+        values = [c[key] for c in all_checks]
+        return f"{min(values)} to {max(values)} per run, {sum(values)} in total"
+
+    print(f"  Later rebookings: {per_run('later_rebookings')}")
+    print(f"  Unwarned rebookings: {per_run('unwarned_rebookings')}")
+    print(f"  Parking spots or boardroom slots given twice: {per_run('given_twice')}")
+    print(
+        f"  Agents with two parking spots on one day: {per_run('agents_with_two_spots_on_one_day')}"
     )
 
 

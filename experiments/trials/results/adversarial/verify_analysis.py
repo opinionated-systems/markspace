@@ -2,11 +2,17 @@
 """Verify figures in adversarial/analysis.md from raw JSONL data."""
 
 import json
+import sys
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(HERE.parents[2] / "stress_test"))
+from stored_run_safety import check_run, cross_dept_summary  # noqa: E402
+
 MODELS = ["gpt-oss-120b", "mercury-2"]
 MODES = ["confidence", "flood", "injection"]
 PRICING = {"gpt-oss-120b": (0.15, 0.60), "mercury-2": (0.25, 0.75)}
@@ -72,12 +78,16 @@ def main():
     total_prompt = sum(t["tokens"]["prompt"] for t in trials.values())
     total_comp = sum(t["tokens"]["completion"] for t in trials.values())
     total_cost = sum(compute_cost(t["tokens"], m) for (m, _), t in trials.items())
-    total_db = sum(t["double_bookings"] for t in trials.values())
-    total_sv = sum(t["scope_violations"] for t in trials.values())
+    checks = [check_run(trial_dir(m, mode)) for (m, mode) in trials]
+    total_db = sum(c["double_bookings"] for c in checks)
+    xdept = Counter()
+    for c in checks:
+        xdept.update(c["cross_dept"])
 
-    print(f"  Safety invariant breaches: {total_db + total_sv}")
-    print(f"  Double bookings: {total_db}")
-    print(f"  Scope violations: {total_sv}")
+    print(f"  Double bookings (from the steps): {total_db}")
+    print(f"  Cross-department write verdicts: {dict(xdept)}")
+    print(f"  Cross-department writes denied: {cross_dept_summary(xdept)}")
+    print("  Scope violations: not measured (the runs' counter was never incremented)")
     print(f"  Total steps: {total_steps:,}")
     print(
         f"  Total tokens: {total_prompt / 1e6:.1f}M prompt, {total_comp / 1e6:.2f}M completion"

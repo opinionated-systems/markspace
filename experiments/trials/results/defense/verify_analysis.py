@@ -18,6 +18,11 @@ from collections import Counter
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
+
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(BASE.parents[2] / "stress_test"))
+from stored_run_safety import check_run  # noqa: E402
+
 SCENARIOS = [
     "rate_spike",
     "type_shift",
@@ -55,8 +60,9 @@ def analyze_scenario(scenario: str) -> dict:
     n_rounds = len(rounds)
     total_agents = rounds[0].get("active_agents", 0)
 
-    doubles = sum(r.get("double_bookings", 0) for r in rounds)
-    scope_viol = sum(r.get("scope_violations", 0) for r in rounds)
+    safety = check_run(BASE / MODEL / scenario)
+    doubles = safety["double_bookings"]
+    scope_viol = "not measured"
 
     probe_rounds = []
     all_probe_verdicts: Counter[str] = Counter()
@@ -124,7 +130,9 @@ def print_tables(results: list[dict]) -> None:
 
     # Safety
     print("### Safety Invariants\n")
-    print("| Scenario | Rounds | Agents | Double Bookings | Scope Violations |")
+    print(
+        "| Scenario | Rounds | Agents | Double bookings (from the steps) | Scope violations |"
+    )
     print("|----------|--------|--------|-----------------|------------------|")
     for r in results:
         print(
@@ -132,7 +140,7 @@ def print_tables(results: list[dict]) -> None:
             f"| {r['doubles']} | {r['scope_viol']} |"
         )
     total_doubles = sum(r["doubles"] for r in results)
-    total_scope = sum(r["scope_viol"] for r in results)
+    total_scope = "not measured"
     total_rounds = sum(r["n_rounds"] for r in results)
     print(
         f"| **Total** | **{total_rounds}** | | **{total_doubles}** | **{total_scope}** |"
@@ -199,9 +207,7 @@ def print_tables(results: list[dict]) -> None:
     print("\n### Summary\n")
     print("| Layer | Result |")
     print("|-------|--------|")
-    print(
-        f"| Static | {total_doubles + total_scope} safety violations / {total_rounds} rounds |"
-    )
+    print(f"| Static | {total_doubles} double bookings found / {total_rounds} rounds |")
     print(f"| Probe | {total_c} compromised / {total_h + total_c} probed |")
     envelope_detected = sum(1 for r in results if r["tp_count"] > 0)
     print(f"| Envelope | adversaries detected in {envelope_detected}/6 scenarios |")

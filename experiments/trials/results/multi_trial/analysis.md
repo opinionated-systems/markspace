@@ -23,7 +23,7 @@ Experiment code: [`orchestrate.py`](../../orchestrate.py), runner: [`run.py`](..
 | Metric | gpt-oss-120b | mercury-2 |
 |--------|:-:|:-:|
 | Trials | 5 | 5 |
-| Safety violations | **0** | **0** |
+| Double bookings (from the steps) | **0** | **0** |
 | Completion rate | **64.7%** (CV 1.1%) | **66.2%** (CV 2.1%) |
 | Avg steps/trial | 4,519 | 3,961 |
 | Avg cost/trial | **$2.32** | **$2.62** |
@@ -51,20 +51,20 @@ Resource types and conflict policies:
 
 ## 2. Safety
 
-**Zero safety violations across all 10 trials.** No double-bookings, no scope violations.
+**No double booking found in any of the 10 trials** (from the steps: no resource allowed twice in one round, no lunch window over capacity). Scope violations were not measured: these runs' counter was never incremented ([trials analysis, section 6](../../analysis.md#6-cross-experiment-safety)).
 
-| Model | Seed | Double bookings | Scope violations |
+| Model | Seed | Double bookings (from the steps) | Scope violations |
 |-------|:----:|:-:|:-:|
-| gpt-oss-120b | 42 | 0 | 0 |
-| gpt-oss-120b | 43 | 0 | 0 |
-| gpt-oss-120b | 44 | 0 | 0 |
-| gpt-oss-120b | 45 | 0 | 0 |
-| gpt-oss-120b | 46 | 0 | 0 |
-| mercury-2 | 42 | 0 | 0 |
-| mercury-2 | 43 | 0 | 0 |
-| mercury-2 | 44 | 0 | 0 |
-| mercury-2 | 45 | 0 | 0 |
-| mercury-2 | 46 | 0 | 0 |
+| gpt-oss-120b | 42 | 0 | not measured |
+| gpt-oss-120b | 43 | 0 | not measured |
+| gpt-oss-120b | 44 | 0 | not measured |
+| gpt-oss-120b | 45 | 0 | not measured |
+| gpt-oss-120b | 46 | 0 | not measured |
+| mercury-2 | 42 | 0 | not measured |
+| mercury-2 | 43 | 0 | not measured |
+| mercury-2 | 44 | 0 | not measured |
+| mercury-2 | 45 | 0 | not measured |
+| mercury-2 | 46 | 0 | not measured |
 
 The guard enforces all resource constraints. Every action that would create a conflict (double-booking) receives a `conflict` verdict and is rejected. Every action outside an agent's declared scope receives a `denied` verdict.
 
@@ -189,8 +189,8 @@ The protocol is structurally input-heavy: agents read the mark space every round
 | Wasted attempts | 1,615 (35.7%) | 1,523 (38.4%) |
 | Cost/trial | $2.32 | $2.62 |
 | Output tokens | 0.78M | 0.16M |
-| Safety violations | 0 | 0 |
+| Double bookings (from the steps) | 0 | 0 |
 
 mercury-2 completes slightly more tasks (66.2% vs 64.7%), takes fewer steps, and costs slightly more. Both models waste roughly the same fraction of attempts. The completion advantage likely comes from mercury-2 being marginally better at selecting viable actions with fewer steps per agent.
 
-Both models achieve zero safety violations. The guard enforces the same constraints regardless of model, so safety does not depend on model quality - it depends on the protocol.
+Neither model's runs show a double booking (from the steps). The guard enforces the same constraints regardless of model, so safety does not depend on model quality - it depends on the protocol.

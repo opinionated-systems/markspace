@@ -95,7 +95,7 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (543):**
+**Unit tests (563):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
@@ -106,6 +106,7 @@ The reference implementation and experiments verify that the protocol's properti
 - **Property-based ([Hypothesis](https://hypothesis.readthedocs.io/))** - randomized inputs, stateful scheduler fuzzing (register/unregister/update/tick sequences)
 - **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps
 - **LLM client and stress-test pacing** - Retry-After handling, cached and reasoning token accounting, arrival-ordered pacing under rate limits (real threads)
+- **Stress-test safety metrics** - double bookings counted from the guard's decisions, recovered bookings apart, scope violations checked on every mark the harness hands an agent
 
 **[Stress test:](experiments/stress_test/analysis.md)** AI personal assistants for a simulated office - one per employee, plus adversarial agents that attempt to breach scope boundaries. No central scheduler, all coordination through the shared mark space. The scenario exercises 7 resource types across natural permission boundaries:
 
@@ -123,13 +124,13 @@ Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed an
 
 **[Trial experiments:](experiments/trials/analysis.md)** 21 runs of the same scenario across 2 models - [OpenAI gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) (via Fireworks) and [Mercury 2](https://www.inceptionlabs.ai/blog/introducing-mercury-2), a diffusion-based LLM (via Inception AI). Agent counts from 105 (5 adversarial) to 1,050 (50 adversarial), 4,010 agent instances total.
 
-- **Adversarial** - agents with normal permissions but adversarial prompts attempt three attack modes (confidence manipulation, resource flooding, prompt injection). Zero safety violations on both models
-- **Safety** - zero double bookings and zero scope violations across all 21 runs
+- **Adversarial** - agents with normal permissions but adversarial prompts attempt three attack modes (confidence manipulation, resource flooding, prompt injection). No double booking found and every cross-department write denied, on both models
+- **Safety** - no resource allowed twice in one round, no lunch window over capacity, and every cross-department write denied, in all 21 runs (checked from their stored steps; [read leaks were not measured](experiments/trials/analysis.md#6-cross-experiment-safety))
 - **Repeatability** - 64.7% +/- 0.8% completion on gpt-oss-120b, 66.2% +/- 1.6% on mercury-2 (5 seeds each)
-- **Scaling** - up to 1,050 agents with proportionally scaled resources: per-agent step count nearly flat (1.2x at 10x scale), safety invariants hold at every scale point
+- **Scaling** - up to 1,050 agents with proportionally scaled resources: per-agent step count nearly flat (1.2x at 10x scale), no double booking found at any scale point
 - **Resource contention** - 5x more agents competing for the same resources: completion drops to 13.3% from resource scarcity, not protocol failure
 
-**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + statistical envelope + diagnostic probe. 150 rounds, 105 agents per trial (5 adversarial). Zero safety violations across all attack modes. Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
+**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + statistical envelope + diagnostic probe. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
 
 **[Comparison experiment:](experiments/comparison/analysis.md)** Markspace vs a message-passing framework ([Microsoft Agent Framework](https://github.com/microsoft/agent-framework)) on a shared resource booking scenario. 10 agents, 12 slots, 10 seeds per arm.
 
@@ -148,7 +149,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 543 tests, no API key needed
+pytest            # 563 tests, no API key needed
 ```
 
 ### Use the protocol

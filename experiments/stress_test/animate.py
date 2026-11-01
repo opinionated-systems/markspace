@@ -14,7 +14,11 @@ import json
 import math
 import random
 from collections import defaultdict
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+
+from stored_run_safety import check_run
 
 random.seed(42)
 
@@ -130,6 +134,7 @@ for line in open("results/rounds.jsonl"):
     r = json.loads(line)
     rounds_data[r["round_num"]] = r
 trial = json.loads(open("results/trial.jsonl").read().strip())
+double_bookings = check_run(Path("results"))["double_bookings"]
 
 
 # ── Build agent registry ─────────────────────────────────────────────────────
@@ -267,9 +272,10 @@ def draw_header(draw, current_round, step_idx, total_steps):
         draw.rectangle([bx + 1, 14, bx + 1 + fw, 20], fill=ACCENT)
     draw.text((bx + bw + 8, 9), f"{step_idx}/{total_steps}", font=font, fill=FG)
 
-    # Safety badge
-    draw.text((W - 208, 9), "SAFETY VIOLATIONS", font=font_b, fill=FG)
-    draw.text((W - 18, 7), "0", font=font_b, fill=GREEN)
+    # Double bookings, counted from the steps (stored_run_safety.py)
+    draw.text((W - 208, 9), "DOUBLE BOOKINGS", font=font_b, fill=FG)
+    badge = GREEN if double_bookings == 0 else VERDICT_COLORS["denied"]
+    draw.text((W - 18, 7), str(double_bookings), font=font_b, fill=badge)
 
     draw.line([(0, HDR_H), (W, HDR_H)], fill=DIM)
 

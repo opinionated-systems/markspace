@@ -2,11 +2,17 @@
 """Verify figures in multi_trial/analysis.md from raw JSONL data."""
 
 import json
+import sys
 import math
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(HERE.parents[2] / "stress_test"))
+from stored_run_safety import check_run  # noqa: E402
+
 MODELS = ["gpt-oss-120b", "mercury-2"]
 SEEDS = [42, 43, 44, 45, 46]
 DEPTS = ["eng", "design", "product", "sales", "ops"]
@@ -122,11 +128,13 @@ def main():
         io_ratios = [
             t["tokens"]["prompt"] / max(t["tokens"]["completion"], 1) for t in ts
         ]
-        safety = sum(t["double_bookings"] + t["scope_violations"] for t in ts)
+        safety = sum(
+            check_run(trial_dir(model, seed))["double_bookings"] for seed in SEEDS
+        )
 
         print(f"  {model}:")
         print(f"    total_agents (first trial): {ts[0].get('total_agents', '?')}")
-        print(f"    Safety violations: {safety}")
+        print(f"    Double bookings (from the steps): {safety}")
         print(
             f"    Completion (dept_metrics): {avg(comps_dm):.1f}% (CV {coeff_var(comps_dm):.1f}%)"
         )
@@ -144,10 +152,11 @@ def main():
     print("\n## 2. Safety\n")
     for model in MODELS:
         for seed in SEEDS:
-            t = trials[(model, seed)]
+            c = check_run(trial_dir(model, seed))
             print(
-                f"  {model} seed={seed}: double_bookings={t['double_bookings']}, "
-                f"scope_violations={t['scope_violations']}"
+                f"  {model} seed={seed}: double_bookings={c['double_bookings']} "
+                f"(from the steps), lunch_over={c['lunch_over']}, "
+                "scope_violations=not measured"
             )
 
     # ----------------------------------------------------------------
@@ -325,7 +334,9 @@ def main():
         waste_pct = wasted_avg / steps_avg * 100 if steps_avg else 0
         c = avg([compute_cost(t["tokens"], model) for t in ts])
         out_tok = avg([t["tokens"]["completion"] for t in ts])
-        safety = sum(t["double_bookings"] + t["scope_violations"] for t in ts)
+        safety = sum(
+            check_run(trial_dir(model, seed))["double_bookings"] for seed in SEEDS
+        )
         # Also compute avg steps per agent
         agents_data = []
         for seed in SEEDS:
@@ -341,7 +352,7 @@ def main():
         print(f"    Wasted:           {wasted_avg:,.0f} ({waste_pct:.1f}%)")
         print(f"    Cost/trial:       ${c:.2f}")
         print(f"    Output tokens:    {out_tok / 1e6:.2f}M")
-        print(f"    Safety violations: {safety}")
+        print(f"    Double bookings (from the steps): {safety}")
         print(f"    Avg steps/agent:  {avg(agents_data):.1f}")
 
 

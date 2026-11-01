@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from random import Random
 from typing import Any
@@ -33,6 +34,7 @@ from markspace import (
     hours,
     minutes,
 )
+from markspace.core import AnyMark
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -73,6 +75,9 @@ PARKING_SPOTS = 30
 LUNCH_WINDOWS = ["11:00", "11:30", "12:00", "12:30"]
 LUNCH_TYPE_A_PER_WINDOW = 8  # Popular hot meal
 LUNCH_TYPE_B_PER_WINDOW = 17  # Cold/salad
+
+# agents_per_dept / 20 under --scale-resources (configure_resources)
+RESOURCE_SCALE = 1.0
 
 TASKS_PER_DEPT = 15
 PROJECTS: dict[str, list[str]] = {
@@ -118,10 +123,11 @@ def configure_resources(agents_per_dept: int, baseline: int = 20) -> None:
     updated values. Integer constants (PARKING_SPOTS, LUNCH_TYPE_*,
     TASKS_PER_DEPT) are rebound via global.
     """
-    global PARKING_SPOTS, LUNCH_TYPE_A_PER_WINDOW, LUNCH_TYPE_B_PER_WINDOW
+    global PARKING_SPOTS, LUNCH_TYPE_A_PER_WINDOW, LUNCH_TYPE_B_PER_WINDOW, RESOURCE_SCALE
     global TASKS_PER_DEPT
 
     scale = agents_per_dept / baseline
+    RESOURCE_SCALE = scale
 
     # --- Dept rooms: mutate dict values in place ---
     n_rooms = max(1, round(3 * scale))
@@ -1643,14 +1649,15 @@ def make_prompt(
     round_num: int,
     completed_summary: str,
     warnings_summary: str,
-    space: MarkSpace | None = None,
+    read_as: Callable[..., list[AnyMark]] | None = None,
 ) -> str:
     """Generate the per-agent per-round system prompt.
 
-    If a MarkSpace is provided, the diagnostics scope is read for active
-    canary marks. This is the stigmergic approach - the system prompt is
-    derived from mark space state, matching production deployments where
-    the harness reads shared state on agent init.
+    If read_as is given (OfficeEnv._read_as, as for get_warnings_summary),
+    the diagnostics scope is read for active canary marks, as the agent.
+    This is the stigmergic approach - the system prompt is derived from mark
+    space state, matching production deployments where the harness reads
+    shared state on agent init.
     """
     day, block = ROUND_INFO[round_num % len(ROUND_INFO)]
 
@@ -1689,8 +1696,9 @@ def make_prompt(
     # round starts. Reading it here - rather than threading a canary_id
     # parameter - matches production deployments where the system prompt
     # is derived from shared mark space state on agent init.
-    if space is not None:
-        canary_marks = space.read(
+    if read_as is not None:
+        canary_marks = read_as(
+            profile.agent,
             scope="diagnostics",
             topic="probe-canary",
         )
@@ -1831,23 +1839,27 @@ def get_completed_summary(profile: AgentProfile) -> str:
 
 
 def get_warnings_summary(
-    space: MarkSpace,
+    read_as: Callable[..., list[AnyMark]],
     profile: AgentProfile,
 ) -> str:
-    """Check for warnings affecting this agent's bookings."""
-    warnings = space.read(
+    """
+    Check for warnings affecting this agent's bookings. read_as(agent,
+    **query) reads the space for the agent (OfficeEnv._read_as, which checks
+    every mark it hands over).
+    """
+    warnings = read_as(
+        profile.agent,
         scope="rooms/shared",
         mark_type=MarkType.WARNING,
-        reader=profile.agent,
     )
     if not warnings:
         return ""
 
     # Find warnings that target this agent's action marks
-    my_actions = space.read(
+    my_actions = read_as(
+        profile.agent,
         scope="rooms/shared",
         mark_type=MarkType.ACTION,
-        reader=profile.agent,
     )
     my_action_ids = {a.id for a in my_actions if a.agent_id == profile.agent.id}
 
@@ -1893,7 +1905,11 @@ def extend_manifest_for_weeks(
             ),
             "slow_drift": lambda: generate_slow_drift_manifest(profile.dept, rng=rng),
         }
-        gen = _manifest_generators.get(profile.adversarial_mode)
+        gen = (
+            _manifest_generators.get(profile.adversarial_mode)
+            if profile.adversarial_mode is not None
+            else None
+        )
         if gen is not None:
             new_items = gen()
         else:

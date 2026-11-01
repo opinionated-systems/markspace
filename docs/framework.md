@@ -869,11 +869,11 @@ The protocol makes specific claims about what it prevents, mitigates, and delibe
 
 | Failure pattern | markspace mitigation | Status |
 |---|---|---|
-| Unauthorized access / scope violations | Scope permissions, guard rejects unauthorized writes | Prevented (0 violations) |
+| Unauthorized access / scope violations | Scope permissions, guard rejects unauthorized writes | Writes prevented: every cross-department write in the stored runs denied; reads not measured |
 | Cascading state corruption | Intent TTL (2h) prevents stale signal accumulation; decay degrades observations | Prevented (intents expired between every round pair) |
 | Unconstrained goal pursuit | Fixed manifests per agent, constrained tool space | Prevented (agents completed manifests, didn't improvise) |
 | Cross-agent propagation | No direct agent-to-agent communication; marks only | Prevented (all coordination through mark space) |
-| Resource exhaustion | Guard serialization + conflict resolution policies | Prevented (0 double bookings, 3 policies all functional) |
+| Resource exhaustion | Guard serialization + conflict resolution policies | Prevented: no double booking found in the stored runs (from their steps), 3 policies all functional |
 | Disproportionate response (CS1) | A protocol-valid action can still be harmful; no action proportionality checks | Not addressed |
 | Compliance with non-owner instructions (CS2) | Manifest can control whether an agent is authorized to interact with humans at all, but once authorized, what the agent shares is agent-internal | Not addressed |
 | Sensitive data disclosure (CS3) | Mark visibility controls structure, not content within agent outputs | Not addressed |

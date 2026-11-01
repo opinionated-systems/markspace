@@ -44,9 +44,9 @@ Scenario design and agent configuration: [`design.md`](design.md).
 
 105 AI agents (100 normal + 5 adversarial, one per department) coordinated through a shared mark space over a simulated 5-day work week (10 rounds). No central scheduler. No direct communication between agents. All coordination happened indirectly through stigmergic marks: intents, actions, observations, warnings, and needs. The adversarial agents had normal permissions but adversarial prompts, and were given extra tools (`book_other_dept_room`, `issue_warning`) to attempt cross-department violations.
 
-The protocol enforces invariants regardless of agent quality or intent. The guard rejects unauthorized writes, scope visibility controls what each agent can read, trust weights attenuate untrusted marks, and decay ensures stale signals fade. All four properties verified: unauthorized writes rejected, scope visibility enforced, trust weights applied, and adversarial agents contained. 5 adversarial agents attempted 121 cross-department bookings and 37 warning injections. All denied.
+The protocol enforces invariants regardless of agent quality or intent. The guard rejects unauthorized writes, scope visibility controls what each agent can read, trust weights attenuate untrusted marks, and decay ensures stale signals fade. Unauthorized writes were rejected and adversarial agents contained (checked from the run's steps), scope visibility was applied to 8,197 projected reads (leaks were not measured, see [trials analysis, section 6](../trials/analysis.md#6-cross-experiment-safety)), and trust weights were applied. 5 adversarial agents attempted 121 cross-department bookings and 37 warning injections. All denied.
 
-Zero double bookings across 927 resource claims. Zero scope violations across 8,197 projected reads. The guard enforces these structurally, under concurrent LLM-driven access at 105-agent scale across 7 resource types, 3 visibility levels, 3 conflict resolution policies, and active adversarial pressure.
+From the steps: no room, equipment item or task got ALLOW twice in one round across the 306 bookings agents made with tool calls, and no lunch window went over capacity across their 461 lunch orders (the steps do not record a lunch order's slot, so only the capacity is checked). The bots gave no parking spot or boardroom slot twice across the other 160 (136 parking spots, 14 visitor spots, 10 boardroom slots; from the bot logs). Eight agents ended up with two parking spots on one day: two of their pending requests both won, against the harness's own one-spot rule, though each spot went to one agent only. The current `run.py` gives each agent at most one spot a day. The run's own double-booking metric could not count a double booking, see [trials analysis, section 6](../trials/analysis.md#6-cross-experiment-safety). Read leaks across the 8,197 projected reads were not measured. The guard enforces these structurally, under concurrent LLM-driven access at 105-agent scale across 7 resource types, 3 visibility levels, 3 conflict resolution policies, and active adversarial pressure.
 
 **Protocol coverage: 9/9 (100%).** Every feature in the spec produced non-trivial output: all 5 mark types, all 4 verdict types, and projected reads.
 
@@ -58,17 +58,17 @@ All agents ran gpt-oss-120b. No model comparison; the experiment targets protoco
 
 ## 1. Safety
 
-The protocol's central promise is that concurrent agents cannot create conflicting state. No violations in this trial.
+The protocol's central promise is that concurrent agents cannot create conflicting state. No double booking found in this trial (from the steps and the bot logs, above).
 
 | Safety metric | Result |
 |---|---|
-| Double bookings | **0** across 927 action marks |
-| Scope violations | **0** across 8,197 projected reads |
-| Unauthorized access | **0** (PROTECTED dept rooms invisible to outsiders; CLASSIFIED tasks invisible) |
-| Data leakage through projection | **0** (PROTECTED content properly redacted) |
+| Double bookings | **0** resources allowed twice in one round, from the steps |
+| Scope violations | not measured; 8,197 projected reads |
+| Unauthorized writes | **0**: 158 of 158 cross-department writes denied (from the steps) |
+| Data leakage through projection | not measured; the library projected 8,197 reads |
 | Adversarial attempts blocked | **171** DENIED verdicts across 5 adversarial agents |
 
-The guard's lock-based serialization (for standard resources), the deferred resolution pattern (for parking and boardroom), and the mark space's scope visibility system all prevented conflicting writes. Department rooms at PROTECTED visibility remained invisible in content to outsiders while projected reads gave other departments enough structural information to coordinate without disclosure. CLASSIFIED tasks remained fully invisible outside the owning department. The 5 adversarial agents generated 171 DENIED verdicts (121 cross-department bookings, 37 warning injections, 13 lunch orders at full capacity): the guard rejected every cross-department booking attempt and every unauthorized warning injection. An additional 19 DENIED verdicts came from normal agents whose lunch orders were denied when both meal types were fully booked.
+The guard's lock-based serialization (for standard resources), the deferred resolution pattern (for parking and boardroom), and the mark space's scope visibility system all prevented conflicting writes. Department rooms at PROTECTED visibility were read through the library's projection, which gave other departments enough structural information to coordinate without the content, and CLASSIFIED tasks through scopes the library withholds from outsiders; the run did not check what reached each agent. The 5 adversarial agents generated 171 DENIED verdicts (121 cross-department bookings, 37 warning injections, 13 lunch orders at full capacity): the guard rejected every cross-department booking attempt and every unauthorized warning injection. An additional 19 DENIED verdicts came from normal agents whose lunch orders were denied when both meal types were fully booked.
 
 ---
 
@@ -395,7 +395,7 @@ Gaps are non-uniform: AM->PM = 4h, PM->AM(next day) = 20h overnight. The non-uni
 
 ### 6.1 The protocol works where architecture matches decomposition
 
-105 agents (100 normal + 5 adversarial), 7 resource types, 3 visibility levels, 3 conflict policies, 2 external system agents, 10 rounds. Zero safety violations. The mark space maintained consistency under concurrent access throughout. 927 action marks written without a single conflicting state, including when agents made poor decisions and when adversarial agents actively tried to break scope boundaries.
+105 agents (100 normal + 5 adversarial), 7 resource types, 3 visibility levels, 3 conflict policies, 2 external system agents, 10 rounds. No double booking found (from the steps and the bot logs). The mark space maintained consistency under concurrent access throughout. 927 action marks written with no resource allowed twice in one round, including when agents made poor decisions and when adversarial agents actively tried to break scope boundaries. Six rooms were booked again by a second agent after a building-ops warning freed them; a warning frees a booking only until it decays (P35), and then both agents hold the room.
 
 Google's scaling research found the same pattern: agent systems work when the task structure matches the coordination architecture. Their data shows +80.8% improvement on parallelizable financial analysis but -39% to -70% degradation on sequential crafting tasks, across 180 configurations with up to 4 agents using direct-communication architectures (hub-and-spoke, peer-to-peer, hybrid).
 
@@ -536,7 +536,7 @@ The protocol enforces invariants regardless of what the agent's prompt says. Adv
 ## 8. Strengths and Limitations
 
 **What held up:**
-- Safety invariants (zero violations at 105-agent scale, including adversarial agents)
+- Safety invariants at 105-agent scale, including adversarial agents: no double booking found and every cross-department write denied (from the steps)
 - Adversarial robustness (190 denied attempts across 5 adversarial agents)
 - Multi-scope isolation (CLASSIFIED, PROTECTED, OPEN)
 - Projected reads under PROTECTED visibility (8,197 redacted reads)

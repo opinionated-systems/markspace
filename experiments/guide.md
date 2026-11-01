@@ -27,10 +27,10 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 543 tests (tests/ and experiments/stress_test/)
+pytest  # 563 tests (tests/ and experiments/stress_test/)
 ```
 
-Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, and the stress-test pacer.
+Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
 
 ### Composition Stress Test
 
@@ -106,7 +106,7 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--probe-interval` | 5 | Run diagnostic probe every N rounds (requires `--defense`) |
 | `--resume` | false | Resume from existing output |
 
-Output goes to a results directory containing decomposed JSONL files: `trial.jsonl` (aggregates), `rounds.jsonl` (per-round), `agents.jsonl` (per-agent-per-round), `steps.jsonl` (per-tool-call), `manifests.jsonl` (agent manifests), and optionally `messages.jsonl` (full LLM history, with each call's raw `usage` block). Token totals count `prompt`, `completion`, `cached_prompt` and `reasoning` tokens and the number of `calls`; `calls_cached_unknown` counts responses that reported no cached-token count. A paced run also writes `pacer.jsonl`, one line per rate change.
+Output goes to a results directory containing decomposed JSONL files: `trial.jsonl` (aggregates), `rounds.jsonl` (per-round), `agents.jsonl` (per-agent-per-round), `steps.jsonl` (per-tool-call), `manifests.jsonl` (agent manifests), and optionally `messages.jsonl` (full LLM history, with each call's raw `usage` block). Token totals count `prompt`, `completion`, `cached_prompt` and `reasoning` tokens and the number of `calls`; `calls_cached_unknown` counts responses that reported no cached-token count. A paced run also writes `pacer.jsonl`, one line per rate change. `python experiments/stress_test/stored_run_safety.py <run dir>...` checks stored runs from their `steps.jsonl` and bot logs: double bookings as `run.py` counts them (resources allowed twice in one round, rebookings no building-ops warning explains, lunch windows over capacity), the verdicts of cross-department writes, and what the parking and boardroom bots gave out. Runs made before `run.py` measured double bookings and scope violations report 0 for both, so use this for them.
 
 **Pacing.** Providers such as Fireworks set limits in tokens per minute, per account and per model, and raise a limit only while usage stays above half of it; traffic that ramps up too quickly gets HTTP 429. With `--pace-start-rps`, every request, retries included, waits in one arrival-ordered line, so concurrent agents never fire together. The rate starts low and steps up only while requests succeed and agents use about the whole current rate. A 429 or an over-limit signal halves it, and no request starts before a 429's Retry-After has passed. Other workloads on the same account and model share its limits without being counted here: keep the sum of every workload's share at or below the limit, for example `--pace-target-fraction 0.3` next to a workload that uses 70% of it.
 

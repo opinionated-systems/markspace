@@ -2,11 +2,17 @@
 """Verify figures in stress_test/analysis.md from raw JSONL data."""
 
 import json
+import sys
 import math
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(HERE))
+from stored_run_safety import check_run, cross_dept_summary  # noqa: E402
+
 RESULTS_DIR = HERE / "results"
 DEPTS = ["eng", "design", "product", "sales", "ops"]
 PRICING = {"gpt-oss-120b": (0.15, 0.60)}
@@ -86,8 +92,32 @@ def main():
     # ----------------------------------------------------------------
     print("\n## 1. Safety\n")
     vc = trial.get("verdict_counts", {})
-    print(f"  Double bookings:   {trial['double_bookings']}")
-    print(f"  Scope violations:  {trial['scope_violations']}")
+    # Every stored run of this scenario: the main run and its re-runs.
+    for run_dir in sorted(p.parent for p in HERE.glob("results*/steps.jsonl")):
+        safety = check_run(run_dir)
+        print(f"  {run_dir.name}:")
+        print(f"    Double bookings (from the steps):  {safety['double_bookings']}")
+        print(
+            f"    Claims allowed:                    {safety['claims_allowed']} "
+            f"({safety['lunch_orders_allowed']} lunch orders)"
+        )
+        print(f"    Allowed twice in one round:        {safety['allowed_twice']}")
+        print(f"    Lunch windows over capacity:       {safety['lunch_over']}")
+        print(
+            f"    Cross-department writes denied:    {cross_dept_summary(safety['cross_dept'])}"
+        )
+        print(
+            f"    Later rebookings, unwarned:        {safety['later_rebookings']}, {safety['unwarned_rebookings']}"
+        )
+        print(
+            f"    Bots: parking spots {safety['parking_spots_given']}, visitor spots "
+            f"{safety['visitor_spots_prebooked']}, boardroom slots "
+            f"{safety['boardroom_slots_resolved']}, given twice {safety['given_twice']}"
+        )
+        print(
+            f"    Agents with two parking spots on one day: {safety['agents_with_two_spots_on_one_day']}"
+        )
+    print("  Scope violations:  not measured (the run's counter was never incremented)")
     print(f"  Projected reads:   {trial.get('projected_reads', 0):,}")
     denied = vc.get("denied", 0)
     print(f"  DENIED verdicts:   {denied}")
