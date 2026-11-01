@@ -946,7 +946,7 @@ The guard mediates every write and enforces every conflict resolution. Two thing
 
 ### Telemetry
 
-The guard emits structured events on every `write_mark()` and `execute()` call. Events go to a telemetry sink, not into the mark space. The interface is [OpenTelemetry](https://opentelemetry.io/)-compatible: metrics as instruments, structured logs as log records, and optional trace context propagation. Implementations SHOULD use the OpenTelemetry SDK when available and MAY fall back to structured JSON logs.
+The guard emits structured events on every `write_mark()` and `execute()` call. Events go to a telemetry sink, not into the mark space. Lease grants, expiries and losses are counted on the call that records them. The interface is [OpenTelemetry](https://opentelemetry.io/)-compatible: metrics as instruments, structured logs as log records, and optional trace context propagation. Implementations SHOULD use the OpenTelemetry SDK when available and MAY fall back to structured JSON logs.
 
 **Metrics** (counters, gauges, histograms):
 
@@ -957,6 +957,9 @@ The guard emits structured events on every `write_mark()` and `execute()` call. 
 | `markspace.tokens.input` | Counter | `agent_id` | Input tokens consumed per round |
 | `markspace.tokens.output` | Counter | `agent_id` | Output tokens generated (LLM responses + mark writes) |
 | `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` | Conflict frequency and resolution distribution |
+| `markspace.leases.granted` | Counter | `scope`, `resource` | Grants per resource (spec 6.5) |
+| `markspace.leases.expired` | Counter | `scope`, `resource` | Leases that reached their expiry: tools slower than their lease |
+| `markspace.leases.lost` | Counter | `scope`, `resource` | Intents closed as lost: refused or beaten |
 | `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | Hot-tier mark count (above strength threshold) |
 | `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | Total mark count including decayed |
 | `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | Remaining token budget (input/output/total) |

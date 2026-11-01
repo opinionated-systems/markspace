@@ -1302,6 +1302,9 @@ Telemetry goes to a configurable sink. Telemetry does not go into the mark space
 | `markspace.tokens.input` | Counter | `agent_id` |
 | `markspace.tokens.output` | Counter | `agent_id` |
 | `markspace.conflicts.resolved` | Counter | `scope`, `policy`, `outcome` |
+| `markspace.leases.granted` | Counter | `scope`, `resource` |
+| `markspace.leases.expired` | Counter | `scope`, `resource` |
+| `markspace.leases.lost` | Counter | `scope`, `resource` |
 | `markspace.space.active_marks` | Gauge | `scope`, `mark_type` |
 | `markspace.space.total_marks` | Gauge | `scope`, `mark_type` |
 | `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` |
