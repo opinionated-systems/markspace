@@ -246,3 +246,9 @@ class TestAgentBarrier:
         assert not snap.is_allowed_checked("hr/payroll", "intent")
         assert not snap.is_allowed_checked("eng", "action")
         assert snap.is_allowed_checked("hrx", "intent")
+        barrier.require_need("hr")
+        snap = barrier.snapshot()
+        for scope in ("hr", "hr/payroll", "hrx", "eng"):
+            assert snap.needs_required(scope) == barrier.needs_required(scope)
+        barrier.require_need_all()
+        assert barrier.snapshot().needs_required("eng")

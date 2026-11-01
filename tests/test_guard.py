@@ -11,7 +11,11 @@ lives in the harness (deterministic), not in the agent (unreliable).
 
 from __future__ import annotations
 
+import random
+import threading
+import time
 import uuid
+from typing import Any
 
 import pytest
 
@@ -35,11 +39,14 @@ from markspace import (
     PolicyResult,
     PolicyVerdict,
     Scope,
+    ScopeVisibility,
     Source,
     Warning,
     hours,
     minutes,
 )
+from markspace.barrier import BarrierSnapshot
+from markspace.core import AnyMark, resolve_conflict, scope_contains
 
 
 @pytest.fixture
@@ -1348,8 +1355,10 @@ class TestDeferredAuthorization:
         decisions = guard.resolve_deferred(
             "corp", "acme", agents={insider.id: insider, outsider.id: outsider}
         )
-        assert decisions[insider.id].verdict == GuardVerdict.ALLOW
-        assert decisions[outsider.id].verdict == GuardVerdict.CONFLICT
+        # The insider is judged, not refused as "revoked"; the outer-scope
+        # intent wins (Section 6.1).
+        assert decisions[insider.id].verdict == GuardVerdict.CONFLICT
+        assert decisions[outsider.id].verdict == GuardVerdict.ALLOW
 
 
 class TestGuardDecisionVisibility:
@@ -1378,31 +1387,53 @@ class TestGuardDecisionVisibility:
             read_scopes=frozenset({"corp/merger"}),
         )
 
+    @staticmethod
+    def _vault() -> MarkSpace:
+        """A CLASSIFIED outer scope over a PROTECTED inner one."""
+        from markspace import ScopeVisibility
+
+        s = MarkSpace(
+            scopes=[
+                Scope(name="vault", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="vault/desk", visibility=ScopeVisibility.PROTECTED),
+            ]
+        )
+        s.set_clock(1000000.0)
+        return s
+
     def test_conflict_withholds_unreadable_winning_intent(self):
-        s = self._space()
+        s = self._vault()
         guard = Guard(s)
-        insider = self._insider()
-        assert guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9).verdict == (
+        insider = Agent(
+            name="insider",
+            scopes={"vault": ["intent", "action"]},
+            read_scopes=frozenset({"vault"}),
+        )
+        assert guard.pre_action(insider, "vault", "acme", "buy", 0.1).verdict == (
             GuardVerdict.ALLOW
         )
-        outsider = Agent(name="outsider", scopes={"corp": ["intent", "action"]})
-        d = guard.pre_action(outsider, "corp", "acme", "buy", 0.1)
+        outsider = Agent(name="outsider", scopes={"vault/desk": ["intent", "action"]})
+        d = guard.pre_action(outsider, "vault/desk", "acme", "buy", 0.9)
         assert d.verdict == GuardVerdict.CONFLICT
         assert d.winning_intent is None
-        assert all(i.scope != "corp/merger" for i in d.conflicting_intents)
-        assert "0.9" not in d.reason and "corp/merger" not in d.reason
+        assert all(i.scope != "vault" for i in d.conflicting_intents)
+        assert "0.1" not in d.reason and str(insider.id) not in d.reason
 
     def test_conflict_names_readable_winning_intent(self):
-        s = self._space()
+        s = self._vault()
         guard = Guard(s)
-        insider = self._insider()
-        guard.pre_action(insider, "corp/merger", "acme", "buy", 0.9)
+        insider = Agent(
+            name="insider",
+            scopes={"vault": ["intent", "action"]},
+            read_scopes=frozenset({"vault"}),
+        )
+        guard.pre_action(insider, "vault", "acme", "buy", 0.1)
         reader = Agent(
             name="reader",
-            scopes={"corp": ["intent", "action"]},
-            read_scopes=frozenset({"corp"}),
+            scopes={"vault/desk": ["intent", "action"]},
+            read_scopes=frozenset({"vault"}),
         )
-        d = guard.pre_action(reader, "corp", "acme", "buy", 0.1)
+        d = guard.pre_action(reader, "vault/desk", "acme", "buy", 0.9)
         assert d.verdict == GuardVerdict.CONFLICT
         assert d.winning_intent is not None
         assert d.winning_intent.agent_id == insider.id
@@ -1546,3 +1577,720 @@ class TestGuardDecisionVisibility:
         d = guard.resolve_deferred("desk", "d1")[b.id]
         assert d.winning_intent is not None and d.winning_intent.agent_id == a.id
         assert [i.agent_id for i in d.conflicting_intents] == [a.id]
+
+
+class TestConflictAcrossScopeHierarchy:
+    """P39 and Section 6: intents and actions on one resource compete when one
+    scope contains the other, in either order of arrival."""
+
+    @staticmethod
+    def _space() -> MarkSpace:
+        s = MarkSpace(scopes=[Scope(name="corp"), Scope(name="corp/merger")])
+        s.set_clock(1000000.0)
+        return s
+
+    @staticmethod
+    def _agents() -> tuple[Agent, Agent]:
+        parent = Agent(name="parent", scopes={"corp": ["intent", "action"]})
+        child = Agent(name="child", scopes={"corp/merger": ["intent", "action"]})
+        return parent, child
+
+    def test_child_sees_parent_intent(self):
+        guard = Guard(self._space())
+        parent, child = self._agents()
+        assert guard.pre_action(parent, "corp", "acme", "buy", 0.9).verdict == (
+            GuardVerdict.ALLOW
+        )
+        d = guard.pre_action(child, "corp/merger", "acme", "buy", 0.1)
+        assert d.verdict == GuardVerdict.CONFLICT
+
+    def test_parent_outranks_child_intent(self):
+        guard = Guard(self._space())
+        parent, child = self._agents()
+        guard.pre_action(child, "corp/merger", "acme", "buy", 0.9)
+        d = guard.pre_action(parent, "corp", "acme", "buy", 0.1)
+        assert d.verdict == GuardVerdict.ALLOW
+        assert [i.agent_id for i in d.conflicting_intents] == [child.id]
+
+    def test_parent_action_claims_resource_for_child(self):
+        guard = Guard(self._space())
+        parent, child = self._agents()
+        decision, _ = guard.execute(
+            agent=parent,
+            scope="corp",
+            resource="acme",
+            intent_action="buy",
+            result_action="bought",
+            tool_fn=lambda: "ok",
+        )
+        assert decision.verdict == GuardVerdict.ALLOW
+        d = guard.pre_action(child, "corp/merger", "acme", "buy", 0.9)
+        assert d.verdict == GuardVerdict.CONFLICT
+
+    def test_sibling_scopes_do_not_compete(self):
+        s = MarkSpace(scopes=[Scope(name="corp/a"), Scope(name="corp/b")])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"corp/a": ["intent", "action"]})
+        b = Agent(name="b", scopes={"corp/b": ["intent", "action"]})
+        guard.pre_action(a, "corp/a", "acme", "buy", 0.9)
+        assert guard.pre_action(b, "corp/b", "acme", "buy", 0.1).verdict == (
+            GuardVerdict.ALLOW
+        )
+
+
+class TestPerIntentCompetingSets:
+    """Section 6.1: each intent is judged against its own competing set. An
+    intent in an outer scope beats one in an inner scope; inside one scope the
+    scope's policy decides. No two competing intents are both allowed, and the
+    verdict does not depend on which boundary computes it."""
+
+    @staticmethod
+    def _tree(policy: ConflictPolicy, deferred: bool) -> MarkSpace:
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", conflict_policy=policy, deferred=deferred),
+                Scope(name="corp/a", conflict_policy=policy, deferred=deferred),
+                Scope(name="corp/b", conflict_policy=policy, deferred=deferred),
+            ]
+        )
+        s.set_clock(1000000.0)
+        return s
+
+    @staticmethod
+    def _agent(name: str, scope: str) -> Agent:
+        return Agent(name=name, scopes={scope: ["intent", "action"]})
+
+    def test_deferred_boundaries_agree_and_the_outer_scope_wins(self):
+        s = self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=True)
+        guard = Guard(s)
+        a, p, b = (
+            self._agent("a", "corp/a"),
+            self._agent("p", "corp"),
+            self._agent("b", "corp/b"),
+        )
+        guard.pre_action(a, "corp/a", "r", "use", 0.9)
+        guard.pre_action(p, "corp", "r", "use", 0.5)
+        guard.pre_action(b, "corp/b", "r", "use", 0.1)
+        agents = {x.id: x for x in (a, p, b)}
+        at_parent = guard.resolve_deferred("corp", "r", agents=agents)
+        at_a = guard.resolve_deferred("corp/a", "r", agents=agents)
+        for agent_id in at_a:
+            assert at_a[agent_id].verdict == at_parent[agent_id].verdict
+        assert at_parent[p.id].verdict == GuardVerdict.ALLOW
+        for loser in (a, b):
+            assert at_parent[loser.id].verdict == GuardVerdict.CONFLICT
+            named = at_parent[loser.id].winning_intent
+            assert named is not None and named.agent_id == p.id
+
+    def test_outer_scope_wins_whatever_the_order_or_confidence(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", conflict_policy=ConflictPolicy.FIRST_WRITER),
+                Scope(
+                    name="corp/merger",
+                    conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE,
+                ),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        p, c = self._agent("p", "corp"), self._agent("c", "corp/merger")
+        assert guard.pre_action(c, "corp/merger", "r", "use", 0.9).verdict == (
+            GuardVerdict.ALLOW
+        )
+        s.set_clock(1000001.0)  # p writes later, with lower confidence
+        assert guard.pre_action(p, "corp", "r", "use", 0.1).verdict == (
+            GuardVerdict.ALLOW
+        )
+        assert s.check_conflict("corp", "r") == s.check_conflict("corp/merger", "r")
+
+    def test_mixed_policies_cannot_cycle(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", conflict_policy=ConflictPolicy.FIRST_WRITER),
+                Scope(
+                    name="corp/a",
+                    conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE,
+                    deferred=True,
+                ),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a2, c, a1 = (
+            self._agent("a2", "corp/a"),
+            self._agent("c", "corp"),
+            self._agent("a1", "corp/a"),
+        )
+        guard.pre_action(a2, "corp/a", "r", "use", 0.5)
+        s.set_clock(1000001.0)
+        assert guard.pre_action(c, "corp", "r", "use", 0.5).verdict == (
+            GuardVerdict.ALLOW
+        )
+        s.set_clock(1000002.0)
+        guard.pre_action(a1, "corp/a", "r", "use", 0.9)
+        decisions = guard.resolve_deferred(
+            "corp/a", "r", agents={x.id: x for x in (a2, c, a1)}
+        )
+        allowed = [i for i, d in decisions.items() if d.verdict == GuardVerdict.ALLOW]
+        assert allowed == [c.id]
+
+    def test_a_child_action_never_supersedes_its_parents(self):
+        s = self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=False)
+        guard = Guard(s)
+        c, p = self._agent("c", "corp/a"), self._agent("p", "corp")
+        dc = guard.pre_action(c, "corp/a", "r", "use", 0.9)
+        dp = guard.pre_action(p, "corp", "r", "use", 0.1)  # outer: also allowed
+        assert dc.verdict == dp.verdict == GuardVerdict.ALLOW
+        guard.post_action(p, "corp", "r", "used", "ok", intent_id=dp.intent_id)
+        guard.post_action(c, "corp/a", "r", "used", "ok", intent_id=dc.intent_id)
+        assert {a.agent_id for a in s.get_actions("corp", "r")} == {p.id, c.id}
+        # The parent's claim still covers the tree.
+        b = self._agent("b", "corp/b")
+        assert guard.pre_action(b, "corp/b", "r", "use", 0.9).verdict == (
+            GuardVerdict.CONFLICT
+        )
+
+    def test_a_parent_action_supersedes_its_childs(self):
+        s = self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=False)
+        guard = Guard(s)
+        c, p = self._agent("c", "corp/a"), self._agent("p", "corp")
+        dc = guard.pre_action(c, "corp/a", "r", "use", 0.9)
+        dp = guard.pre_action(p, "corp", "r", "use", 0.1)
+        guard.post_action(c, "corp/a", "r", "used", "ok", intent_id=dc.intent_id)
+        guard.post_action(p, "corp", "r", "used", "ok", intent_id=dp.intent_id)
+        assert [a.agent_id for a in s.get_actions("corp", "r")] == [p.id]
+
+    def test_an_intent_held_by_an_action_blocks_siblings_until_its_ttl_ends(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a"),
+                Scope(name="corp/b"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a, x, b = (
+            self._agent("a", "corp/a"),
+            self._agent("x", "corp"),
+            self._agent("b", "corp/b"),
+        )
+        da = guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        assert da.verdict == GuardVerdict.ALLOW  # a's tool starts
+        # x's deferred intent lands while a's tool runs; then a's action lands.
+        assert guard.pre_action(x, "corp", "r", "use", 0.5).verdict == (
+            GuardVerdict.BLOCKED
+        )
+        guard.post_action(a, "corp/a", "r", "used", "ok", intent_id=da.intent_id)
+        # The space does not record whether x was allowed, so x's live intent
+        # holds sibling b off until it expires (Section 6.1).
+        assert guard.pre_action(b, "corp/b", "r", "use", 0.5).verdict == (
+            GuardVerdict.CONFLICT
+        )
+        s.set_clock(1000000.0 + 30 * 60 + 1)  # past the default intent TTL
+        assert guard.pre_action(b, "corp/b", "r", "use", 0.5).verdict == (
+            GuardVerdict.ALLOW
+        )
+
+    def test_an_allowed_outer_intent_still_wins_after_an_inner_action_lands(self):
+        s = self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=False)
+        guard = Guard(s)
+        b, x, a = (
+            self._agent("b", "corp/b"),
+            self._agent("x", "corp"),
+            self._agent("a", "corp/a"),
+        )
+        db = guard.pre_action(b, "corp/b", "r", "use", 0.5)
+        dx = guard.pre_action(x, "corp", "r", "use", 0.5)
+        assert db.verdict == dx.verdict == GuardVerdict.ALLOW  # x overtakes b
+        guard.post_action(b, "corp/b", "r", "used", "ok", intent_id=db.intent_id)
+        # x's tool still runs: a later inner intent must not be allowed too.
+        assert guard.pre_action(a, "corp/a", "r", "use", 0.9).verdict == (
+            GuardVerdict.CONFLICT
+        )
+
+    def test_an_outer_intent_allowed_at_a_boundary_still_wins_at_a_later_one(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+                Scope(name="corp/b"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        b, x, a = (
+            self._agent("b", "corp/b"),
+            self._agent("x", "corp"),
+            self._agent("a", "corp/a"),
+        )
+        agents = {b.id: b, x.id: x, a.id: a}
+        db = guard.pre_action(b, "corp/b", "r", "use", 0.5)
+        assert db.verdict == GuardVerdict.ALLOW
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        assert guard.resolve_deferred("corp", "r", agents=agents)[x.id].verdict == (
+            GuardVerdict.ALLOW
+        )
+        guard.post_action(b, "corp/b", "r", "used", "ok", intent_id=db.intent_id)
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        # x's tool still runs: the corp/a boundary must not allow a too.
+        at_a = guard.resolve_deferred("corp/a", "r", agents=agents)
+        assert at_a[a.id].verdict == GuardVerdict.CONFLICT
+
+    def test_a_boundary_judges_sibling_intents_against_their_own_sets(self):
+        s = self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=True)
+        guard = Guard(s)
+        a, b, c = (
+            self._agent("a", "corp/a"),
+            self._agent("b", "corp/b"),
+            self._agent("c", "corp/a"),
+        )
+        da = guard.pre_action(a, "corp/a", "r", "use", 0.4)
+        guard.pre_action(b, "corp/b", "r", "use", 0.6)
+        guard.pre_action(c, "corp/a", "r", "use", 0.5)
+        guard.post_action(a, "corp/a", "r", "used", "ok", intent_id=da.intent_id)
+        # a's action holds corp/a only; b in sibling corp/b competes with none
+        # of these intents and that action, at the corp boundary too.
+        at_parent = guard.resolve_deferred("corp", "r", agents={b.id: b, c.id: c})
+        assert at_parent[c.id].verdict == GuardVerdict.CONFLICT
+        assert "already claimed" in at_parent[c.id].reason  # by a's action
+        assert at_parent[b.id].verdict == GuardVerdict.ALLOW
+
+    def test_an_agent_missing_from_the_mapping_still_holds_its_claim(self):
+        s = MarkSpace(scopes=[Scope(name="corp"), Scope(name="corp/a", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x, a = self._agent("x", "corp"), self._agent("a", "corp/a")
+        assert guard.pre_action(x, "corp", "r", "use", 0.5).verdict == (
+            GuardVerdict.ALLOW
+        )  # x's tool starts
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        # The mapping holds only a: x cannot be checked, and still wins.
+        at_a = guard.resolve_deferred("corp/a", "r", agents={a.id: a})
+        assert at_a[a.id].verdict == GuardVerdict.CONFLICT
+
+    def test_a_boundary_judges_every_intent_at_one_time(self):
+        readings: list[float] = []
+        action_reads: list[float | None] = []
+
+        class SteppingSpace(MarkSpace):
+            def now(self) -> float:
+                return readings.pop(0) if readings else super().now()
+
+            def get_actions(
+                self, scope: str, resource: str, *, now: float | None = None
+            ) -> list[Action]:
+                action_reads.append(now)
+                return super().get_actions(scope, resource, now=now)
+
+        s = SteppingSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x, a = self._agent("x", "corp"), self._agent("a", "corp/a")
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        s.set_clock(1000001.0)
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        ttl = s.get_scope("corp").decay.intent_ttl
+        # The first reading finds x live; every later one finds it expired.
+        readings.append(1000000.0 + ttl - 1)
+        s.set_clock(1000000.0 + ttl + 1)
+        action_reads.clear()
+        d = guard.resolve_deferred("corp/a", "r", agents={x.id: x, a.id: a})
+        assert d[x.id].verdict == GuardVerdict.ALLOW
+        assert d[a.id].verdict == GuardVerdict.CONFLICT
+        # Actions are read at the same time as intents.
+        assert action_reads and set(action_reads) == {1000000.0 + ttl - 1}
+
+    def test_a_boundary_checks_each_intent_once(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+            ]
+        )
+        s.set_clock(1000000.0)
+        x, a = self._agent("x", "corp"), self._agent("a", "corp/a")
+        checks: dict[uuid.UUID, int] = {}
+
+        class ChangingGuard(Guard):
+            """x's barrier narrows right after the boundary first checks x."""
+
+            def _deferred_refusal(
+                self,
+                intent: Intent,
+                agents: dict[uuid.UUID, Agent] | None,
+                barriers: dict[uuid.UUID, BarrierSnapshot | None],
+                now: float,
+            ) -> str | None:
+                checks[intent.id] = checks.get(intent.id, 0) + 1
+                if intent.agent_id == x.id and checks[intent.id] > 1:
+                    return "blocked by barrier at resolution time"
+                return super()._deferred_refusal(intent, agents, barriers, now)
+
+        guard = ChangingGuard(s)
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        d = guard.resolve_deferred("corp/a", "r", agents={x.id: x, a.id: a})
+        assert d[x.id].verdict == GuardVerdict.ALLOW
+        assert d[a.id].verdict == GuardVerdict.CONFLICT
+
+    def test_no_gc_runs_during_a_boundary(self):
+        """gc from another thread waits for the boundary (Section 6.2.3)."""
+        gc_done: list[threading.Event] = []
+
+        class GcDuringBoundary(MarkSpace):
+            reads = 0
+
+            def get_intents(
+                self, scope: str, resource: str, *, now: float | None = None
+            ) -> list[Intent]:
+                GcDuringBoundary.reads += 1
+                if GcDuringBoundary.reads == 2:  # between two set reads
+                    done = threading.Event()
+                    threading.Thread(
+                        target=lambda: (self.gc(), done.set()), daemon=True
+                    ).start()
+                    done.wait(0.3)
+                    gc_done.append(done)
+                return super().get_intents(scope, resource, now=now)
+
+        s = GcDuringBoundary(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x, a = self._agent("x", "corp"), self._agent("a", "corp/a")
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        GcDuringBoundary.reads = 0
+        guard.resolve_deferred("corp/a", "r", agents={x.id: x, a.id: a})
+        assert gc_done and not gc_done[0].is_set()  # gc waited
+        assert gc_done[0].wait(5)  # and ran after the boundary
+
+    def test_a_boundary_reads_the_agents_map_once(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x, a = self._agent("x", "corp"), self._agent("a", "corp/a")
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        assert guard.resolve_deferred("corp", "r", agents={x.id: x})[x.id].verdict == (
+            GuardVerdict.ALLOW
+        )  # x's tool runs
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+
+        class Registry(dict[uuid.UUID, Agent]):
+            """x registers after the boundary looks it up."""
+
+            def get(self, key: uuid.UUID, default: Any = None) -> Any:
+                found = super().get(key, default)
+                if key == x.id:  # x registers right after the lookup missed it
+                    self[x.id] = x
+                return found
+
+        at_a = guard.resolve_deferred("corp/a", "r", agents=Registry({a.id: a}))
+        assert at_a[a.id].verdict == GuardVerdict.CONFLICT
+
+    def test_the_space_is_not_read_under_the_barrier_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        s = MarkSpace(scopes=[Scope(name="corp", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x = self._agent("x", "corp")
+        barrier = guard.get_or_create_barrier(x.id)
+        barrier.require_need("corp")
+        held: list[bool] = []
+        real_read = s.read
+
+        def read(**query: Any) -> list[AnyMark]:
+            held.append(guard._barrier_lock.locked())
+            return real_read(**query)
+
+        monkeypatch.setattr(s, "read", read)
+        guard._check_barrier(x, "corp", MarkType.INTENT)
+        assert held and not any(held)
+
+    def test_an_intent_that_loses_is_not_sent_to_the_principal(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp"),
+                Scope(name="corp/x"),
+                Scope(name="corp/x/board", conflict_policy=ConflictPolicy.YIELD_ALL),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        p, c = self._agent("p", "corp"), self._agent("c", "corp/x/board")
+        i = Agent(name="i", scopes={"corp/x": ["intent", "action", "need"]})
+        dp = guard.pre_action(p, "corp", "r", "use", 0.5)
+        assert dp.verdict == GuardVerdict.ALLOW
+        guard.pre_action(c, "corp/x/board", "r", "use", 0.5)
+        # p beats i, so no principal answer on the YIELD_ALL pair (i, c)
+        # could let i proceed: i loses to p.
+        d = guard.pre_action(i, "corp/x", "r", "use", 0.5)
+        assert d.verdict == GuardVerdict.CONFLICT
+        assert d.winning_intent is not None and d.winning_intent.id == dp.intent_id
+
+    def test_every_intent_compared_at_a_boundary_is_checked_for_authorization(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/a", deferred=True),
+                Scope(
+                    name="corp/b",
+                    conflict_policy=ConflictPolicy.YIELD_ALL,
+                    deferred=True,
+                ),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        b = self._agent("b", "corp/b")
+        p, a = self._agent("p", "corp"), self._agent("a", "corp/a")
+        guard.pre_action(b, "corp/b", "r", "use", 0.5)
+        guard.pre_action(p, "corp", "r", "use", 0.5)
+        guard.pre_action(a, "corp/a", "r", "use", 0.5)
+        revoked_b = Agent(name="b", id=b.id, scopes={})
+        agents = {revoked_b.id: revoked_b, p.id: p, a.id: a}
+        at_a = guard.resolve_deferred("corp/a", "r", agents=agents)
+        at_parent = guard.resolve_deferred("corp", "r", agents=agents)
+        assert at_parent[b.id].verdict == GuardVerdict.DENIED
+        assert at_a[p.id].verdict == at_parent[p.id].verdict == GuardVerdict.ALLOW
+
+    def test_deferred_boundary_respects_an_existing_action(self):
+        s = MarkSpace(scopes=[Scope(name="desk", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a, b = self._agent("a", "desk"), self._agent("b", "desk")
+        guard.pre_action(a, "desk", "d1", "book", 0.9)
+        guard.pre_action(b, "desk", "d1", "book", 0.2)
+        first = guard.resolve_deferred("desk", "d1", agents={a.id: a, b.id: b})
+        assert first[a.id].verdict == GuardVerdict.ALLOW
+        guard.post_action(
+            a, "desk", "d1", "booked", "ok", intent_id=first[a.id].intent_id
+        )
+        second = guard.resolve_deferred("desk", "d1", agents={a.id: a, b.id: b})
+        assert second[b.id].verdict == GuardVerdict.CONFLICT
+
+    def test_competing_scopes_share_one_resource_lock(self):
+        import threading
+
+        guard = Guard(self._tree(ConflictPolicy.HIGHEST_CONFIDENCE, deferred=False))
+        entered = threading.Event()
+
+        def child() -> None:
+            with guard._resource_lock("corp/a", "r"):
+                entered.set()
+
+        with guard._resource_lock("corp", "r"):
+            t = threading.Thread(target=child)
+            t.start()
+            assert not entered.wait(0.2)
+        t.join(2)
+        assert entered.is_set()
+
+    def test_first_writer_inside_one_scope(self):
+        s = MarkSpace(
+            scopes=[Scope(name="desk", conflict_policy=ConflictPolicy.FIRST_WRITER)]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        a, b = self._agent("a", "desk"), self._agent("b", "desk")
+        da = guard.pre_action(a, "desk", "d1", "book", 0.1)
+        s.set_clock(1000001.0)
+        db = guard.pre_action(b, "desk", "d1", "book", 0.9)
+        assert da.verdict == GuardVerdict.ALLOW
+        assert db.verdict == GuardVerdict.CONFLICT
+        assert s.check_conflict("desk", "d1") == da.intent_id
+
+    def test_yield_all_on_either_side_blocks_the_pair(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE),
+                Scope(name="corp/board", conflict_policy=ConflictPolicy.YIELD_ALL),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        p, c = self._agent("p", "corp"), self._agent("c", "corp/board")
+        guard.pre_action(c, "corp/board", "r", "use", 0.1)
+        d = guard.pre_action(p, "corp", "r", "use", 0.9)
+        assert d.verdict == GuardVerdict.BLOCKED
+
+
+class TestBatchJudging:
+    """judge_all() gives the pairwise rule's result (outranks) on every input,
+    with one sort per scope; the boundary reads barriers and needs as they
+    stand when it runs."""
+
+    @staticmethod
+    def _pairwise(
+        space: MarkSpace, intent: Intent, competitors: list[Intent]
+    ) -> tuple[bool, bool, uuid.UUID | None]:
+        beaters: list[Intent] = []
+        yield_all = False
+        for other in competitors:
+            if other.id == intent.id:
+                continue
+            wins = space.outranks(intent, other)
+            if wins is None:
+                yield_all = True
+            elif not wins:
+                beaters.append(other)
+        if not beaters:
+            return (not yield_all, yield_all, None)
+        outer = min((b.scope for b in beaters), key=lambda sc: sc.count("/"))
+        first = [b for b in beaters if b.scope == outer]
+        policy = space.get_scope(outer).conflict_policy
+        return (False, False, resolve_conflict(first, policy))
+
+    def test_batch_equals_pairwise_on_random_trees(self):
+        rng = random.Random(1101)
+        names = ["t", "t/a", "t/b", "t/a/x", "t/a/y", "t/b/z"]
+        for _ in range(2000):
+            space = MarkSpace(
+                scopes=[
+                    Scope(name=n, conflict_policy=rng.choice(list(ConflictPolicy)))
+                    for n in names
+                ]
+            )
+            intents = [
+                Intent(
+                    scope=rng.choice(names),
+                    resource="r",
+                    action="use",
+                    confidence=rng.choice([0.2, 0.5, 0.9]),
+                    agent_id=uuid.uuid4(),
+                    created_at=rng.choice([1.0, 2.0, 3.0]),
+                )
+                for _ in range(rng.randint(1, 9))
+            ]
+            judged = space.judge_all(intents)
+            for i in intents:
+                competitors = [
+                    o
+                    for o in intents
+                    if scope_contains(o.scope, i.scope)
+                    or scope_contains(i.scope, o.scope)
+                ]
+                j = judged[i.id]
+                got = (j.wins, j.yield_all, j.winner.id if j.winner else None)
+                assert got == self._pairwise(space, i, competitors)
+
+    def test_a_restriction_made_while_the_boundary_waits_counts(self):
+        s = MarkSpace(scopes=[Scope(name="corp", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x = Agent(name="x", scopes={"corp": ["intent", "action"]})
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        result: dict[uuid.UUID, Any] = {}
+        with guard._resource_lock("corp", "r"):
+            t = threading.Thread(
+                target=lambda: result.update(
+                    guard.resolve_deferred("corp", "r", agents={x.id: x})
+                )
+            )
+            t.start()
+            time.sleep(0.2)  # the boundary now waits for the resource lock
+            guard.get_or_create_barrier(x.id).narrow("corp", "intent")
+        t.join()
+        assert result[x.id].verdict == GuardVerdict.DENIED
+
+    def test_the_need_read_uses_the_boundary_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        s = MarkSpace(scopes=[Scope(name="corp", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x = Agent(name="x", scopes={"corp": ["intent", "action", "need"]})
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        guard.get_or_create_barrier(x.id).require_need("corp")
+        times: list[float | None] = []
+        real_read = s.read
+
+        def read(**query: Any) -> list[AnyMark]:
+            times.append(query.get("now"))
+            return real_read(**query)
+
+        monkeypatch.setattr(s, "read", read)
+        guard.resolve_deferred("corp", "r", agents={x.id: x})
+        assert times == [1000000.0]
+
+    def test_each_named_intent_is_checked_by_its_own_scope(self):
+        s = MarkSpace(
+            scopes=[
+                Scope(name="corp", deferred=True),
+                Scope(name="corp/pub", deferred=True),
+                Scope(
+                    name="corp/sec",
+                    deferred=True,
+                    visibility=ScopeVisibility.CLASSIFIED,
+                ),
+            ]
+        )
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x = Agent(name="x", scopes={"corp": ["intent", "action"]})
+        p = Agent(name="p", scopes={"corp/pub": ["intent", "action"]})
+        c = Agent(name="c", scopes={"corp/sec": ["intent", "action"]})
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        dp = guard.pre_action(p, "corp/pub", "r", "use", 0.5)
+        guard.pre_action(c, "corp/sec", "r", "use", 0.5)
+        d = guard.resolve_deferred("corp", "r", agents={a.id: a for a in (x, p, c)})
+        assert [i.id for i in d[x.id].conflicting_intents] == [dp.intent_id]
+
+    def test_a_lone_intent_finds_no_conflict(self):
+        s = MarkSpace(scopes=[Scope(name="corp", deferred=True)])
+        s.set_clock(1000000.0)
+        guard = Guard(s)
+        x = Agent(name="x", scopes={"corp": ["intent", "action"]})
+        guard.pre_action(x, "corp", "r", "use", 0.5)
+        d = guard.resolve_deferred("corp", "r", agents={x.id: x})
+        assert d[x.id].verdict == GuardVerdict.ALLOW and not d[x.id].conflict_found
+
+
+class TestBoundaryDecisionLists:
+    """Each decision lists every other competing intent once, never its own (P38)."""
+
+    def test_a_decision_lists_each_other_competitor_once_and_never_itself(self) -> None:
+        names = ["corp", "corp/a", "corp/b", "corp/a/x"]
+        for _ in range(10):
+            s = MarkSpace(scopes=[Scope(name=n, deferred=True) for n in names])
+            s.set_clock(1000000.0)
+            guard = Guard(s)
+            agents: dict[uuid.UUID, Agent] = {}
+            scope_of: dict[uuid.UUID, str] = {}
+            for n in names:
+                for k in range(3):
+                    a = Agent(name=f"{n}-{k}", scopes={n: ["intent", "action"]})
+                    agents[a.id] = a
+                    d = guard.pre_action(a, n, "r", "use", 0.5)
+                    assert d.intent_id is not None
+                    scope_of[d.intent_id] = n
+            for boundary in names:
+                for d in guard.resolve_deferred(boundary, "r", agents=agents).values():
+                    assert d.intent_id is not None
+                    own = scope_of[d.intent_id]
+                    listed = sorted(str(o.id) for o in d.conflicting_intents)
+                    expected = sorted(
+                        str(i)
+                        for i, sc in scope_of.items()
+                        if i != d.intent_id
+                        and (scope_contains(sc, own) or scope_contains(own, sc))
+                    )
+                    assert listed == expected

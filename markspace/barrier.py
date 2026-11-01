@@ -59,6 +59,10 @@ class BarrierSnapshot:
         """Check with wildcard and hierarchical scope support."""
         return revocation_allows(self.revoked, scope, mark_type_value)
 
+    def needs_required(self, scope: str) -> bool:
+        """Check if need requirement is active for this scope (hierarchical)."""
+        return need_required(self.require_need_scopes, scope)
+
 
 @dataclass
 class AgentBarrier:

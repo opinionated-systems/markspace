@@ -17,6 +17,9 @@ import math
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from functools import cmp_to_key
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -43,7 +46,7 @@ from markspace.core import (
     effective_strength_with_warnings,
     project_mark,
     reinforce,
-    resolve_conflict,
+    intent_beats,
     scope_contains,
 )
 
@@ -66,6 +69,15 @@ _SOURCE_ORDER: list[Source] = [
     Source.EXTERNAL_VERIFIED,
     Source.FLEET,
 ]
+
+
+@dataclass(frozen=True)
+class IntentJudgement:
+    """An intent judged against its competing set (Section 6.1)."""
+
+    wins: bool
+    yield_all: bool  # a competing pair is under YIELD_ALL: a principal decides
+    winner: Intent | None  # when it loses: the strongest intent that beats it
 
 
 class ScopeError(Exception):
@@ -321,6 +333,7 @@ class MarkSpace:
         min_strength: float = _DEFAULT_MIN_STRENGTH,
         reader: Agent | None = None,
         max_tokens: int | None = None,
+        now: float | None = None,
     ) -> list[AnyMark]:
         """
         Read marks from the space, filtered and with effective strength computed.
@@ -346,10 +359,13 @@ class MarkSpace:
         Each mark is judged and decayed by its own scope's definition, also
         when it is read through a parent scope.
 
+        now: the time to evaluate at, as in get_intents(); default now().
+
         Returns marks sorted by effective_strength descending.
         """
         with self._lock:
-            now = self.now()
+            if now is None:
+                now = self.now()
             self.get_scope(scope)  # raises for a scope with no definition
 
             # Each mark decays and is shown by its own scope's definition
@@ -393,17 +409,9 @@ class MarkSpace:
                 # Compute effective strength with warning invalidation.
                 # Uses the warning index for O(1) lookup per mark instead of
                 # scanning all warnings.
-                warning_ids = self._warnings_by_target.get(m.id, set())
-                relevant_warnings = [
-                    w
-                    for wid in warning_ids
-                    if wid not in self._superseded
-                    and (w := self._marks.get(wid)) is not None
-                    and isinstance(w, Warning)
-                ]
                 strength = effective_strength_with_warnings(
                     m,
-                    relevant_warnings,
+                    self._warnings_on(m),
                     now,
                     self.get_scope(m.scope).decay,
                     warning_decay=self._own_decay,
@@ -575,6 +583,19 @@ class MarkSpace:
         """The decay settings of *mark*'s own scope."""
         return self.get_scope(mark.scope).decay
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """
+        Hold the space: no write, gc or read by another thread runs until the
+        block ends. A guard decision that reads several sets holds it, so that
+        every read sees one state (Section 6.2.3). Lock order: a guard's
+        resource lock, then a barrier lock, then this one. Take it only inside
+        a guard's resource lock or with no guard lock held, and never call a
+        guard method or take a barrier lock while holding it.
+        """
+        with self._lock:
+            yield
+
     def visible_form(self, mark: AnyMark, reader: Agent | None) -> AnyMark | None:
         """
         The form of *mark* that *reader* may see under the visibility of the
@@ -596,18 +617,38 @@ class MarkSpace:
         with self._lock:
             return self._marks.get(mark_id)
 
-    def _get_intents_unlocked(self, scope: str, resource: str) -> list[Intent]:
-        """Get active intents on a resource. Caller MUST hold self._lock."""
-        now = self.now()
-        self.get_scope(scope)  # raises for a scope with no definition
+    def _warnings_on(self, mark: AnyMark) -> list[Warning]:
+        """Live warnings that invalidate *mark*. Caller MUST hold self._lock."""
+        return [
+            w
+            for wid in self._warnings_by_target.get(mark.id, set())
+            if wid not in self._superseded
+            and (w := self._marks.get(wid)) is not None
+            and isinstance(w, Warning)
+        ]
 
+    def _competing_candidate_ids(self, scope: str) -> set[uuid.UUID]:
+        """
+        Ids of marks in *scope*, its ancestors and its descendants: the scopes
+        whose claims on a resource compete with *scope*'s (Section 6.1). Sibling
+        scopes do not compete. Caller MUST hold self._lock.
+        """
         candidate_ids: set[uuid.UUID] = set()
         for s, ids in self._by_scope.items():
-            if scope_contains(scope, s):
+            if scope_contains(scope, s) or scope_contains(s, scope):
                 candidate_ids.update(ids)
+        return candidate_ids
+
+    def _get_intents_unlocked(
+        self, scope: str, resource: str, now: float | None = None
+    ) -> list[Intent]:
+        """Get active intents on a resource. Caller MUST hold self._lock."""
+        if now is None:
+            now = self.now()
+        self.get_scope(scope)  # raises for a scope with no definition
 
         results: list[Intent] = []
-        for mid in candidate_ids:
+        for mid in self._competing_candidate_ids(scope):
             m = self._marks.get(mid)
             if (
                 m is not None
@@ -619,26 +660,170 @@ class MarkSpace:
                 results.append(m)
         return results
 
-    def get_intents(self, scope: str, resource: str) -> list[Intent]:
+    def get_intents(
+        self, scope: str, resource: str, *, now: float | None = None
+    ) -> list[Intent]:
         """Get all active intent marks on a specific resource.
 
-        Uses hierarchical scope matching (consistent with read()) so that
-        intents in child scopes are included when querying a parent scope.
+        Includes intents in the scope's ancestors and descendants, whose claims
+        on the resource compete with the scope's (Section 6.1). now: the time
+        to evaluate at, so that several reads see one snapshot; default now().
         """
         with self._lock:
-            return self._get_intents_unlocked(scope, resource)
+            return self._get_intents_unlocked(scope, resource, now)
+
+    def get_actions(
+        self, scope: str, resource: str, *, now: float | None = None
+    ) -> list[Action]:
+        """
+        Action marks that claim a resource: in the scope, its ancestors or its
+        descendants (Section 6.1, P39), not superseded, with effective strength
+        (warnings included) at or above read()'s default threshold. now: the
+        time to evaluate at, as in get_intents(); default now().
+        """
+        with self._lock:
+            if now is None:
+                now = self.now()
+            self.get_scope(scope)  # raises for a scope with no definition
+            results: list[Action] = []
+            for mid in self._competing_candidate_ids(scope):
+                m = self._marks.get(mid)
+                if (
+                    not isinstance(m, Action)
+                    or m.resource != resource
+                    or m.id in self._superseded
+                ):
+                    continue
+                strength = effective_strength_with_warnings(
+                    m,
+                    self._warnings_on(m),
+                    now,
+                    self._own_decay(m),
+                    warning_decay=self._own_decay,
+                )
+                if strength >= _DEFAULT_MIN_STRENGTH:
+                    results.append(m)
+            return results
+
+    def outranks(self, a: Intent, b: Intent) -> bool | None:
+        """
+        Whether intent *a* wins against competing intent *b* (Section 6.1):
+        None if either scope uses YIELD_ALL (the principal decides); else the
+        intent in the outer scope wins; inside one scope, that scope's policy
+        decides. Every win points to an outer scope or follows one scope's
+        total order, so wins never form a cycle.
+        """
+        with self._lock:
+            pa = self.get_scope(a.scope).conflict_policy
+            pb = self.get_scope(b.scope).conflict_policy
+        if ConflictPolicy.YIELD_ALL in (pa, pb):
+            return None
+        if a.scope == b.scope:
+            return intent_beats(a, b, pa)
+        return scope_contains(a.scope, b.scope)
+
+    def judge_intent(
+        self, intent: Intent, competitors: list[Intent]
+    ) -> IntentJudgement:
+        """
+        Judge *intent* against its competing set *competitors* (Section 6.1),
+        as judge_all() does.
+        """
+        others = [c for c in competitors if c.id != intent.id]
+        return self.judge_all([intent, *others])[intent.id]
+
+    def judge_all(self, intents: list[Intent]) -> dict[uuid.UUID, IntentJudgement]:
+        """
+        Judge each intent against the intents in the list that compete with
+        it (its own scope, its ancestors, its descendants; Section 6.1). The
+        result equals judging every pair with outranks(): an intent wins only
+        if it outranks every competitor; a competitor that beats it decides
+        before a YIELD_ALL pair does, as no principal answer could let it
+        proceed; a beaten intent names the beater in the outermost scope, the
+        first in that scope's order. Judged at one time, two competing
+        intents never both win, whichever scope's decision computes it.
+
+        One sort per scope, as in multiple-granularity locking (Gray, Lorie,
+        Putzolu, Traiger, "Granularity of Locks and Degrees of Consistency in
+        a Shared Data Base", 1976): every intent in an ancestor scope beats
+        every intent below it unless either scope is YIELD_ALL, so only the
+        first intent of each scope's order needs comparing.
+        """
+        by_scope: dict[str, list[Intent]] = {}
+        for i in intents:
+            by_scope.setdefault(i.scope, []).append(i)
+        with self._lock:
+            policy = {s: self.get_scope(s).conflict_policy for s in by_scope}
+        yielding = {s for s, p in policy.items() if p == ConflictPolicy.YIELD_ALL}
+        ranked: dict[str, list[Intent]] = {}
+        for s, group in by_scope.items():
+            if s in yielding:
+                ranked[s] = group
+                continue
+
+            def before(a: Intent, b: Intent, p: ConflictPolicy = policy[s]) -> int:
+                return -1 if intent_beats(a, b, p) else 1
+
+            ranked[s] = sorted(group, key=cmp_to_key(before))
+        results: dict[uuid.UUID, IntentJudgement] = {}
+        for s, group in ranked.items():
+            above = sorted(
+                (a for a in by_scope if a != s and scope_contains(a, s)),
+                key=lambda a: a.count("/"),
+            )
+            below = [d for d in by_scope if d != s and scope_contains(s, d)]
+            if s in yielding:
+                # Every pair with this scope goes to the principal.
+                has_others = len(group) > 1 or bool(above) or bool(below)
+                for i in group:
+                    results[i.id] = IntentJudgement(
+                        wins=not has_others, yield_all=has_others, winner=None
+                    )
+                continue
+            outer = [a for a in above if a not in yielding]
+            pair_yields = any(a in yielding for a in above) or any(
+                d in yielding for d in below
+            )
+            for rank, i in enumerate(group):
+                if outer:
+                    winner: Intent | None = ranked[outer[0]][0]
+                elif rank > 0:
+                    winner = group[0]
+                else:
+                    winner = None
+                if winner is not None:
+                    results[i.id] = IntentJudgement(
+                        wins=False, yield_all=False, winner=winner
+                    )
+                else:
+                    results[i.id] = IntentJudgement(
+                        wins=not pair_yields, yield_all=pair_yields, winner=None
+                    )
+        return results
 
     def check_conflict(self, scope: str, resource: str) -> uuid.UUID | None:
         """
         Check for intent conflicts on a resource and resolve them.
-        Returns the winning intent's id, or None (YIELD_ALL / no conflict).
+        Returns the id of the intent that wins its own competing set, or None
+        (YIELD_ALL, or no intent wins). Sibling scopes do not compete, so more
+        than one intent can win; then the earliest is returned.
         """
         with self._lock:
-            scope_def = self.get_scope(scope)
-            intents = self._get_intents_unlocked(scope, resource)
+            now = self.now()
+            intents = self._get_intents_unlocked(scope, resource, now)
             if len(intents) <= 1:
                 return intents[0].id if intents else None
-            return resolve_conflict(intents, scope_def.conflict_policy)
+            # Each intent's own competing set lies in the scope tree.
+            tree: dict[uuid.UUID, Intent] = {}
+            for s in {i.scope for i in intents}:
+                tree.update(
+                    (o.id, o) for o in self._get_intents_unlocked(s, resource, now)
+                )
+            judged = self.judge_all(list(tree.values()))
+            winners = [i for i in intents if judged[i.id].wins]
+            if not winners:
+                return None
+            return min(winners, key=lambda i: (i.created_at, str(i.id))).id
 
     # ------------------------------------------------------------------
     # Garbage Collection

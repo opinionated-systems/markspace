@@ -154,6 +154,8 @@ Loosely similar to CAS (Compare-And-Swap) in concurrent programming (read state,
 
 **What it doesn't do**: Intent marks don't prevent all conflicts. Two agents could write intents simultaneously with high confidence. This creates a race condition resolved by the action mark: whoever writes the action first wins, the other agent reads the action mark and adapts.
 
+**Across a scope tree**: an intent competes with intents on the same resource in its own scope, its ancestors and its descendants, not in sibling scopes. The intent in the outer scope wins; inside one scope, the scope's policy decides; YIELD_ALL in either scope hands the pair to the principal. Each intent is judged against its own competing set, so no decision allows two competing intents, and the outcome does not depend on which scope's decision computes it ([spec 6.1](spec.md#61-resolution-protocol)). The costs of the rule: an outer-scope intent pre-empts inner-scope intents whatever their order or confidence; an inner-scope intent already allowed can be overtaken by a later outer-scope intent while its tool runs, and if the inner action lands after the outer one, both stay live; and an intent that cannot proceed because another agent's completed action holds the resource still holds off the intents it beats until its TTL ends.
+
 **The consistency hybrid.** The protocol uses soft consistency for information sharing (observation marks decay, warnings fade, reinforcement is approximate) and hard consistency for mutual exclusion (the guard acquires a lock during conflict resolution to serialize resource claims). This is deliberate: information can tolerate eventual convergence, but "two agents must not book the same room" requires serialization. The stress test confirms this - HIGHEST_CONFIDENCE degenerates to FIRST_WRITER under the lock because the second agent finds an already-committed action, not a competing intent. The lock makes mutual exclusion reliable at the cost of reducing priority-based policies to first-come-first-served. Deferred resolution ([Spec Section 6.2](spec.md#62-deferred-resolution)) restores priority semantics by separating claim collection from allocation.
 
 ### Mark Type 2: Action
@@ -506,7 +508,7 @@ CREATE INDEX idx_mark_resource ON mark(resource_id, mark_type) WHERE resource_id
 
 #### Option A': Document database
 
-A document store (MongoDB, DynamoDB) is a natural alternative to PostgreSQL. Marks are document-shaped: varied schemas per type, nested content, queried by scope and time. Scope as partition key, `created_at` as sort key, TTL as native expiry. Trade-off: no schema migration when mark types evolve, but weaker transactional guarantees for atomic conflict checks (scope-partitioned guards sidestep this). Replaces Option A in the hybrid (Option C) if chosen.
+A document store (MongoDB, DynamoDB) is a natural alternative to PostgreSQL. Marks are document-shaped: varied schemas per type, nested content, queried by scope and time. Scope as partition key, `created_at` as sort key, TTL as native expiry. Trade-off: no schema migration when mark types evolve, but weaker transactional guarantees for atomic conflict checks (guards partitioned by scope tree sidestep this). Replaces Option A in the hybrid (Option C) if chosen.
 
 #### Option B: Redis streams
 
@@ -557,7 +559,7 @@ A complementary approach is consolidation: rather than keeping or discarding ind
 
 For multi-fleet deployments, synchronized pruning across mark spaces adds further complexity. [Bach (2025)](https://arxiv.org/abs/2506.17338) proposes a consensus-based Co-Forgetting Protocol for coordinated memory pruning in multi-agent systems, though this is heavier machinery than a single-fleet deployment needs.
 
-**Distributed storage.** The spec assumes a single-node mark space with in-process locking. A distributed deployment (multiple mark space nodes) would need to maintain the guard's atomicity guarantees across nodes. The guard's lock-based conflict check requires reading current state and making a decision atomically. A distributed guard would likely need either a [Calvin](https://doi.org/10.1145/2213836.2213838)-style deterministic ordering layer (Thomson et al., 2012) - where all nodes agree on transaction order before execution, so each can execute independently and arrive at the same result without distributed locking - or partitioning by scope (each scope assigned to exactly one node, reducing the problem back to single-node locking).
+**Distributed storage.** The spec assumes a single-node mark space with in-process locking. A distributed deployment (multiple mark space nodes) would need to maintain the guard's atomicity guarantees across nodes. The guard's lock-based conflict check requires reading current state and making a decision atomically. A distributed guard would likely need either a [Calvin](https://doi.org/10.1145/2213836.2213838)-style deterministic ordering layer (Thomson et al., 2012) - where all nodes agree on transaction order before execution, so each can execute independently and arrive at the same result without distributed locking - or partitioning by scope tree (all scopes under one root assigned to exactly one node, reducing the problem back to single-node locking). A partition must hold a whole tree: conflicts span a scope's ancestors and descendants (spec 6.1).
 
 **Deferred resolution.** Formalized in [spec.md Section 6.2](spec.md#62-deferred-resolution). The deferred resolution pattern (collect intents, resolve at batch boundary) is used in the stress test for parking and boardroom resources. It is the mechanism that makes HIGHEST_CONFIDENCE meaningful under lock-based serialization ([Section 6.3 of the stress test analysis](../experiments/stress_test/analysis.md#63-lock-based-guards-break-highest_confidence)). The spec defines three phases (claim collection, resolution boundary, batch resolution), three properties (P14-P16), and the relationship between deferred and immediate guard modes. Remaining open question: the resolution boundary trigger is "deployment-defined," so a production implementation would need to decide between timer-based (resolve every N minutes), event-based (resolve when all expected intents are in or activity pauses), or principal-triggered (a human says "resolve now") boundaries - each trading off latency, completeness, and autonomy differently.
 
@@ -601,6 +603,8 @@ scope: "research/company/{company_id}"
 ```
 
 Scopes are hierarchical. An agent authorized for `research/company/*` can write marks on any company. An agent authorized for `research/company/ACME` can only write marks about ACME. Authority is scope-bounded, and scope is defined independently of the agents.
+
+A child scope may define its own visibility, decay and conflict policy. Each mark keeps its own scope's settings, also when read through a parent scope ([spec 7.4](spec.md#74-scope-visibility), [spec 8.2](spec.md#82-read)). Intents on one resource compete across the parent-child line, and the outer scope's intent wins ([Mark Type 1](#mark-type-1-intent)).
 
 ### Why This Decomposes
 

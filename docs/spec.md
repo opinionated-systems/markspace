@@ -397,21 +397,25 @@ Ref: [`markspace/core.py::reinforce`](../markspace/core.py), [`tests/test_proper
 
 ## 6. Conflict Resolution
 
-When two or more agents write intent marks targeting the same resource in the same scope, a conflict exists. Conflict resolution is deterministic and local: each agent resolves conflicts independently by reading the mark space.
+When two or more agents write intent marks targeting the same resource in the same scope, or in two scopes where one contains the other (`corp` and `corp/merger`), a conflict exists. Sibling scopes (`corp/a` and `corp/b`) do not compete. An intent's **competing set** is every active intent on the resource in its own scope, its ancestors and its descendants; in this section and in Section 9, `(scope, resource)` means that set. Competing is not transitive (`corp/a` and `corp/b` both compete with `corp`, not with each other), so each intent is judged against its own competing set (Section 6.1). Conflict resolution is deterministic and local: each agent resolves conflicts independently by reading the mark space.
+
+<p align="center"><img src="../figures/competing_scopes.svg" alt="Competing set of an intent in corp/a: corp and corp/a/x compete, the sibling corp/b does not" width="320"></p>
 
 ### 6.1 Resolution Protocol
 
 When an agent reads intent marks on a resource it also intends to modify:
 
-1. Collect all active intent marks (strength > 0) on `(scope, resource)`.
+1. Collect the intent's competing set: all active intent marks (strength > 0) on `(scope, resource)`.
 2. If no other intents exist, proceed.
-3. If other intents exist, apply the scope's conflict policy:
+3. If other intents exist, compare the intent with each of them. If either scope of a pair uses YIELD_ALL, the pair goes to the principal (YIELD_ALL below), unless another competitor beats the intent: then the intent loses. Otherwise the intent in the outer scope, the one that contains the other, wins; inside one scope, the scope's policy decides. The intent proceeds only if it wins every comparison. Every win points to an outer scope or follows one scope's order, so wins never form a cycle: no decision allows two competing intents, an intent's outcome does not depend on which scope's decision computes it, and anything that beats a competitor also competes with and beats the intent. Within one scope this is the same as applying the scope's policy to the whole set. An implementation MAY judge a whole set at once: every intent in an outer scope beats every intent below it unless either scope is YIELD_ALL, so sorting each scope's intents once by its policy gives every intent's outcome, as in multiple-granularity locking (Gray, Lorie, Putzolu, Traiger, 1976); a beaten intent names the first intent of the outermost scope that beats it. Consequences: an outer-scope intent pre-empts inner-scope intents whatever their order or confidence, an inner-scope intent already allowed can be overtaken by a later outer-scope intent while its tool still runs (Section 6.3), and an intent whose competing set holds another agent's completed action (P39) cannot proceed but still holds off the intents it beats until its TTL ends: the protocol does not record which intents were allowed, so it cannot tell such an intent from one whose tool is still running. Two competing tools can therefore both run: when a later intent beats an intent that already holds ALLOW while its tool runs (an outer-scope intent across scopes, or inside one scope a later intent with higher confidence under HIGHEST_CONFIDENCE), when an agent's authorization is revoked while its tool runs and a resolution boundary then allows a competitor, and when a tool runs past its intent's TTL and a competitor is then allowed. Post-action resolution (Section 6.3) then keeps one action live, except when an inner-scope action lands after an outer-scope one, or an outer-scope action lands after actions in two sibling scopes and supersedes only one of them: then two actions stay live.
+
+The policies:
 
 **FIRST_WRITER**: The intent with the earliest `created_at` wins. All other agents MUST yield.
 
 **HIGHEST_CONFIDENCE**: The intent with the highest `confidence` wins. Ties broken by `created_at` (earliest wins). Losing agents MUST yield.
 
-**YIELD_ALL**: All agents with conflicting intents MUST write a need mark requesting principal resolution. No agent proceeds until the principal decides.
+**YIELD_ALL**: Each agent whose intent goes to the principal (step 3) MUST write a need mark requesting principal resolution; an intent that another competitor beats loses and writes none. No agent of such a pair proceeds until the principal decides.
 
 "Yield" means: the agent MUST NOT write an action mark on the contested resource. The agent MAY write a new intent on an alternative resource, wait and retry after the winning intent's TTL expires, or write a need mark.
 
@@ -432,9 +436,9 @@ The deferred resolution protocol has three phases:
 **Phase 3: Batch resolution.** At the boundary, the guard:
 
 1. Collects all active intent marks on `(scope, resource)` with strength > 0.
-2. Applies the scope's conflict policy to the full set (not pairwise). For HIGHEST_CONFIDENCE, the intent with the highest confidence wins; ties broken by `created_at`.
+2. Judges each intent against its own competing set as in Section 6.1. Inside one scope this applies the scope's policy to the full set: for HIGHEST_CONFIDENCE, the intent with the highest confidence wins; ties broken by `created_at`.
 3. The winning agent's intent is converted to an action mark (or the agent is notified to proceed).
-4. All losing agents receive BLOCKED verdicts. Losing intents remain in the mark space until TTL expiry (they are not forcibly removed).
+4. All losing agents receive CONFLICT verdicts; agents whose intents go to the principal (YIELD_ALL) receive BLOCKED. Losing intents remain in the mark space until TTL expiry (they are not forcibly removed).
 
 ```
 Timeline:
@@ -447,7 +451,7 @@ Timeline:
 
   Guard reads all intents on R                           ──┐
   Guard applies HIGHEST_CONFIDENCE → B wins              ──┤ Phase 3: resolution
-  B proceeds, A and C get BLOCKED                        ──┘
+  B proceeds, A and C get CONFLICT                       ──┘
 ```
 
 #### 6.2.2 Applicability
@@ -458,33 +462,37 @@ Deferred resolution is OPTIONAL for FIRST_WRITER scopes (serialized first-come-f
 
 #### 6.2.3 Relationship to Guard
 
-During Phase 1, the guard operates in **advisory mode**: it writes intent marks but does not acquire a resource lock or return ALLOW/CONFLICT. Agents receive BLOCKED (pending resolution) instead. During Phase 3, the guard operates normally: it acquires the lock, checks the winner, and returns ALLOW for the winner only.
+During Phase 1, the guard operates in **advisory mode**: it writes intent marks but does not acquire a resource lock or return ALLOW/CONFLICT. Agents receive BLOCKED (pending resolution) instead. During Phase 3, the guard operates normally: it acquires the lock, judges each intent, and returns ALLOW only for intents that win their own competing sets (intents in sibling scopes can both win).
 
 An implementation MAY combine deferred and immediate resolution within the same mark space. Some scopes (e.g., room bookings with FIRST_WRITER) resolve immediately; others (e.g., parking with HIGHEST_CONFIDENCE) defer. The scope's conflict policy and a per-scope `deferred: bool` flag determine which path is taken.
 
-**Verdict delivery.** `resolve_deferred(scope, resource)` returns a mapping of agent_id to verdict (ALLOW for the winner, BLOCKED for losers). The delivery mechanism is deployment-defined: the harness MAY use callbacks, polling, subscription notifications (Section 13.3), or direct return values. The spec requires only that (a) exactly one agent receives ALLOW per (scope, resource) per resolution boundary, and (b) all losing agents eventually receive their BLOCKED verdict.
+**Verdict delivery.** `resolve_deferred(scope, resource)` returns a mapping of agent_id to verdict (ALLOW for winners, CONFLICT for losers, BLOCKED for intents sent to the principal, DENIED for refused agents). The delivery mechanism is deployment-defined: the harness MAY use callbacks, polling, subscription notifications (Section 13.3), or direct return values. The spec requires only that (a) no two agents whose intents compete receive ALLOW at a resolution boundary (agents in sibling scopes may both receive it), and (b) all losing agents eventually receive their verdict. A boundary returns a verdict for every intent it judges, also for intents that `pre_action` or an earlier boundary already decided (for example an immediate-scope intent in a competing set). The harness MUST act only on the verdicts of intents still waiting for one, and MUST NOT run a tool again for an intent whose tool ran or runs. The mapping holds one verdict per agent, for the best of its intents (each verdict names its `intent_id`): an agent with an intent still waiting and another one already decided can receive the decided intent's verdict, and the waiting intent then gets its verdict at a later boundary or expires.
+
+**Re-verification.** A boundary MAY check each compared intent's agent again: its authorization for the intent's own scope, and its barrier. Each intent is checked once per boundary, against one copy of the caller's agent registry, taken when the boundary starts, and one copy of each agent's barrier, taken once the boundary holds its resource lock. An intent whose agent fails the check receives DENIED and takes no part in any comparison. An agent the boundary cannot check (missing from the caller's agent registry) also receives DENIED, but its intent still counts against the intents it beats until its TTL ends: it may already hold ALLOW from an earlier decision.
+
+**Atomicity.** A boundary holds the mark space for all its reads and judgments: no write, gc or read by another agent runs until it returns, so every competing set it reads shows one state, at one time, the need marks a barrier check reads included. The guard takes its resource lock, then reads each agent's barrier, then holds the mark space: a barrier restricted while the boundary waits for the resource lock counts, and no thread holds the mark space while it waits for a guard lock.
 
 **Wildcard topic matching.** When a scope's `observation_topics` or `warning_topics` contains `"*"`, any topic string matches. The `"*"` is a literal wildcard (not a glob or regex) - it means "this scope accepts any topic." Named topics in the same list are redundant when `"*"` is present but not an error.
 
 ### 6.3 Post-Action Resolution
 
-If two agents both write action marks on the same resource (race condition where both executed before reading the other's intent), the **later action supersedes the earlier one**. The agent whose action was superseded SHOULD be notified via a warning mark. Intent marks are the primary conflict prevention mechanism; post-action resolution is the fallback.
+If two agents both write action marks on the same resource (race condition where both executed before reading the other's intent), the **later action supersedes the earlier one**. The agent whose action was superseded SHOULD be notified via a warning mark. Intent marks are the primary conflict prevention mechanism; post-action resolution is the fallback. Across scopes, the later action supersedes an earlier action in its own scope or a descendant scope only, and one such action at most: `supersedes` holds one id. When an outer action overtakes intents in two sibling scopes and both of their actions land first, one of the two inner actions stays live next to the outer one. An earlier action in an outer scope stays: its claim covers the whole tree, and both actions remain recorded. When an outer action supersedes an inner one, its `supersedes` field holds the id of a mark that readers of the outer scope may not be authorized to see; the id reveals that such a mark exists, not its content.
 
 ### 6.4 Formal Properties
 
-**P11: Determinism**: Given the same set of intent marks, all agents MUST reach the same conclusion about which intent wins. The resolution function is pure: `resolve(intents) → winner_id`.
+**P11: Determinism**: Given the same set of intent marks, all agents MUST reach the same conclusion about which intents win, whichever scope's decision computes it. The judgement is pure: `judge(intent, competing set)` → wins, loses to a named winner, or goes to the principal.
 
-**P12: Progress**: At least one agent MUST be able to proceed on each contested (scope, resource). The protocol MUST NOT deadlock. *Proof sketch*: Under HIGHEST_CONFIDENCE and FIRST_WRITER, exactly one intent wins per (scope, resource) - the resolution function is a total order on intents, so a winner always exists. Under YIELD_ALL, agents are blocked pending principal input - progress depends on the principal responding (P16 provides the liveness bound via TTL expiry). Circular dependency deadlock cannot occur because conflict resolution operates on individual (scope, resource) pairs independently, not across resources.
+**P12: Progress**: On each contested (scope, resource), at least one agent MUST be able to proceed, at the latest when the intents that hold it off expire (TTL). The protocol MUST NOT deadlock. *Proof sketch*: Under HIGHEST_CONFIDENCE and FIRST_WRITER, the order of Section 6.1 (outer scope first, then one scope's policy) has no cycle, so in every competing set, an intent in the outermost scope that its scope's policy ranks first wins its own competing set; a winner always exists. If a completed action holds that winner (P39), it cannot proceed, and the intents it beats wait until its TTL ends (Section 6.1); intent TTL bounds the wait, as P16 bounds YIELD_ALL. Under YIELD_ALL, agents are blocked pending principal input - progress depends on the principal responding (P16 provides the liveness bound via TTL expiry). Circular dependency deadlock cannot occur because conflict resolution operates on individual (scope, resource) pairs independently, not across resources.
 
 **P13: Consistency (Yield Recovery)**: If agent A yields to agent B's intent, and agent B later abandons (intent expires), agent A MUST NOT be permanently prevented from acting on that resource. Specifically, once no higher-priority intent or action exists on (scope, resource), a new intent from A MUST be evaluable by the guard without reference to the expired yielding history.
 
 **P14: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL active intents on `(scope, resource)` at the resolution boundary. An intent written before the boundary and still within its TTL MUST NOT be excluded from the comparison.
 
-**P15: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent MUST be the one with the highest confidence among all candidates at the resolution boundary. The result MUST be identical to what HIGHEST_CONFIDENCE would produce if all intents were evaluated simultaneously (no serialization effects).
+**P15: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent among the candidates in one scope MUST be the one with the highest confidence; an intent in an outer scope still wins against inner-scope intents (Section 6.1). The result MUST be identical to what HIGHEST_CONFIDENCE would produce if all intents were evaluated simultaneously (no serialization effects).
 
 **P16: Deferred Liveness**: For any scope with `deferred: true` and at least one active intent, a resolution boundary MUST eventually occur. The protocol MUST NOT allow intents to accumulate indefinitely without resolution (intents still expire via TTL as a safety net, but the resolution mechanism SHOULD fire before TTL expiry under normal operation).
 
-**P17: Deferred Mutual Exclusion**: Under deferred resolution, at most one agent MUST receive ALLOW per (scope, resource) per resolution boundary. If N agents have active intents on the same (scope, resource), exactly one wins and N-1 receive BLOCKED.
+**P17: Deferred Mutual Exclusion**: Under deferred resolution, no two agents whose intents compete may both receive ALLOW, at any resolution boundary; an agent whose competing set holds another agent's completed action receives CONFLICT (P39). Agents in sibling scopes may both receive ALLOW. Each intent is judged against its own competing set (Section 6.1): an intent wins only if it beats every competitor, losers receive CONFLICT, and an intent that a YIELD_ALL pair sends to the principal receives BLOCKED. If N agents in one scope compete only with each other, at most one of them wins: none when the scope uses YIELD_ALL, when a completed action holds the resource, or when the intent that would win belongs to an agent the boundary cannot check (Section 6.2.3, Re-verification).
 
 **P18: Deferred Inclusion**: All active intents (strength > 0) on (scope, resource) at the resolution boundary MUST be included in the comparison. An implementation MUST NOT exclude an intent that was written before the boundary and is still within its TTL. Note: perpetual outbidding (an agent always writing a higher-confidence intent just before each boundary) is not prevented by the protocol - it is an acknowledged limitation analogous to priority inversion in real-time systems. TTL expiry provides the safety net: an outbidding agent that never executes will eventually have its intent expire.
 
@@ -749,7 +757,7 @@ pre_action(agent, scope, resource, action, confidence) → GuardDecision
   3. Write an intent mark on behalf of the agent
   4. Read all active intents on (scope, resource)
   5. If no conflict: return ALLOW
-  6. If conflict: resolve per scope's conflict_policy
+  6. If conflict: judge the intent against its competing set (Section 6.1)
      - Winner: return ALLOW
      - Loser: return CONFLICT (with winning_intent for agent's context)
      - YIELD_ALL: return BLOCKED, auto-write need mark for principal
@@ -826,7 +834,7 @@ Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.p
 
 **P38: Guard Transparency**: The `GuardDecision` MUST contain sufficient information for the agent to reason about why it was blocked and choose an alternative. Specifically: a CONFLICT verdict MUST include `winning_intent` (the intent that won the resource); a BLOCKED verdict MUST include a non-empty `reason` string; a DENIED verdict MUST include `reason` specifying which authorization check failed. Exception (P22): a decision MUST NOT name an intent or action from a CLASSIFIED scope the deciding agent has no read authorization for. When the deciding agent is not known (deferred resolution without the agents mapping), a decision names only intents in OPEN scopes. For a hidden winner, `winning_intent` is null and the reason says the agent yields to an intent in a scope it cannot read; `conflicting_intents` leaves hidden intents out, and an ALLOW reason does not mention a conflict the agent cannot see. The verdict itself still counts every intent the decision considers.
 
-**P39: Action Precedence**: If an action mark exists on a resource from agent X, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
+**P39: Action Precedence**: If an action mark exists on a resource from agent X, in the acting scope, an ancestor or a descendant, the guard MUST return CONFLICT for any other agent's intent on that resource. Completed actions take precedence over new intents. Without this, intent-only conflict resolution would miss resources already claimed by executed actions.
 
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_guard.py`](../tests/test_guard.py)
 

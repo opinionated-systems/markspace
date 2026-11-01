@@ -54,6 +54,11 @@ def scope_contains(parent: str, child: str) -> bool:
     return child == parent or child.startswith(parent + "/")
 
 
+def scope_root(scope: str) -> str:
+    """The root of *scope*'s tree. Scopes that compete (one contains the other) share it."""
+    return scope.split("/", 1)[0]
+
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -602,6 +607,26 @@ def project_mark(mark: AnyMark) -> AnyMark:
             )
         updates[field_name] = _REDACTED_DEFAULTS[field_name]
     return mark.model_copy(update=updates)
+
+
+def intent_beats(a: Intent, b: Intent, policy: ConflictPolicy) -> bool:
+    """
+    Whether intent *a* wins against *b* under *policy*: the same total order
+    resolve_conflict uses. Under YIELD_ALL no intent beats another.
+
+    Spec Section 6.1.
+    """
+    if policy == ConflictPolicy.YIELD_ALL:
+        return False
+    if policy == ConflictPolicy.FIRST_WRITER:
+        return (a.created_at, str(a.id)) < (b.created_at, str(b.id))
+    if policy == ConflictPolicy.HIGHEST_CONFIDENCE:
+        return (a.confidence, -a.created_at, str(a.id)) > (
+            b.confidence,
+            -b.created_at,
+            str(b.id),
+        )
+    raise ValueError(f"Unknown conflict policy: {policy}")
 
 
 def resolve_conflict(intents: list[Intent], policy: ConflictPolicy) -> uuid.UUID | None:

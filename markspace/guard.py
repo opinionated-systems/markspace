@@ -53,11 +53,18 @@ from markspace.core import (
     Severity,
     Warning,
     hours,
-    resolve_conflict,
+    scope_contains,
+    scope_root,
 )
 from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
 from markspace.rate_limit import RateLimitTracker
-from markspace.space import MarkSpace, QuotaExceededError, ScopeError, ValidationError
+from markspace.space import (
+    IntentJudgement,
+    MarkSpace,
+    QuotaExceededError,
+    ScopeError,
+    ValidationError,
+)
 from markspace.telemetry import (
     METRIC_CONFLICTS_RESOLVED,
     METRIC_MARKS_WRITTEN,
@@ -284,7 +291,9 @@ class Guard:
         Increments active count on entry, decrements on exit. Entries
         with active == 0 are eligible for cleanup via cleanup_locks().
         """
-        key = (scope, resource)
+        # Competing scopes (one contains the other) share their root, so they
+        # take the same lock (Section 6.1).
+        key = (scope_root(scope), resource)
         with self._meta_lock:
             if key not in self._resource_locks:
                 self._resource_locks[key] = _ResourceLock()
@@ -812,29 +821,44 @@ class Guard:
         self, agent: Agent, scope: str, mark_type: MarkType
     ) -> str | None:
         """Check barrier. Returns error message if blocked, None if allowed."""
-        with self._barrier_lock:
-            barrier = self._barriers.get(agent.id)
-            if barrier is None:
-                return None
-            if not barrier.is_allowed_checked(scope, mark_type.value):
+        return self._barrier_refusal(
+            agent, scope, mark_type, self.get_barrier(agent.id)
+        )
+
+    def _barrier_refusal(
+        self,
+        agent: Agent,
+        scope: str,
+        mark_type: MarkType,
+        barrier: BarrierSnapshot | None,
+        now: float | None = None,
+    ) -> str | None:
+        """
+        Why *barrier* blocks *agent* from writing *mark_type* in *scope*, or
+        None. It reads the space without the barrier lock: the barrier lock is
+        never held while the space is read, so a resolution boundary can hold
+        the space while it judges barriers it read before. now: the time of
+        the need read, as in read(); a boundary passes its own.
+        """
+        if barrier is None:
+            return None
+        if not barrier.is_allowed_checked(scope, mark_type.value):
+            return (
+                f"Agent '{agent.name}' blocked by barrier: "
+                f"{mark_type.value} revoked in scope '{scope}'"
+            )
+        if barrier.needs_required(scope) and mark_type != MarkType.NEED:
+            # Check for unresolved Need in this scope
+            needs = self.space.read(scope=scope, mark_type=MarkType.NEED, now=now)
+            has_unresolved = any(
+                isinstance(n, Need) and n.agent_id == agent.id and n.resolved_by is None
+                for n in needs
+            )
+            if not has_unresolved:
                 return (
-                    f"Agent '{agent.name}' blocked by barrier: "
-                    f"{mark_type.value} revoked in scope '{scope}'"
+                    f"Agent '{agent.name}' must write a Need mark in "
+                    f"scope '{scope}' before other writes (barrier requirement)"
                 )
-            if barrier.needs_required(scope) and mark_type != MarkType.NEED:
-                # Check for unresolved Need in this scope
-                needs = self.space.read(scope=scope, mark_type=MarkType.NEED)
-                has_unresolved = any(
-                    isinstance(n, Need)
-                    and n.agent_id == agent.id
-                    and n.resolved_by is None
-                    for n in needs
-                )
-                if not has_unresolved:
-                    return (
-                        f"Agent '{agent.name}' must write a Need mark in "
-                        f"scope '{scope}' before other writes (barrier requirement)"
-                    )
         return None
 
     def _check_envelope(self, agent: Agent, scope: str) -> str | None:
@@ -1029,11 +1053,8 @@ class Guard:
         # If the resource is already claimed (action mark exists from another agent),
         # reject immediately. The intent-vs-intent conflict resolution only applies
         # when two agents are both still in the planning phase.
-        existing_actions = self.space.read(
-            scope=scope,
-            resource=resource,
-            mark_type=MarkType.ACTION,
-        )
+        # Includes actions in ancestor and descendant scopes (P39).
+        existing_actions = self.space.get_actions(scope, resource)
         # Filter out failed actions - they record that a tool threw but
         # don't claim the resource. Without this, a failed tool execution
         # permanently blocks the resource for all agents.
@@ -1101,8 +1122,19 @@ class Guard:
             i for i in all_intents if i.id != intent_id and self._visible_to(i, agent)
         ]
 
-        # Resolve conflict
-        winner_id = resolve_conflict(all_intents, scope_def.conflict_policy)
+        # Judge this agent's intent against its competing set (Section 6.1).
+        own_intent = next((i for i in all_intents if i.id == intent_id), None)
+        if own_intent is None:
+            raise ValueError(f"Intent {intent_id} not active on {scope}/{resource}")
+        judgement = self.space.judge_intent(own_intent, all_intents)
+        winner_id: uuid.UUID | None
+        if judgement.yield_all:
+            winner_id = None
+        elif judgement.wins:
+            winner_id = intent_id
+        else:
+            assert judgement.winner is not None  # a loser always has a winner
+            winner_id = judgement.winner.id
         try:
             outcome = "yield_all" if winner_id is None else "resolved"
             self._telemetry.record_counter(
@@ -1156,12 +1188,8 @@ class Guard:
                 conflict_found=True,
             )
         else:
-            winner = next((i for i in all_intents if i.id == winner_id), None)
-            if winner is None:
-                raise ValueError(
-                    f"resolve_conflict returned winner_id={winner_id} "
-                    f"not found in intents for {scope}/{resource}"
-                )
+            winner = judgement.winner
+            assert winner is not None  # a loser always has a winner
             if not self._visible_to(winner, agent):
                 return GuardDecision(
                     verdict=GuardVerdict.CONFLICT,
@@ -1181,6 +1209,33 @@ class Guard:
                 conflict_found=True,
             )
 
+    def _deferred_refusal(
+        self,
+        intent: Intent,
+        agents: dict[uuid.UUID, Agent] | None,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        now: float,
+    ) -> str | None:
+        """
+        Why a deferred intent may not take part at a resolution boundary, or
+        None. Checked only when the caller passes the agents mapping: the
+        agent must be known, still authorized for the intent's own scope, and
+        not blocked by the barrier there.
+        """
+        if agents is None:
+            return None
+        agent = agents.get(intent.agent_id)
+        if agent is None:
+            return "Agent not found at resolution time"
+        if not agent.can_write(intent.scope, MarkType.INTENT) or not agent.can_write(
+            intent.scope, MarkType.ACTION
+        ):
+            return f"Agent '{agent.name}' authorization revoked since pre_action"
+        barrier = barriers.get(agent.id)
+        if self._barrier_refusal(agent, intent.scope, MarkType.INTENT, barrier, now):
+            return f"Agent '{agent.name}' blocked by barrier at resolution time"
+        return None
+
     def _visible_to(self, mark: AnyMark, agent: Agent | None) -> bool:
         """
         Whether a decision may name *mark* to *agent* (P22, P38). An unknown
@@ -1197,9 +1252,10 @@ class Guard:
         agents: dict[uuid.UUID, Agent] | None = None,
     ) -> dict[uuid.UUID, GuardDecision]:
         """
-        Deferred resolution boundary. Collects all active intents on
-        (scope, resource) and applies the scope's conflict policy to the
-        full set. Returns a mapping of agent_id -> GuardDecision.
+        Deferred resolution boundary. Collects the active intents on
+        (scope, resource), its ancestors and its descendants, and judges each
+        against its own competing set (Section 6.1), all at one time. Returns
+        a mapping of agent_id -> GuardDecision.
 
         If an agent has multiple active intents on the same resource, the
         best verdict is kept (ALLOW > BLOCKED > CONFLICT > DENIED).
@@ -1207,7 +1263,10 @@ class Guard:
         agents: optional mapping of agent_id -> Agent for re-verifying
             authorization at resolution time. If provided, agents whose
             permissions have been revoked since pre_action will receive
-            DENIED and be excluded from conflict resolution.
+            DENIED and be excluded from conflict resolution. An agent missing
+            from the mapping also receives DENIED, but its intents still count
+            against the intents they beat: it cannot be checked, and an intent
+            in another scope of a competing set may already hold ALLOW.
 
         Spec Section 6.2 (Phase 3: Batch resolution).
 
@@ -1221,128 +1280,197 @@ class Guard:
         boundary fires before intent TTLs expire, or handle the empty-result
         case by re-issuing intents.
         """
+        # The caller's agents map is copied once. Each agent's barrier is read
+        # once, inside the resource lock, so a restriction applied while the
+        # boundary waits for that lock counts, and before the space is held:
+        # the barrier lock is never held while the space is held (Section
+        # 6.2.3).
+        if agents is not None:
+            agents = dict(agents)
         with self._resource_lock(scope, resource):
-            scope_def = self.space.get_scope(scope)
-            all_intents = self.space.get_intents(scope, resource)
+            barriers = {a: self.get_barrier(a) for a in agents} if agents else {}
+            with self.space.locked():
+                return self._resolve_locked(scope, resource, agents, barriers)
 
-            if not all_intents:
-                return {}
+    def _resolve_locked(
+        self,
+        scope: str,
+        resource: str,
+        agents: dict[uuid.UUID, Agent] | None,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+    ) -> dict[uuid.UUID, GuardDecision]:
+        """
+        resolve_deferred() under its resource lock and the space lock. The
+        boundary is atomic: no write, gc or read by another thread runs until
+        it returns, so every competing set it reads shows one state.
+        """
+        # One time for every read: an intent that expires during the
+        # boundary must not count in one competing set and not in another.
+        now = self.space.now()
+        all_intents = self.space.get_intents(scope, resource, now=now)
 
-            results: dict[uuid.UUID, GuardDecision] = {}
+        if not all_intents:
+            return {}
 
-            # Re-verify authorization if agent objects are provided.
-            # Filter out intents from agents whose permissions were revoked
-            # between pre_action (deferred) and resolution.
-            eligible_intents = all_intents
-            if agents is not None:
-                eligible_intents = []
-                for intent in all_intents:
-                    agent = agents.get(intent.agent_id)
-                    if agent is None:
-                        # Unknown agent - deny
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason="Agent not found at resolution time",
-                            ),
-                        )
-                    elif not agent.can_write(
-                        intent.scope, MarkType.INTENT
-                    ) or not agent.can_write(intent.scope, MarkType.ACTION):
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason=f"Agent '{agent.name}' authorization revoked since pre_action",
-                            ),
-                        )
-                    elif (
-                        self._check_barrier(agent, intent.scope, MarkType.INTENT)
-                        is not None
-                    ):
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason=f"Agent '{agent.name}' blocked by barrier at resolution time",
-                            ),
-                        )
-                    else:
-                        eligible_intents.append(intent)
+        results: dict[uuid.UUID, GuardDecision] = {}
 
-            if not eligible_intents:
-                return results
+        # Re-verify authorization if agent objects are provided.
+        # Each intent is checked once per boundary: a barrier or a
+        # permission that changes during the boundary must not make one
+        # intent eligible to win and absent from other intents' sets.
+        refusals: dict[uuid.UUID, str | None] = {}
 
-            # P14: Consider ALL eligible active intents (get_intents already
-            # filters by strength > 0 and respects TTL/supersession).
-            winner_id = resolve_conflict(eligible_intents, scope_def.conflict_policy)
+        def refusal_of(o: Intent) -> str | None:
+            if o.id not in refusals:
+                refusals[o.id] = self._deferred_refusal(o, agents, barriers, now)
+            return refusals[o.id]
 
-            # Pre-index for O(1) lookup and per-intent conflict lists.
-            intent_by_id = {i.id: i for i in eligible_intents}
-            others_by_id = {
-                i.id: [o for o in eligible_intents if o.id != i.id]
-                for i in eligible_intents
-            }
-            winner = intent_by_id.get(winner_id) if winner_id is not None else None
-            if winner_id is not None and winner is None:
-                raise ValueError(
-                    f"resolve_conflict returned winner_id={winner_id} "
-                    f"not found in eligible intents for {scope}/{resource}"
+        # Filter out intents from agents whose permissions were revoked
+        # between pre_action (deferred) and resolution.
+        eligible_intents: list[Intent] = []
+        for intent in all_intents:
+            refusal = refusal_of(intent)
+            if refusal is None:
+                eligible_intents.append(intent)
+            else:
+                _update_best_decision(
+                    results,
+                    intent.agent_id,
+                    GuardDecision(
+                        verdict=GuardVerdict.DENIED,
+                        intent_id=intent.id,
+                        reason=refusal,
+                    ),
                 )
 
-            for intent in eligible_intents:
-                # Each decision names only intents its receiver may see (P22,
-                # P38). Without the agents mapping the receiver is unknown,
-                # and only intents in OPEN scopes are named.
-                receiver = agents.get(intent.agent_id) if agents is not None else None
-                others = others_by_id[intent.id]
-                visible_others = [o for o in others if self._visible_to(o, receiver)]
-                if winner_id is not None and intent.id == winner_id:
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.ALLOW,
-                        intent_id=intent.id,
-                        reason="Deferred resolution - this agent wins",
-                        conflicting_intents=visible_others,
-                        conflict_found=bool(others),
-                    )
-                elif winner_id is None:
-                    # YIELD_ALL - all blocked
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.BLOCKED,
-                        intent_id=intent.id,
-                        reason="YIELD_ALL - principal decision required",
-                        conflicting_intents=visible_others,
-                        conflict_found=bool(others),
-                    )
-                elif winner is not None and self._visible_to(winner, receiver):
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.CONFLICT,
-                        intent_id=intent.id,
-                        reason=f"Deferred resolution - yields to agent "
-                        f"'{winner.agent_id}' (confidence={winner.confidence})",
-                        winning_intent=winner,
-                        conflicting_intents=visible_others,
-                        conflict_found=True,
-                    )
-                else:
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.CONFLICT,
-                        intent_id=intent.id,
-                        reason="Deferred resolution - yields to an intent in a "
-                        "scope this agent cannot read",
-                        conflicting_intents=visible_others,
-                        conflict_found=True,
-                    )
-                _update_best_decision(results, intent.agent_id, decision)
-
+        if not eligible_intents:
             return results
+
+        # An intent whose agent is in the mapping and fails a check takes
+        # no part in any comparison (P14), also outside this boundary's
+        # set. An agent missing from the mapping cannot be checked, so its
+        # intents still count.
+        def is_refused(o: Intent) -> bool:
+            return (
+                agents is not None
+                and o.agent_id in agents
+                and refusal_of(o) is not None
+            )
+
+        # A competing set depends only on the intent's scope, and the
+        # boundary writes no marks: read and judge each scope's set once.
+        competing: dict[str, tuple[list[Intent], list[Action]]] = {}
+        judged: dict[str, dict[uuid.UUID, IntentJudgement]] = {}
+        # A decision names the other intents its receiver may see: what a
+        # receiver may see depends only on the mark's scope, so each
+        # (receiver, scope) is checked once, and each scope's intents are
+        # listed once and sliced around the intent itself.
+        visible: dict[tuple[uuid.UUID | None, str], bool] = {}
+        listed: dict[str, dict[str, list[Intent]]] = {}
+        # An intent's index in each listing: the listings of two scopes
+        # can order the same intents differently.
+        position: dict[tuple[str, uuid.UUID], int] = {}
+        for intent in eligible_intents:
+            # Each decision names only intents its receiver may see (P22,
+            # P38). Without the agents mapping the receiver is unknown,
+            # and only intents in OPEN scopes are named.
+            receiver = agents.get(intent.agent_id) if agents is not None else None
+            # Each intent is judged against its own competing set (Section
+            # 6.1), so its verdict does not depend on this boundary's scope.
+            if intent.scope not in competing:
+                competing[intent.scope] = (
+                    [
+                        o
+                        for o in self.space.get_intents(intent.scope, resource, now=now)
+                        if not is_refused(o)
+                    ],
+                    [
+                        a
+                        for a in self.space.get_actions(intent.scope, resource, now=now)
+                        if not a.failed
+                    ],
+                )
+            own_set, live_actions = competing[intent.scope]
+            if intent.scope not in listed:
+                listed[intent.scope] = {}
+                for o in own_set:
+                    group = listed[intent.scope].setdefault(o.scope, [])
+                    position[(intent.scope, o.id)] = len(group)
+                    group.append(o)
+            visible_others: list[Intent] = []
+            for sc, group in listed[intent.scope].items():
+                key = (receiver.id if receiver is not None else None, sc)
+                if key not in visible:
+                    visible[key] = self._visible_to(group[0], receiver)
+                if not visible[key]:
+                    continue
+                if sc == intent.scope:
+                    k = position[(intent.scope, intent.id)]
+                    visible_others += group[:k] + group[k + 1 :]
+                else:
+                    visible_others += group
+            has_others = len(own_set) > 1
+            claimant = next(
+                (a for a in live_actions if a.agent_id != intent.agent_id), None
+            )
+            if intent.scope not in judged:
+                judged[intent.scope] = self.space.judge_all(own_set)
+            judgement = judged[intent.scope][intent.id]
+            winner = judgement.winner
+            if claimant is not None:
+                # P39 at the boundary: a completed action holds the resource.
+                claimed_by = (
+                    f" (agent_id={claimant.agent_id})"
+                    if self._visible_to(claimant, receiver)
+                    else ""
+                )
+                decision = GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent.id,
+                    reason=f"Deferred resolution - resource already claimed "
+                    f"by action mark{claimed_by}",
+                    conflicting_intents=visible_others,
+                    conflict_found=True,
+                )
+            elif judgement.wins:
+                decision = GuardDecision(
+                    verdict=GuardVerdict.ALLOW,
+                    intent_id=intent.id,
+                    reason="Deferred resolution - this agent wins",
+                    conflicting_intents=visible_others,
+                    conflict_found=has_others,
+                )
+            elif judgement.yield_all:
+                # YIELD_ALL - all blocked
+                decision = GuardDecision(
+                    verdict=GuardVerdict.BLOCKED,
+                    intent_id=intent.id,
+                    reason="YIELD_ALL - principal decision required",
+                    conflicting_intents=visible_others,
+                    conflict_found=has_others,
+                )
+            elif winner is not None and self._visible_to(winner, receiver):
+                decision = GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent.id,
+                    reason=f"Deferred resolution - yields to agent "
+                    f"'{winner.agent_id}' (confidence={winner.confidence})",
+                    winning_intent=winner,
+                    conflicting_intents=visible_others,
+                    conflict_found=True,
+                )
+            else:
+                decision = GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent.id,
+                    reason="Deferred resolution - yields to an intent in a "
+                    "scope this agent cannot read",
+                    conflicting_intents=visible_others,
+                    conflict_found=True,
+                )
+            _update_best_decision(results, intent.agent_id, decision)
+
+        return results
 
     def post_action(
         self,
@@ -1379,17 +1507,23 @@ class Guard:
         But if B and C both run post_action before either's write is visible,
         both supersede A, leaving two unsuperseded actions. The mark's
         ``supersedes`` field is a single UUID, so chaining is not possible
-        without a second pass. This is unlikely in practice (requires 3+
-        agents racing on the same resource with overlapping tool calls) and
-        the harness can detect it via multiple visible actions on a resource.
+        without a second pass. Within one scope this needs 3+ agents racing
+        with overlapping tool calls. Across scopes it is common: an outer
+        action that overtook intents in two sibling scopes, whose actions
+        both landed first, supersedes only one of them (Section 6.3). The
+        harness can detect it via multiple visible actions on a resource.
         """
         # Section 6.3: check for a prior successful action from another
         # agent on this resource. This handles the race where both agents
         # got ALLOW (via conflict resolution on intents) while the other's
         # tool was still running. The later action supersedes the earlier.
-        existing_actions = self.space.read(
-            scope=scope, resource=resource, mark_type=MarkType.ACTION
-        )
+        # In this scope and its descendants (Section 6.3): an action never
+        # supersedes one in an outer scope, whose claim covers the whole tree.
+        existing_actions = [
+            a
+            for a in self.space.get_actions(scope, resource)
+            if scope_contains(scope, a.scope)
+        ]
         prior_action = next(
             (
                 a
