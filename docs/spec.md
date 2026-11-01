@@ -418,7 +418,7 @@ A conflict exists when two or more agents write intent marks on the same resourc
 
 The **competing set** of an intent is every active intent on the resource in its own scope, its ancestors and its descendants. In this section and in Section 9, `(scope, resource)` means that set. Competition is not transitive. For example, `corp/a` and `corp/b` both compete with `corp`, but they do not compete with each other. Thus the judgment of each intent uses its own competing set (Section 6.1).
 
-<p align="center"><img src="../figures/competing_scopes.svg" alt="Competing set of an intent in corp/a: corp and corp/a/x compete, the sibling corp/b does not" width="320"></p>
+<p align="center"><img src="../figures/competing_scopes.svg" alt="Competing set of an intent in corp/a: corp and corp/a/x compete, the sibling corp/b does not" width="400"></p>
 
 Conflict resolution is deterministic. The guard decides from the marks and from its own lease table (Section 6.5). The lease table records which intents can act now, and which intents the guard rejected. An agent that reads only the marks can predict the decision of the guard. But the lease table is not part of the mark space. Thus that agent cannot tell an intent that holds a lease from an intent that waits.
 
@@ -502,7 +502,7 @@ The deployment defines the trigger mechanism. The spec requires only that a boun
 
    Losing intents stay in the mark space until their TTL expires. Nothing removes them by force.
 
-<p align="center"><img src="../figures/deferred_resolution.svg" alt="Deferred resolution: three intents wait, the boundary grants B a lease, A and C lose" width="600"></p>
+<p align="center"><img src="../figures/deferred_resolution.svg" alt="Deferred resolution: three intents wait, the boundary grants B a lease, A and C lose" width="750"></p>
 
 #### 6.2.2 Applicability
 
@@ -631,7 +631,7 @@ In the record, each intent is in one of these claim states:
 
 A closed intent never competes again.
 
-<p align="center"><img src="../figures/claim_states.svg" alt="Claim states: a pending intent is granted, released or lost, and a granted one is acted, expired or released" width="700"></p>
+<p align="center"><img src="../figures/claim_states.svg" alt="Claim states: a pending intent is granted, released or lost, and a granted one is acted, expired or released" width="875"></p>
 
 **Lease clock.** The guard reads leases on a clock that never moves backward. This lease clock shows the maximum of all times that the guard has read. A lease is live while all of these conditions are true:
 
@@ -1002,7 +1002,7 @@ A deployment cannot trust agents to read marks voluntarily before they act. An L
 
 The guard is a descendant of [Hoare monitors](https://doi.org/10.1145/355620.361161) (1974). A monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. Here, the guard wraps the mark space. The guard makes sure that `pre_action` checks every tool call before execution.
 
-<p align="center"><img src="../figures/guard_flow.svg" alt="Guard flow: pre_action grants a lease, the tool runs with the fencing token, post_action records the action under the lease" width="480"></p>
+<p align="center"><img src="../figures/guard_flow.svg" alt="Guard flow: pre_action grants a lease, the tool runs with the fencing token, post_action records the action under the lease" width="600"></p>
 
 ### 9.1 Principle
 

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400" font-family="'IBM Plex Mono', monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="750" height="500" font-family="'IBM Plex Mono', monospace">
   <style>
     .fg { fill: #1a1a2e; }
     .fg-stroke { stroke: #1a1a2e; }
