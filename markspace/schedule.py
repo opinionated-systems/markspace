@@ -26,9 +26,12 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from markspace.core import Agent
+
+if TYPE_CHECKING:
+    from markspace.space import MarkSpace
 
 
 @dataclass
@@ -76,12 +79,13 @@ class Scheduler:
 
     def __init__(
         self,
-        clock: Callable[[], float] | None = None,
+        clock: Callable[[], float] | MarkSpace | None = None,
         pre_activation_check: Callable[[Agent], str | None] | None = None,
     ) -> None:
         # Accept a MarkSpace for backward compatibility (uses its .now() method).
         from markspace.space import MarkSpace
 
+        self._clock: Callable[[], float]
         if isinstance(clock, MarkSpace):
             self._clock = clock.now
         elif clock is not None:

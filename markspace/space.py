@@ -1054,26 +1054,28 @@ class MarkSpace:
 
             # Remove marks and clean up indices
             for mid in to_remove:
-                m = self._marks.pop(mid, None)
-                if m is not None:
+                removed = self._marks.pop(mid, None)
+                if removed is not None:
                     # Decrement per-agent mark count
-                    count = self._agent_mark_counts.get(m.agent_id, 0)
+                    count = self._agent_mark_counts.get(removed.agent_id, 0)
                     if count > 1:
-                        self._agent_mark_counts[m.agent_id] = count - 1
+                        self._agent_mark_counts[removed.agent_id] = count - 1
                     else:
-                        self._agent_mark_counts.pop(m.agent_id, None)
-                    scope_ids = self._by_scope.get(m.scope)
+                        self._agent_mark_counts.pop(removed.agent_id, None)
+                    scope_ids = self._by_scope.get(removed.scope)
                     if scope_ids is not None:
                         scope_ids.discard(mid)
                         if not scope_ids:
-                            del self._by_scope[m.scope]
+                            del self._by_scope[removed.scope]
                     # Clean up warning index entries
-                    if isinstance(m, Warning) and m.invalidates is not None:
-                        target_warnings = self._warnings_by_target.get(m.invalidates)
+                    if isinstance(removed, Warning) and removed.invalidates is not None:
+                        target_warnings = self._warnings_by_target.get(
+                            removed.invalidates
+                        )
                         if target_warnings is not None:
                             target_warnings.discard(mid)
                             if not target_warnings:
-                                del self._warnings_by_target[m.invalidates]
+                                del self._warnings_by_target[removed.invalidates]
                     # Clean up orphaned target entries - if this mark was a
                     # warning target, remove its key from the index.
                     self._warnings_by_target.pop(mid, None)
