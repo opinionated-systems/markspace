@@ -59,7 +59,7 @@ st_confidence = floats(
     min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
 )
 st_strength = floats(
-    min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False
+    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
 )
 st_positive_strength = floats(
     min_value=0.01, max_value=5.0, allow_nan=False, allow_infinity=False

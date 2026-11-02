@@ -278,6 +278,13 @@ class MarkSpace:
                     f"cannot write observations with source={mark.source.value}"
                 )
 
+        # Spec 2.1: initial_strength is in [0.0, 1.0]. The model checks it on
+        # construction; model_copy and model_construct skip that check.
+        if not 0.0 <= mark.initial_strength <= 1.0:
+            raise ValidationError(
+                f"initial_strength {mark.initial_strength} is outside [0.0, 1.0]"
+            )
+
     def _decrement_mark_count(self, agent_id: uuid.UUID) -> None:
         """One current mark fewer for *agent_id*. Caller MUST hold self._lock."""
         count = self._agent_mark_counts.get(agent_id, 0)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import uuid
 
+import pydantic
 import pytest
 
 from markspace import (
@@ -32,6 +33,7 @@ from markspace import (
     ScopeVisibility,
     Severity,
     Source,
+    ValidationError,
     Warning,
     WatchPattern,
     compute_strength,
@@ -310,6 +312,38 @@ class TestP7TrustBounds:
         )
         s = effective_strength(mark, 0.0, decay_config)
         assert s <= mark.initial_strength
+
+
+# ---------------------------------------------------------------------------
+# Spec 2.1 — initial_strength is in [0.0, 1.0]
+# ---------------------------------------------------------------------------
+
+
+class TestInitialStrengthBound:
+    def test_construction_above_one_is_refused(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            Observation(
+                scope="test",
+                topic="x",
+                content="y",
+                initial_strength=math.nextafter(1.0, 2.0),
+            )
+
+    def test_write_refuses_a_copy_above_one(
+        self, space: MarkSpace, agent: Agent
+    ) -> None:
+        template = Observation(scope="test", topic="x", content="y")
+        above = template.model_copy(
+            update={"initial_strength": math.nextafter(1.0, 2.0)}
+        )
+        with pytest.raises(ValidationError):
+            space.write(agent, above)
+
+    def test_write_accepts_one(self, space: MarkSpace, agent: Agent) -> None:
+        space.write(
+            agent,
+            Observation(scope="test", topic="x", content="y", initial_strength=1.0),
+        )
 
 
 # ---------------------------------------------------------------------------

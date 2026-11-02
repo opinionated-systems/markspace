@@ -144,7 +144,7 @@ message Mark {
   string          agent_id         = 3;  // UUID
   string          scope            = 4;  // scope namespace this mark belongs to
   double          created_at       = 5;  // unix timestamp
-  double          initial_strength = 6;  // default 1.0, MUST be >= 0.0
+  double          initial_strength = 6;  // default 1.0, MUST be in [0.0, 1.0]
   optional string supersedes       = 7;  // MAY: UUID of a prior mark this replaces (Section 10)
 }
 ```

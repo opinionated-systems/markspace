@@ -495,7 +495,7 @@ CREATE TABLE mark (
     content        JSONB NOT NULL,
     source         TEXT,            -- observations only: 'fleet', 'external_verified', 'external_unverified'
     confidence     FLOAT,
-    strength       FLOAT NOT NULL DEFAULT 1.0,
+    strength       FLOAT NOT NULL DEFAULT 1.0 CHECK (strength BETWEEN 0 AND 1),
     created_at     FLOAT NOT NULL,  -- unixtime
     ttl_seconds    INTEGER,         -- NULL = no expiry
     supersedes     UUID REFERENCES mark(id),

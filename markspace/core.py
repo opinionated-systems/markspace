@@ -339,7 +339,7 @@ class Mark(BaseModel):
     agent_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     created_at: float = 0.0
-    initial_strength: float = Field(default=1.0, ge=0.0)
+    initial_strength: float = Field(default=1.0, ge=0.0, le=1.0)
     supersedes: uuid.UUID | None = None  # any mark can supersede a prior mark
     projected: bool = False  # True if content fields were redacted by a projected read
 
