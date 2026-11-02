@@ -508,7 +508,7 @@ The deployment defines the trigger mechanism. The spec requires only that a boun
 
 Deferred resolution is REQUIRED for scopes that use HIGHEST_CONFIDENCE with a lock-based guard. Without deferred resolution, HIGHEST_CONFIDENCE operates the same as FIRST_WRITER. The thread that takes the lock first wins.
 
-Deferred resolution is OPTIONAL for FIRST_WRITER scopes and for YIELD_ALL scopes. In FIRST_WRITER scopes, serialized first-come-first-served is already the intended behavior. In YIELD_ALL scopes, all intents go to the principal in all cases.
+Deferred resolution is OPTIONAL for FIRST_WRITER scopes and for YIELD_ALL scopes. In FIRST_WRITER scopes, serialized first-come-first-served is already the intended behavior. In YIELD_ALL scopes, an intent that competes with another agent's pending intent waits for the principal, in both modes; in a deferred scope, the guard writes no need mark for it. In an immediate scope, an intent that competes with another agent's lease also waits for the principal (G3); in a deferred scope, it waits for the lease to end, and a later boundary grants it (P76). An intent with no competitor is granted as in other scopes.
 
 #### 6.2.3 Relationship to Guard
 

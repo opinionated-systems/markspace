@@ -379,6 +379,18 @@ The principal never directly messages an agent. The aggregator has no AI; it sor
 
 **Batch efficiency**: A principal responding to 5 grouped needs in one session is more efficient than being interrupted 5 times. The mark model naturally batches because needs accumulate during principal absence and are presented together.
 
+**Authority over time.** Agents work asynchronously: a task pauses for hours, resumes in a new session, or passes to another agent. A resumed agent knows the principal's earlier answers. An answer can be accurate history and still no longer match what the principal wants now. Whether the agent may act now is a separate question from what the principal answered, and the protocol keeps the two apart.
+
+Marks are the history: the action that resolves a need holds the principal's answer, and actions never decay ([P2](spec.md#32-formal-properties)). Authority to act on a resource is a lease ([spec 6.5](spec.md#65-grants)). A lease has three properties that the history does not have, each with a limit:
+
+- **It expires.** A lease lasts the intent TTL of its scope, counted from the grant, whether the guard or the principal granted it (G5, G7). The guard measures it on its own lease clock: `claim_state()` reads a lease past its expiry as EXPIRED, and `post_action` with the intent id refuses to record an action under that lease (G6); without the intent id, it can record the action as a direct claim. The guard cannot stop a tool that has already run. `execute` grants and calls the tool at once, and passes the tool only the fencing token, so a harness that resumes a task under an old grant asks `claim_state()` before it calls the tool.
+- **It names its object.** A lease is for one resource in one scope. It authorizes no other resource, also when the work looks the same.
+- **It is ordered.** Each grant carries a fencing token, and an outside system rejects a token lower than one it has seen (G8). That stops a stale holder once a later grant on the resource exists; before that, only the expiry stops it.
+
+An agent can also act without a lease: a direct claim in an immediate scope that is not YIELD_ALL reaches the guard after its tool has run (G6).
+
+The protocol stops there. The guard checks conflicts, permissions and barriers, not whether an answer is still current, so an agent that acts on an old answer passes it. No conflict policy makes every action wait for the principal: under YIELD_ALL, an intent waits for the principal only when another agent's pending intent, or in an immediate scope its lease, competes with it. What an agent keeps outside the mark space (notes, its memory) carries no expiry and no token. So an agent that resumes after a pause treats an earlier answer as history: before each outside change it needs a live lease for the exact object, and where the principal must decide, it asks again with a need mark instead of acting on the old answer. A deployment that keeps answers across sessions gives each answer the same properties at its own boundary: an exact object (a resource, a commit hash), an expiry, and a check before each outside change.
+
 ### Cross-Principal Interaction
 
 The adversarial surface (above) handles external data from web scraping and APIs: the agents that read it write at most the source level of its provider. This surface handles external fleets, where another principal's agents share marks with yours.
