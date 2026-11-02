@@ -73,7 +73,7 @@ class MarkType(str, Enum):
 
 
 class Source(str, Enum):
-    """Trust source levels, in strict total order: FLEET > EXTERNAL_VERIFIED > EXTERNAL_UNVERIFIED."""
+    """Source levels, in strict total order: FLEET > EXTERNAL_VERIFIED > EXTERNAL_UNVERIFIED."""
 
     FLEET = "fleet"
     EXTERNAL_VERIFIED = "external_verified"
@@ -175,7 +175,7 @@ class Agent(BaseModel):
 
     scopes: mapping of scope_name -> list of writable MarkType names.
     read_scopes: set of scope names with full content read access.
-    max_source: maximum trust source this agent can claim on observations.
+    max_source: the highest source level this agent can give an observation.
     Both are hierarchical: permission for "a" implies permission for "a/b".
 
     Spec Section 11.
@@ -187,9 +187,9 @@ class Agent(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     scopes: dict[str, list[str]] = Field(default_factory=dict)
     read_scopes: frozenset[str] = Field(default_factory=frozenset)
-    max_source: Source = Source.FLEET  # maximum trust level this agent can write
+    max_source: Source = Source.FLEET  # highest source level of its observations
 
-    manifest: AgentManifest | None = None  # optional composition contract (Section 14)
+    manifest: AgentManifest | None = None  # optional composition contract (Section 13)
 
     def can_write(self, scope_name: str, mark_type: MarkType) -> bool:
         """Check if this agent is authorized to write mark_type in scope_name."""
@@ -235,7 +235,7 @@ class WatchPattern(BaseModel):
     A pattern describing marks an agent is interested in.
     Used for subscription-based reactive activation.
 
-    Spec Section 14.1.
+    Spec Section 13.1.
     P55: matches() is a pure function with no side effects.
     """
 

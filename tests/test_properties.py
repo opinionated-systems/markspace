@@ -546,29 +546,6 @@ class TestP19ScopeIsolation:
 
 
 # ---------------------------------------------------------------------------
-# P20 — Read Openness
-# Any agent can read from any scope.
-# ---------------------------------------------------------------------------
-
-
-class TestP20ReadOpenness:
-    def test_unauthorized_agent_can_read(self, space: MarkSpace, agent: Agent) -> None:
-        space.write(
-            agent,
-            Observation(
-                scope="test",
-                topic="x",
-                content="y",
-                source=Source.FLEET,
-            ),
-        )
-        unauthorized = Agent(name="reader", scopes={})
-        # Read should succeed — no authorization needed
-        marks = space.read(scope="test")
-        assert len(marks) == 1
-
-
-# ---------------------------------------------------------------------------
 # P23 — Hierarchy
 # Authorization for "a" implies authorization for "a/b".
 # ---------------------------------------------------------------------------
@@ -712,7 +689,7 @@ class TestP29ResolutionImmediacy:
 # ---------------------------------------------------------------------------
 
 
-class TestP33InvalidationBound:
+class TestP34InvalidationBound:
     def test_invalidation_floor_at_zero(self, space: MarkSpace, agent: Agent) -> None:
         obs_id = space.write(
             agent,
@@ -761,7 +738,7 @@ class TestP33InvalidationBound:
 # ---------------------------------------------------------------------------
 
 
-class TestP34InvalidationDecay:
+class TestP35InvalidationDecay:
     def test_invalidated_mark_recovers_as_warning_decays(self) -> None:
         """
         P35: As the warning decays, the suppression it causes shrinks.

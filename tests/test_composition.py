@@ -120,7 +120,7 @@ def other_writer() -> Agent:
 # ---------------------------------------------------------------------------
 
 
-class TestP40SubscriptionIdempotency:
+class TestP48SubscriptionIdempotency:
     """Re-subscribing replaces patterns, never duplicates."""
 
     def test_resubscribe_replaces_patterns(
@@ -184,7 +184,7 @@ class TestP40SubscriptionIdempotency:
 # ---------------------------------------------------------------------------
 
 
-class TestP41SubscriptionProspective:
+class TestP49SubscriptionProspective:
     """Existing marks are not retroactively delivered."""
 
     def test_existing_marks_not_delivered(
@@ -222,7 +222,7 @@ class TestP41SubscriptionProspective:
 # ---------------------------------------------------------------------------
 
 
-class TestP42WatchSubset:
+class TestP50WatchSubset:
     """Only marks matching the pattern are delivered."""
 
     def test_scope_filter(
@@ -360,7 +360,7 @@ class TestP42WatchSubset:
 # ---------------------------------------------------------------------------
 
 
-class TestP43AtMostOnce:
+class TestP51AtMostOnce:
     """Each mark is delivered at most once per agent per poll."""
 
     def test_clear_prevents_redelivery(
@@ -405,7 +405,7 @@ class TestP43AtMostOnce:
 # ---------------------------------------------------------------------------
 
 
-class TestP44WriteOrder:
+class TestP52WriteOrder:
     """Marks are returned in the order they were written."""
 
     def test_marks_in_write_order(
@@ -434,7 +434,7 @@ class TestP44WriteOrder:
 # ---------------------------------------------------------------------------
 
 
-class TestP45PipelineValidation:
+class TestP53PipelineValidation:
     """Pipeline validation depends only on manifests, not runtime state."""
 
     def test_valid_pipeline(self) -> None:
@@ -529,7 +529,7 @@ class TestP45PipelineValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestP46ManifestPermissions:
+class TestP54ManifestPermissions:
     """Manifest outputs must be a subset of agent's write permissions."""
 
     def test_valid_manifest(self) -> None:
@@ -579,7 +579,7 @@ class TestP46ManifestPermissions:
 # ---------------------------------------------------------------------------
 
 
-class TestP47PatternMatchPurity:
+class TestP55PatternMatchPurity:
     """WatchPattern.matches() is a pure function with no side effects."""
 
     def test_matches_does_not_mutate_mark(self) -> None:

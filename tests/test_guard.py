@@ -915,11 +915,11 @@ class TestToolFnExceptionHandling:
 
 
 # ---------------------------------------------------------------------------
-# W20: Trust source enforcement at write boundary
+# W20: max_source enforcement at write boundary
 # ---------------------------------------------------------------------------
 
 
-class TestTrustSourceEnforcement:
+class TestMaxSourceEnforcement:
     def test_external_agent_cannot_write_fleet_source(self) -> None:
         """An agent with max_source=EXTERNAL_VERIFIED cannot write FLEET observations."""
         scope = Scope(

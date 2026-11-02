@@ -43,7 +43,7 @@ class AnomalyDetector(ABC):
     """Per-agent anomaly detector. One instance per tracked agent.
 
     The envelope feeds completed window counts via observe(), then asks
-    is_anomalous() with the in-progress window to decide whether to
+    is_anomalous() with the current window to decide whether to
     restrict the agent. Each detector maintains its own baseline -
     no assumption that agents share the same activity pattern.
     """
@@ -64,7 +64,7 @@ class AnomalyDetector(ABC):
 
     @abstractmethod
     def is_anomalous(self, current_counts: dict[MarkType, int]) -> bool:
-        """Check if current (in-progress) window counts are anomalous
+        """Check if the counts of the current window are anomalous
         relative to this agent's established baseline."""
         ...
 

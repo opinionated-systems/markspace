@@ -107,7 +107,7 @@ In this document, the key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL 
 
 **Scope**: A namespace that defines the kinds of marks that can exist in it, their decay parameters and the conflict resolution rules.
 
-**Strength**: A non-negative real number that represents the current influence of a mark. An implementation computes it at read time from the initial strength, age, decay function and trust source of the mark.
+**Strength**: A non-negative real number that represents the current influence of a mark. An implementation computes it at read time from the initial strength, age, decay function and source level of the mark (observations only).
 
 **Principal**: The human (or system) that the agents serve. To interact with the system, the principal writes action marks that resolve needs.
 
@@ -330,7 +330,7 @@ Ref: [`markspace/core.py::compute_strength`](../markspace/core.py)
 
 **P5: Need Persistence**: The strength of an unresolved need mark MUST equal its initial strength for all t.
 
-Ref: [`tests/test_properties.py::TestDecayProperties`](../tests/test_properties.py)
+Ref: [`tests/test_properties.py::TestP1DecayMonotonicity`](../tests/test_properties.py), [`tests/test_properties.py::TestP2ActionPermanence`](../tests/test_properties.py), [`tests/test_properties.py::TestP3Convergence`](../tests/test_properties.py), [`tests/test_properties.py::TestP4IntentExpiry`](../tests/test_properties.py), [`tests/test_properties.py::TestP5NeedPersistence`](../tests/test_properties.py)
 
 ## 4. Trust
 
@@ -364,11 +364,11 @@ For mark types that do not have a `source` field (intent, action, warning, need)
 
 ### 4.3 Formal Properties
 
-**P6: Trust Ordering**: If two marks have identical properties except their source, the mark with the higher-trust source MUST have a higher effective strength. For all t: `effective_strength(fleet_mark, t) >= effective_strength(verified_mark, t) >= effective_strength(unverified_mark, t)`.
+**P6: Trust Ordering**: If two marks have identical properties except their source, the mark with the higher source level MUST have a higher effective strength. For all t: `effective_strength(fleet_mark, t) >= effective_strength(verified_mark, t) >= effective_strength(unverified_mark, t)`.
 
 **P7: Trust Bounds**: Effective strength MUST be in [0.0, max_strength * 1.0]. The trust weight MUST NOT increase strength above the base decay value.
 
-Ref: [`markspace/core.py::trust_weight`](../markspace/core.py), [`tests/test_properties.py::TestTrustProperties`](../tests/test_properties.py)
+Ref: [`markspace/core.py::trust_weight`](../markspace/core.py), [`tests/test_properties.py::TestP6TrustOrdering`](../tests/test_properties.py), [`tests/test_properties.py::TestP7TrustBounds`](../tests/test_properties.py)
 
 ## 5. Reinforcement
 
@@ -410,7 +410,7 @@ Reinforcement does not apply to need marks (each need is unique to an agent).
 
 **P10: Monotonic Addition**: The addition of a mark with positive strength MUST NOT decrease the aggregate strength. `aggregate_strength(marks + [new_mark]) >= aggregate_strength(marks)` when `effective_strength(new_mark) > 0`.
 
-Ref: [`markspace/core.py::reinforce`](../markspace/core.py), [`tests/test_properties.py::TestReinforcementProperties`](../tests/test_properties.py)
+Ref: [`markspace/core.py::reinforce`](../markspace/core.py), [`tests/test_properties.py::TestP8Sublinearity`](../tests/test_properties.py), [`tests/test_properties.py::TestP9Boundedness`](../tests/test_properties.py), [`tests/test_properties.py::TestP10MonotonicAddition`](../tests/test_properties.py), [`tests/test_hypothesis.py::TestReinforcementProperties`](../tests/test_hypothesis.py)
 
 ## 6. Conflict Resolution
 
@@ -604,7 +604,7 @@ If N agents in one scope compete only with each other, at most one of them wins.
 
 Note: the protocol does not prevent an agent that outbids the other agents perpetually. Such an agent always writes a higher-confidence intent just before each boundary. This is an acknowledged limitation, similar to priority inversion in real-time systems. TTL expiry gives the safety net. If such an agent never executes, its intent eventually expires.
 
-Ref: [`markspace/core.py::resolve_conflict`](../markspace/core.py), [`tests/test_properties.py::TestConflictProperties`](../tests/test_properties.py)
+Ref: [`markspace/core.py::resolve_conflict`](../markspace/core.py), [`tests/test_properties.py::TestP11Determinism`](../tests/test_properties.py), [`tests/test_properties.py::TestP12Progress`](../tests/test_properties.py), [`tests/test_properties.py::TestP13Consistency`](../tests/test_properties.py), [`tests/test_guard.py::TestDeferredResolution`](../tests/test_guard.py)
 
 ### 6.5 Grants
 
@@ -1108,7 +1108,7 @@ A warning at full strength fully cancels a mark of equal base strength. As the w
 
 A warning that invalidates an action MUST come from an agent that is authorized to write warnings in the action's own scope. Otherwise, an agent could hide a booking from any scope where it is authorized to write warnings. Then it could take the resource (Section 6.5). If a deployment requires that warnings cannot invalidate actions, the guard SHOULD reject warnings where `invalidates` references an action mark.
 
-Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestWarningProperties`](../tests/test_properties.py)
+Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestP34InvalidationBound`](../tests/test_properties.py), [`tests/test_properties.py::TestP35InvalidationDecay`](../tests/test_properties.py), [`tests/test_hypothesis.py::TestWarningInvalidationProperties`](../tests/test_hypothesis.py)
 
 ### 9.6 Formal Properties
 
@@ -1450,7 +1450,7 @@ The reference implementation keeps this state in memory, so a restart loses it, 
 
 `max_source` is the highest source level ([Section 4.1](#41-source-levels)) that the agent can give an observation. The harness MUST set `max_source` for each agent that writes observations and reads content from outside the fleet, directly or through observations below `FLEET`. The value MUST be no higher than the lowest source level of what the agent reads: `EXTERNAL_VERIFIED` for content from a provider that the principal accepts, with its authorship proven; `EXTERNAL_UNVERIFIED` for any other content from outside the fleet; and the source level of each observation that the agent reads. The mark space does not lower `max_source` by itself. In the reference implementation the default is `FLEET`, so an agent whose `max_source` the harness does not set can write at the highest level. The mark space refuses an observation whose source is higher than the `max_source` of its agent ([Section 8.1](#81-write)).
 
-Ref: [`markspace/space.py::MarkSpace._validate_mark`](../markspace/space.py), [`tests/test_guard.py::TestTrustSourceEnforcement`](../tests/test_guard.py)
+Ref: [`markspace/space.py::MarkSpace._validate_mark`](../markspace/space.py), [`tests/test_guard.py::TestMaxSourceEnforcement`](../tests/test_guard.py)
 
 ### 11.2 Agent-Local Rules
 

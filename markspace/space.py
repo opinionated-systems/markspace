@@ -63,7 +63,7 @@ _CLUSTER_BONUS_FACTOR: float = 0.1
 # to exclude effectively-dead ones that haven't been GC'd yet.
 _DEFAULT_MIN_STRENGTH: float = 0.01
 
-# Trust source ordering for validation (strict total order).
+# Source level ordering for validation (strict total order).
 _SOURCE_ORDER: list[Source] = [
     Source.EXTERNAL_UNVERIFIED,
     Source.EXTERNAL_VERIFIED,
@@ -167,7 +167,7 @@ class MarkSpace:
         # Post-write hooks: fired outside the lock after each write.
         self._write_hooks: dict[uuid.UUID, Callable[[uuid.UUID, AnyMark], None]] = {}
         self._write_seq: int = 0
-        # Subscription state for watch/subscribe (Section 14)
+        # Subscription state for watch/subscribe (Section 13)
         self._subscriptions: dict[uuid.UUID, list[WatchPattern]] = {}
         self._pending_notifications: dict[uuid.UUID, list[uuid.UUID]] = {}
         # The guard that holds this space's grants (Section 6.5); at most one.
@@ -266,7 +266,7 @@ class MarkSpace:
                     f"Warning topic '{mark.topic}' not allowed in scope '{scope.name}'."
                 )
 
-        # Trust source enforcement: reject observations where the claimed
+        # Source level enforcement: reject observations where the claimed
         # source exceeds the agent's max_source. Prevents external agents
         # from writing Source.FLEET observations.
         if isinstance(mark, Observation):
@@ -749,7 +749,7 @@ class MarkSpace:
             return self._marks.get(mark_id)
 
     def _warnings_on(self, mark: AnyMark) -> list[Warning]:
-        """Live warnings that invalidate *mark*. Caller MUST hold self._lock."""
+        """Current warnings that invalidate *mark*. Caller MUST hold self._lock."""
         return [
             w
             for wid in self._warnings_by_target.get(mark.id, set())
@@ -1106,7 +1106,7 @@ class MarkSpace:
             return len(to_remove)
 
     # ------------------------------------------------------------------
-    # Watch / Subscribe (Section 14)
+    # Watch / Subscribe (Section 13)
     # ------------------------------------------------------------------
 
     def subscribe(self, agent: Agent, patterns: list[WatchPattern]) -> None:
@@ -1116,7 +1116,7 @@ class MarkSpace:
         Subsequent writes matching any pattern will queue the mark
         for retrieval via get_watched_marks().
 
-        Spec Section 14.3.
+        Spec Section 13.3.
         P48: Idempotent - re-subscribing replaces patterns.
         P49: Prospective - does not retroactively deliver existing marks.
         """
@@ -1135,7 +1135,7 @@ class MarkSpace:
         """
         Retrieve marks matching an agent's subscriptions since the last poll.
 
-        Spec Section 14.4.
+        Spec Section 13.4.
         P50: Returns only marks matching subscription patterns.
         P51: At-most-once delivery when clear=True.
         P52: Marks returned in write order.
