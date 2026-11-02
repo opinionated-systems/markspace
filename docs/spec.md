@@ -1139,9 +1139,20 @@ The statistical envelope gives behavioral anomaly detection for the write patter
 
 **Detection algorithm.** The envelope divides time into tumbling windows. The default window is 300 seconds. At the end of each window, the envelope adds the per-type counts of the window to Welford accumulators. Each `check(agent)` call runs three checks:
 
-1. **Rate anomaly** (per-agent, per-type): the count in the current window is more than `mean + k * stddev` (default k=3.5). This check also finds bursts that span the end of a window, where `current + previous > 2 * threshold`.
+1. **Rate anomaly** (per-agent, per-type): the count in the current window is more than `mean + k * stddev` (default k=3.5). The stddev has a floor of `sqrt(mean)` (the standard deviation of a Poisson count). A burst that spans the end of a window is judged in each window alone.
 2. **Type shift** (per-agent): the fraction of mark types in the current window differs from the historical distribution by more than `type_shift_threshold` (default 0.5).
 3. **Concentration** (cross-agent): three or more agents wrote to the same `(scope, topic)` in the current window.
+
+**Known false restrictions.** The reference detector restricts an agent in these cases, also when the agent behaves as it always does:
+
+- The type shift compares the fractions of the current window with no minimum count, so the first marks of a window decide it. An agent with a baseline of 2 observations and 1 warning per window is restricted when a window starts with its warning. An agent that writes its mark types in batches is restricted in the same way.
+- The rate threshold of a type with a small mean is below 1. After one window with one warning, a later window with one warning can restrict the agent (with the defaults: one warning in window 11, then one in window 16). An agent that writes one warning in every fifth window is restricted at its fourth warning.
+
+**Blind spots.** For a type with a mean of exactly 0, the rate threshold is 0 and the rate check does not fire. The type shift then finds a burst of that type only when the type is more than half of the tracked marks of the window. The mean after cold start is the median of the cold-start windows, so with three or more tracked types every mean can be 0. Then neither check fires for that agent.
+
+**Recovery.** The principal calls `reset()` on the envelope and `restore_all()` on the barrier of the agent. A reset in the window that holds the trigger is undone, because the next write of the agent is judged on the same counts. Thus the principal resets after that window ends. Each attempt that the barrier lets through and the envelope refuses is a new flag: a need mark in a flagged scope, a warning or an intent there once the agent holds a need, or a write in another scope. An attempt that the barrier refuses is not a flag. So after a false restriction, two such attempts restrict the agent in every scope (escalation policy, item 3). The warnings that the restriction wrote on the observations of the agent stay until they decay.
+
+A deployment measures these cases on its own workload before it gives the guard a statistical envelope.
 
 **Verdicts.** `check(agent)` returns one of these verdicts:
 
@@ -1153,9 +1164,9 @@ The statistical envelope gives behavioral anomaly detection for the write patter
 
 **Escalation policy.** When the guard receives a RESTRICTED verdict, it uses `_apply_restriction()` to narrow the barrier by scope:
 
-1. At the first flag on a scope, the guard revokes the triggering mark type in that scope only.
+1. At the first flag on a scope, the guard revokes observations in that scope and requires a need mark there before a warning or an intent. It also records actions as revoked there, but no check reads that record (Section 9.8).
 2. Each subsequent flag on a different scope narrows one more scope.
-3. After `global_escalation_threshold` flags in total (default 3), the guard requires need marks before any action in any scope.
+3. After `global_escalation_threshold` flags in total (default 3), the guard revokes observations in every scope, records actions as revoked there, and requires a need mark in each scope before a warning or an intent there.
 4. Each restriction writes invalidation warnings on the recent observations of the agent in the flagged scope. It also writes an audit need mark for the principal.
 
 **Declared baselines.** An agent can declare its expected activity in its manifest with `expected_activity: dict[str, float]`. This field maps a mark type value to the expected marks per hour. The rate does not depend on the window. The envelope uses `window_seconds` to convert the rate to counts per window. Thus agent creators do not need to know the window size.
@@ -1187,11 +1198,14 @@ The absorbing barrier gives monotonic permission restriction for agents. It is a
 ```
 narrow(scope, mark_type)           -- revoke one permission
 narrow_all(mark_type)              -- revoke across all scopes (wildcard "*")
-require_need(scope)                -- force Need marks before actions in scope
-require_need_all()                 -- force Need marks before any action
+require_need(scope)                -- require a Need mark in scope before other writes there
+                                      (write_mark, pre_action; post_action does not check it)
+require_need_all()                 -- the same in every scope
 restore(scope, mark_type, token)   -- re-grant (principal-only)
 restore_all(token)                 -- clear all restrictions (principal-only)
 ```
+
+Of intents and actions, the guard asks the barrier only about intents: in `pre_action`, and at a resolution boundary that has the agents mapping. The principal's `grant()`, a boundary without the agents mapping and `post_action` read no barrier. So a barrier records actions as revoked, but no check reads that record, and `post_action` does not read the need requirement either. In a scope where its barrier revokes actions, the guard records an agent's action under a lease granted before the barrier, and a direct claim (G6), with or without a need mark. It grants the agent a new lease from `pre_action` or a boundary with the agents mapping when the barrier allows the intent (for a barrier that requires a need mark, once the agent holds one in that scope), and from `grant()` or a boundary without the agents mapping for any pending intent.
 
 **Monotonicity.** `narrow()` only adds to the revocation set. There is no `un-narrow()`. Only `restore()` with the correct principal token can re-grant a revoked permission. This makes barriers safe under concurrent access. Without principal intervention, the set of revocations can only grow and never shrink.
 
@@ -1221,15 +1235,15 @@ The diagnostic probe verifies the health of agents with canary injection and an 
 | Verdict | Condition | Response |
 |---------|-----------|----------|
 | HEALTHY | Agent called `acknowledge_canary` with correct ID | No action |
-| COMPROMISED | Agent was active but did not acknowledge | Blocking Need + barrier applied |
+| COMPROMISED | Agent was active but did not acknowledge | Blocking need mark (the probe); a harness can apply a barrier |
 
 **Scope isolation.** The probe writes only to a dedicated diagnostic scope (default `"diagnostics"`). The permissions of the probe agent cover only this scope. The probe agent has no write access to production scopes. Thus probe infrastructure does not pollute production mark data.
 
 **Envelope exemption.** The probe agent is in the `exempt_agents` set of the envelope. Probe writes can be frequent during health checks. They are not part of the anomaly detection statistics of the envelope.
 
-**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. The guard applies a global barrier, which revokes the observation and action permissions. Until the principal restores access, the agent can write only need marks.
+**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. A harness can then apply a global barrier, which revokes observations in every scope, records actions as revoked, and requires a need mark in a scope before a warning or an intent there. The reference probe writes the need mark; the stress-test harness also applies the barrier. Until the principal restores access, the agent can write no observation. Because no check reads the action revocation (Section 9.8), the agent can still act: under a lease granted before the barrier; by a direct claim; under a new lease from `pre_action` or a boundary with the agents mapping, in a scope where it holds a need mark; and under a new lease from the principal's `grant()` or a boundary without the agents mapping, for an intent that it wrote before the barrier, with no need mark. The stress-test harness books the boardroom with `grant()`. The agent can also write warnings in a scope where it holds a need, and failed actions.
 
-One miss causes immediate lockdown. There is no grace period, because a compromised agent can cause harm with even one action.
+One miss restricts the agent at once. There is no grace period, because a compromised agent can cause harm with even one action. The barrier stops its observations, and its warnings and intents in a scope until it writes a need mark there; it does not stop its actions (Section 9.8).
 
 **P46: Probe Mark Isolation**: Probe-injected marks MUST be writable only to the configured diagnostic scope. The probe agent MUST NOT have write access to production scopes.
 

@@ -93,11 +93,13 @@ class AgentBarrier:
         self._revoked.add(("*", mark_type_value))
 
     def require_need(self, scope: str) -> None:
-        """Force Need marks before any action in scope."""
+        """Require a Need mark in scope before other writes there (the guard
+        checks it in write_mark and pre_action; post_action does not).
+        """
         self._require_need_scopes.add(scope)
 
     def require_need_all(self) -> None:
-        """Force Need marks before any action in any scope."""
+        """require_need() in every scope."""
         self._require_need_scopes.add("*")
 
     def needs_required(self, scope: str) -> bool:

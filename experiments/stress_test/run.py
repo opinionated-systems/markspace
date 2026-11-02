@@ -2500,7 +2500,8 @@ def run_trial(
                         ),
                     )
                     # 2. Global barrier: revoke observations and actions,
-                    #    require Need before any write.
+                    #    require a Need before warnings and intents (spec 9.8:
+                    #    no check reads the action revocation).
                     barrier = env.guard.get_or_create_barrier(r.agent_id)
                     barrier.narrow_all(MarkType.OBSERVATION.value)
                     barrier.narrow_all(MarkType.ACTION.value)
