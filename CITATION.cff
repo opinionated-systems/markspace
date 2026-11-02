@@ -2,8 +2,8 @@ cff-version: 1.2.0
 title: markspace
 message: "If you use this work, please cite it using the metadata below."
 type: software
-version: 0.2.0-beta
-date-released: 2026-05-08
+version: 0.3.0-beta
+date-released: 2026-11-02
 doi: 10.5281/zenodo.18990235
 url: https://github.com/opinionated-systems/markspace
 abstract: >
@@ -13,9 +13,10 @@ abstract: >
   boundary enforces identity, scope, and conflict resolution outside
   the agents, so safety guarantees hold independent of agent behavior.
   The protocol defines five mark types encoding distinct epistemic
-  roles, three visibility levels, three conflict policies, and
+  roles, three visibility levels, three conflict policies, conflict
+  resolution across a scope tree, leases with fencing tokens, and
   trust-weighted decay. The included Python package is a reference
-  implementation used to verify 66 formal properties experimentally.
+  implementation used to verify 76 formal properties experimentally.
 authors:
   - family-names: Loose
     given-names: Andre
