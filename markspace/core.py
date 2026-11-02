@@ -496,7 +496,8 @@ def compute_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> fl
 def effective_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> float:
     """
     Effective strength = decay strength * trust weight.
-    Observation marks carry a source field; all others are fleet-internal (trust = 1.0).
+    Observation marks carry a source field; all other marks have trust weight
+    1.0, whatever the max_source of their writer.
 
     Spec Section 4.2.
     """

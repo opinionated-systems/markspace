@@ -48,7 +48,7 @@ These call model APIs and require keys in `.env`.
 
 ### Stress Test
 
-Full 105-agent office coordination scenario. 100 employees across 5 departments coordinate meetings, tasks, equipment, parking, and lunch through the shared mark space. Two external system bots publish low-trust observations. Scenario design in [stress_test/design.md](stress_test/design.md).
+Full 105-agent office coordination scenario. 100 employees across 5 departments coordinate meetings, tasks, equipment, parking, and lunch through the shared mark space. Two external system bots publish capacity observations and room warnings. Scenario design in [stress_test/design.md](stress_test/design.md).
 
 ```bash
 # Smoke test (10 agents, 3 rounds)

@@ -2,7 +2,7 @@
 
 ## Context
 
-The [validation](../validation/analysis.md) tested 1–10 agents on a single resource type (calendar booking) using only INTENT marks, ACTION marks, OPEN visibility, HIGHEST_CONFIDENCE, and FIRST_WRITER. That's ~30% of the protocol. This stress test exercises the full protocol surface: all 5 mark types, all 3 visibility levels, all 3 conflict policies, trust-weighted external agents, scope hierarchy, projected reads, warning invalidation, need escalation, and observation decay, all at 100-agent scale across 5 resource types over 10 rounds.
+The [validation](../validation/analysis.md) tested 1–10 agents on a single resource type (calendar booking) using only INTENT marks, ACTION marks, OPEN visibility, HIGHEST_CONFIDENCE, and FIRST_WRITER. That's ~30% of the protocol. This stress test exercises the full protocol surface: all 5 mark types, all 3 visibility levels, all 3 conflict policies, two external agents, scope hierarchy, projected reads, warning invalidation, need escalation, and observation decay, all at 100-agent scale across 5 resource types over 10 rounds.
 
 Single model: gpt-oss-120b. No model comparison; pure protocol stress test.
 
@@ -14,7 +14,7 @@ Clock advances 4 hours between rounds. Intent TTL = 2 hours → intents expire b
 
 ## Agents
 
-### Department Agents (100, Source.FLEET, trust=1.0)
+### Department Agents (100)
 
 | Department | People | Head | Focus |
 |-----------|--------|------|-------|
@@ -38,19 +38,19 @@ Manifest demand per department (approximate):
 
 ### External Agents (2, no LLM, deterministic scripted actions)
 
-**Parking Management Bot** (Source.EXTERNAL_VERIFIED, trust=0.7)
+**Parking Management Bot** (`max_source=EXTERNAL_VERIFIED`: its observations weigh 0.7)
 - Represents the building's parking garage system
-- At each day boundary (rounds 1, 3, 5, 7, 9), pre-books 2–3 spots for visitors/contractors by writing ACTION marks
+- At each day boundary (rounds 1, 3, 5, 7, 9), pre-books 2–5 spots for visitors/contractors by writing ACTION marks
 - Writes OBSERVATION marks about daily capacity ("27 of 30 spots remaining")
-- Observations decay between rounds, so agents must check freshness
-- Action marks are permanent but have trust-weighted strength (0.7)
+- Observations decay between rounds. No agent and no tool reads them
+- Action marks are permanent. Actions carry no source level, so their trust weight is 1.0 (spec 4.2)
 
-**Building Operations Bot** (Source.EXTERNAL_UNVERIFIED, trust=0.3)
+**Building Operations Bot** (`max_source=EXTERNAL_VERIFIED`; it writes only warnings, which carry no source level, so their trust weight is 1.0)
 - Represents the building management system
 - Between rounds, randomly issues room WARNING marks (~15% chance per round per shared room) simulating maintenance/AV issues
 - Warnings reduce the target booking's effective strength via `effective_strength_with_warnings()`
-- Low trust (0.3) means a single warning barely dents a fleet booking, but multiple warnings on the same room `reinforce()` to a meaningful signal
-- Agents check warnings on their bookings via `my_bookings` and rebook if invalidated
+- One fresh warning brings the booking's effective strength to 0. The booking recovers as the warning decays (P35)
+- Agents check warnings on their bookings via `my_status` and rebook if invalidated
 
 ## 5 Resource Types (Scopes)
 
@@ -128,9 +128,9 @@ Manifest demand per department (approximate):
 **Parking** (`parking`), PROTECTED, HIGHEST_CONFIDENCE + external agent
 - 30 spots per day
 - PROTECTED: agents see remaining count but not individual booker identities
-- **Priority hierarchy**:
-  - Parking bot pre-books 2–3 spots/day at confidence=0.7 (EXTERNAL_VERIFIED, trust=0.7)
-  - Department heads at confidence=0.95 (FLEET, trust=1.0)
+- **Priority hierarchy** (by confidence; intents carry no source level, so trust weights do not apply):
+  - Parking bot pre-books 2–5 spots/day at confidence=0.7
+  - Department heads at confidence=0.95
   - Regular employees at confidence=0.5
   - Heads always win concurrent conflicts with regulars
 - Parking bot writes OBSERVATION marks about daily capacity that decay (half-life 6h, ~40% per round)
@@ -204,12 +204,12 @@ Rounds 9-10 (Fri): Final bookings. Tasks: ~65 of 75 claimed. Last parking attemp
 | ScopeVisibility.PROTECTED | Shared rooms, parking (structure visible, content redacted) | rooms/shared, parking |
 | ScopeVisibility.CLASSIFIED | Dept rooms, dept tasks (invisible to outsiders) | rooms/{dept}, tasks/{dept} |
 | read_scopes | Dept membership controls content access | rooms/*, tasks/* |
-| Source.FLEET | All 100 department agents | all |
-| Source.EXTERNAL_VERIFIED | Parking management bot | parking |
-| Source.EXTERNAL_UNVERIFIED | Building operations bot | rooms/shared |
-| trust_weight() | External marks have 0.7 or 0.3 trust, affects effective strength | parking, rooms/shared |
+| Source.FLEET | Department agents write no observations; only the diagnostic probe does, in defense runs | diagnostics |
+| Source.EXTERNAL_VERIFIED | The parking bot's capacity observations; no agent reads them | parking |
+| Source.EXTERNAL_UNVERIFIED | Not exercised: no agent writes it | - |
+| trust_weight() | Not exercised: no agent reads the capacity observations | - |
 | effective_strength_with_warnings() | Room warnings reduce booking strength | rooms/shared |
-| reinforce() | Multiple building warnings on same room compound | rooms/shared |
+| reinforce() | Not exercised: the stress test does not call it | - |
 | HIGHEST_CONFIDENCE | Rooms, equipment, parking (with priority tiers) | rooms/*, equipment, parking |
 | FIRST_WRITER | Tasks, lunch | tasks/*, lunch |
 | YIELD_ALL | Executive boardroom (creates NEED marks) | rooms/exec |
@@ -257,9 +257,10 @@ Agent(
 Agent(
     name="parking-system",
     scopes={
-        "parking": ["action", "observation"],
+        "parking": ["intent", "action", "observation"],
     },
     read_scopes=frozenset({"parking"}),
+    max_source=Source.EXTERNAL_VERIFIED,
 )
 
 # Building ops bot
@@ -269,6 +270,7 @@ Agent(
         "rooms/shared": ["warning"],
     },
     read_scopes=frozenset(),
+    max_source=Source.EXTERNAL_VERIFIED,
 )
 ```
 

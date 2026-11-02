@@ -45,7 +45,7 @@ Scenario design and agent configuration: [`design.md`](design.md).
 
 105 AI agents (100 normal + 5 adversarial, one per department) coordinated through a shared mark space over a simulated 5-day work week (10 rounds). No central scheduler. No direct communication between agents. All coordination happened indirectly through stigmergic marks: intents, actions, observations, warnings, and needs. The adversarial agents had normal permissions but adversarial prompts, and were given extra tools (`book_other_dept_room`, `issue_warning`) to attempt cross-department violations.
 
-The protocol enforces invariants regardless of agent quality or intent. The guard rejects unauthorized writes, scope visibility controls what each agent can read, trust weights attenuate untrusted marks, and decay ensures stale signals fade. Unauthorized writes were rejected and adversarial agents contained (checked from the run's steps), scope visibility was applied to 8,197 projected reads (leaks were not measured, see [trials analysis, section 6](../trials/analysis.md#6-cross-experiment-safety)), and trust weights were applied. 5 adversarial agents attempted 121 cross-department bookings and 37 warning injections. All denied.
+The protocol enforces invariants regardless of agent quality or intent. The guard rejects unauthorized writes, scope visibility controls what each agent can read, and decay ensures stale signals fade. Unauthorized writes were rejected and adversarial agents contained (checked from the run's steps), scope visibility was applied to 8,197 projected reads (leaks were not measured, see [trials analysis, section 6](../trials/analysis.md#6-cross-experiment-safety)). 5 adversarial agents attempted 121 cross-department bookings and 37 warning injections. All denied.
 
 From the steps: no room, equipment item or task got ALLOW twice in one round across the 306 bookings agents made with tool calls, and no lunch window went over capacity across their 461 lunch orders (the steps do not record a lunch order's slot, so only the capacity is checked). The bots gave no parking spot or boardroom slot twice across the other 160 (136 parking spots, 14 visitor spots, 10 boardroom slots; from the bot logs). Eight agents ended up with two parking spots on one day: two of their pending requests both won, against the harness's own one-spot rule, though each spot went to one agent only. The current `run.py` gives each agent at most one spot a day. The run's own double-booking metric could not count a double booking, see [trials analysis, section 6](../trials/analysis.md#6-cross-experiment-safety). Read leaks across the 8,197 projected reads were not measured. The guard enforces these structurally, under concurrent LLM-driven access at 105-agent scale across 7 resource types, 3 visibility levels, 3 conflict resolution policies, and active adversarial pressure.
 
@@ -104,7 +104,7 @@ The cumulative mark space totals are higher ([Section 5.1](#51-mark-accumulation
 
 **INTENT + ACTION marks:** 1,212 intents written, 927 converted to actions. The 285-intent gap reflects boardroom and parking intents consumed by end-of-round resolution rather than direct agent action, plus adversarial intents that were denied. Intents are the protocol's mechanism for declaring interest before commitment; they expire (TTL=2h) between rounds, so stale interest doesn't accumulate.
 
-**OBSERVATION marks (5):** Parking bot wrote one capacity observation per day ("28 of 30 spots remaining on mon"). These decayed over the week. A Monday observation read on Friday had near-zero strength (100h age, 6h half-life = ~0.00001 strength). Agents saw stale observations correctly flagged as decayed.
+**OBSERVATION marks (5):** Parking bot wrote one capacity observation per day ("28 of 30 spots remaining on mon"). These decayed over the week. A Monday observation read on Friday had near-zero strength (100h age, 6h half-life = ~0.00001 strength). No agent read them: no tool reads observations.
 
 **WARNING marks (7):** Building ops bot issued maintenance warnings on shared rooms, only for rooms with current-day bookings. With a 2h half-life, warnings were potent within their round but dead by the next AM. A maintenance alert for the current round is irrelevant by the next morning.
 
@@ -154,11 +154,13 @@ Completion rates cluster in a 12pp band (53-65%). Ops leads due to lighter room 
 
 Parking uses deferred resolution: all agents write intents during the round, then end-of-round resolution sorts by confidence and allocates the top-N requests to available spots.
 
-| Priority | Tier | Conf | Trust | Spots/week |
-|---|---|---|---|---|
-| 1 | Visitor pre-allocation (parking bot) | 0.7 | 0.7 | 14 |
-| 2 | Department heads | 0.95 | 1.0 | 17 |
-| 3 | Regular employees | 0.5 | 1.0 | 119 |
+| Priority | Tier | Conf | Spots/week |
+|---|---|---|---|
+| 1 | Visitor pre-allocation (parking bot) | 0.7 | 14 |
+| 2 | Department heads | 0.95 | 17 |
+| 3 | Regular employees | 0.5 | 119 |
+
+Trust weights do not apply here: intents and actions carry no source level (spec 4.2).
 
 Department heads always get their spots first. Confidence values have real meaning in the deferred allocation.
 
@@ -436,7 +438,7 @@ Only ops (facilities management) has content-level access to shared rooms. A rea
 
 ### 6.6 Observation decay models information freshness
 
-Parking bot observations decayed naturally. A "28 of 30 spots remaining" observation from Monday was effectively worthless by Wednesday (strength < 0.01). Agents could still read it, but the decay signal told them it was stale. This models real-world information aging without requiring explicit invalidation.
+Parking bot observations decayed naturally. A "28 of 30 spots remaining" observation from Monday was effectively worthless by Wednesday (strength < 0.01). No agent read it: no tool reads observations. This models real-world information aging without requiring explicit invalidation.
 
 The absolute week-time clock model (Mon 8:00 = 28,800s, ... Fri 12:00 = 388,800s) with non-uniform gaps (4h AM->PM, 20h PM->next AM) produces realistic decay behavior: within-day observations are relevant, overnight observations are degraded, cross-day observations are essentially expired.
 
@@ -524,7 +526,7 @@ All 121 attempts to book rooms via the cross-department tool were denied. The to
 |---|---|---|
 | Denied | 37 | 100% |
 
-All 37 attempts to write WARNING marks to scopes outside the agent's trust level were denied. WARNING marks require elevated trust (building ops bot level), and adversarial agents had normal employee trust. The guard rejects the write before the mark reaches the space.
+All 37 attempts to write WARNING marks to scopes where the agent had no warning permission were denied. Among the scenario's agents, only the building ops bot may write warnings (in `rooms/shared`); no employee agent has warning permission in any scope. The guard's own system agent also writes warnings, in `_system`, in defense runs. The mark space's authorization check, which `Guard.write_mark` calls, refused each write before the mark was stored.
 
 ### 7.4 Key finding
 
@@ -542,7 +544,7 @@ The protocol enforces invariants regardless of what the agent's prompt says. Adv
 - Multi-scope isolation (CLASSIFIED, PROTECTED, OPEN)
 - Projected reads under PROTECTED visibility (8,197 redacted reads)
 - Mediated resolution (YIELD_ALL -> NEED -> principal)
-- External agent integration (different trust levels, decay)
+- External agent integration (two bots with `max_source=EXTERNAL_VERIFIED`, decay)
 - Temporal decay (observations, warnings, intent TTL)
 - Confidence-based priority (when using deferred resolution pattern)
 

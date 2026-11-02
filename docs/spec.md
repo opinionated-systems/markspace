@@ -1,6 +1,6 @@
 # Markspace Coordination Protocol: Specification
 
-**Version**: 2026-11-01-draft
+**Version**: 2026-11-02-draft
 **Status**: Working draft
 
 This document is the formal specification for the markspace protocol. For the ideas and the motivation behind the protocol, read [framework.md](framework.md).
@@ -360,7 +360,7 @@ The effective strength of a mark includes both decay and trust:
 effective_strength(mark, now) = compute_strength(mark, now) * trust_weight(mark.source)
 ```
 
-For mark types that do not have a `source` field (intent, action, warning, need), the trust weight MUST be 1.0. These marks are always fleet-internal.
+For mark types that do not have a `source` field (intent, action, warning, need), the trust weight MUST be 1.0. This holds for every agent, also for an agent with a lower `max_source` ([Section 11.1](#111-agent-definition)): `max_source` bounds observations only.
 
 ### 4.3 Formal Properties
 
@@ -372,7 +372,7 @@ Ref: [`markspace/core.py::trust_weight`](../markspace/core.py), [`tests/test_pro
 
 ## 5. Reinforcement
 
-When multiple marks exist on the same scope and topic, they combine into an aggregate signal. The reinforcement function is a utility. `read()` returns individual marks with their effective strengths. A caller that wants an aggregate signal calls `reinforce()` on the returned strengths. This separation keeps reads simple and lets callers choose whether to aggregate.
+When multiple marks exist on the same scope and topic, they combine into an aggregate signal. The reinforcement function is a utility. `read()` returns individual marks with their effective strengths. A caller that wants an aggregate signal calls `reinforce()` on the returned strengths. This separation keeps reads simple and lets callers choose whether to aggregate. `reinforce()` counts marks, not writers. A caller that wants agreement between independent writers to count gives it at most one observation for each writer. Otherwise the repeated observations of one writer raise the aggregate as the observations of many writers would.
 
 ### 5.1 Combination Rule
 
@@ -890,6 +890,7 @@ Preconditions:
   - agent MUST be authorized for mark.scope ([Section 7.3](#73-scope-authorization))
   - mark.action MUST be in scope's allowed actions for mark.mark_type (if applicable)
   - mark MUST satisfy type-specific field requirements ([Section 2](#2-mark-types))
+  - an observation's source MUST NOT be higher than agent.max_source ([Section 11.1](#111-agent-definition))
 
 Postconditions:
   - mark is stored with a new unique id and created_at = now; an intent or action is moved past the latest intent or action on the same resource in the same scope if needed (P32)
@@ -1437,10 +1438,15 @@ message Agent {
   repeated ScopePermission permissions = 3;  // write permissions
   repeated string          read_scopes = 4;  // scopes with full content read access
   optional AgentManifest   manifest    = 5;  // composition contract ([Section 13](#13-agent-composition))
+  Source                   max_source  = 6;  // highest source level of its observations ([Section 4.1](#41-source-levels))
 }
 ```
 
 `read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` has no effect. `permissions` and `read_scopes` both support hierarchical matching.
+
+`max_source` is the highest source level ([Section 4.1](#41-source-levels)) that the agent can give an observation. The harness MUST set `max_source` for each agent that writes observations and reads content from outside the fleet, directly or through observations below `FLEET`. The value MUST be no higher than the lowest source level of what the agent reads: `EXTERNAL_VERIFIED` for content from a provider that the principal accepts, with its authorship proven; `EXTERNAL_UNVERIFIED` for any other content from outside the fleet; and the source level of each observation that the agent reads. The mark space does not lower `max_source` by itself. In the reference implementation the default is `FLEET`, so an agent whose `max_source` the harness does not set can write at the highest level. The mark space refuses an observation whose source is higher than the `max_source` of its agent ([Section 8.1](#81-write)).
+
+Ref: [`markspace/space.py::MarkSpace._validate_mark`](../markspace/space.py), [`tests/test_guard.py::TestTrustSourceEnforcement`](../tests/test_guard.py)
 
 ### 11.2 Agent-Local Rules
 
@@ -1859,7 +1865,7 @@ An implementation is conformant if:
 3. It applies trust weights that preserve the total order of the source levels ([Section 4](#4-trust)).
 4. It implements sublinear, bounded reinforcement ([Section 5](#5-reinforcement)).
 5. It resolves intent conflicts deterministically according to the policy of the scope ([Section 6](#6-conflict-resolution)). This includes deferred resolution for HIGHEST_CONFIDENCE under lock-based serialization ([Section 6.2](#62-deferred-resolution)).
-6. It enforces scope-based write authorization ([Section 7](#7-scope)).
+6. It enforces scope-based write authorization ([Section 7](#7-scope)) and the `max_source` of each agent on its observations ([Section 8.1](#81-write)).
 7. It provides a deterministic guard layer that enforces coordination and does not depend on agent compliance ([Section 9](#9-guard-deterministic-enforcement-layer)).
 8. It supports generalized supersession across all mark types ([Section 10](#10-generalized-supersession)).
 9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projections and content redaction ([Section 7.4](#74-scope-visibility)).

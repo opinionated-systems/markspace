@@ -55,7 +55,7 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 **Three conflict policies:** HIGHEST_CONFIDENCE (priority wins), FIRST_WRITER (first claim wins), YIELD_ALL (escalate to principal via need marks). Across a scope tree, intents on one resource compete with intents in ancestor and descendant scopes, not in sibling scopes: the outer scope's intent wins, and inside one scope the scope's policy decides.
 
-**Trust weighting:** Marks carry a source tag (fleet, external verified, external unverified). Trust weights attenuate effective strength. Fleet marks dominate external ones, and unverified sources are discounted further. Weights are configurable per deployment.
+**Trust weighting:** Observations carry a source level (fleet, external verified, external unverified), bounded by each agent's `max_source`. Trust weights attenuate the effective strength of observations. A single external observation weighs less than a fleet observation of the same strength and age, and observations at `EXTERNAL_UNVERIFIED` are discounted further. Weights are configurable per deployment.
 
 **Decay:** Coordination is a dynamical process - the goal is stability against continuous change, not a fixed solution reached once. Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
 
@@ -118,7 +118,7 @@ The reference implementation and experiments verify that the protocol's properti
 - **Lunch** - FIRST_WRITER: everyone eats, but preferred type has 2:1 demand
 - **Boardroom** - YIELD_ALL mediation (single shared resource)
 
-Department heads book with elevated priority. External system agents (parking bot, building ops) publish low-trust observations and warnings that decay over configurable half-lives. Adversarial agents with normal permissions but adversarial prompts attempt cross-department bookings and warning injection. All five mark types, all three conflict policies, and all three visibility levels produce non-trivial output in a single trial.
+Department heads book with elevated priority. External system agents publish capacity observations (parking bot, at `EXTERNAL_VERIFIED`) and room warnings (building ops; warnings carry no source level), which decay over configurable half-lives. Adversarial agents with normal permissions but adversarial prompts attempt cross-department bookings and warning injection. All five mark types, all three conflict policies, and all three visibility levels produce non-trivial output in a single trial.
 
 Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed analysis of resource allocation, agent behavior, temporal dynamics, and token economics in the [stress test writeup](experiments/stress_test/analysis.md). A re-run on DeepSeek V4.1 Flash 1017 with a 2048-token thinking budget (one run, 2026-11-01) allowed no resource twice in one round and denied every cross-department write, with a mean manifest completion of 64.5% across departments against 58.8% for gpt-oss-120b; the two runs also differ in pacing and harness version ([section 9](experiments/stress_test/analysis.md#9-re-run-on-deepseek-v41-flash-1017)).
 

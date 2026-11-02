@@ -39,7 +39,7 @@ And consensus-based approaches add a fourth:
 
 4. **Honest-majority cliff edge.** Classical consensus mechanisms (voting, median, aggregation) require an honest majority. A Byzantine fault is any agent failure where the agent continues operating but produces incorrect, misleading, or adversarial output - the defining failure mode of LLM agents under prompt injection. Lamport et al. prove that consensus requires at least *3f + 1* participants to tolerate *f* Byzantine faults, an impossibility result, not a performance curve ([Lamport et al., 1982](https://doi.org/10.1145/357172.357176)). Below the threshold, consensus works. Above it, correctness guarantees vanish entirely.
 
-The mark space is a shared-state architecture in the blackboard tradition, extended with three mechanisms for LLM agents: (1) a deterministic guard layer that enforces authorization and conflict resolution independent of agent behavior, (2) temporal decay that models information freshness without explicit invalidation, and (3) source-based trust weighting that attenuates marks from untrusted origins.
+The mark space is a shared-state architecture in the blackboard tradition, extended with three mechanisms for LLM agents: (1) a deterministic guard layer that enforces authorization and conflict resolution independent of agent behavior, (2) temporal decay that models information freshness without explicit invalidation, and (3) source-level weighting that attenuates observations from untrusted providers.
 
 These mechanisms address the specific failure modes that arise when agents are probabilistic, exploitable, and operating in environments where information goes stale. Agents read from shared structured state rather than compressing context into messages for each other. They don't progressively diverge because the mark space *is* the shared world state. Schema and scope violations don't cascade across agents because the guard catches them at the boundary. (Semantically incorrect but well-formed observations still propagate at full trust weight - the guard has no semantic error detection.)
 
@@ -207,13 +207,16 @@ message ObservationMark {
 
 **Decay**: Observations have a freshness half-life. E.g., an observation from 6 hours ago has half the weight of a fresh one. An observation from 3 days ago is near-zero. The world changes, so stale observations should fade rather than persist at full strength.
 
-**Source trust**: Source trust introduces the adversarial model. Marks from fleet agents (`FLEET`) are trusted, since they're authenticated and from agents you built. Marks from external sources are categorized:
-- `EXTERNAL_VERIFIED`: cross-referenced against a second source or known fact
-- `EXTERNAL_UNVERIFIED`: single-source, could be adversarial
+**Source levels**: Source levels introduce the adversarial model. The source level of an observation names where its content came from:
+- `FLEET`: the fleet's own work; the writer read no content from outside the fleet
+- `EXTERNAL_VERIFIED`: content from an outside provider that the principal accepts, with its authorship proven
+- `EXTERNAL_UNVERIFIED`: any other outside content, for example a scraped web page or a customer's message; could be adversarial
 
-An agent's local rules weight observations by `source * freshness * confidence`. Fleet observations dominate while old external observations vanish. This mirrors the immune system's self vs non-self recognition, built into the mark protocol rather than added as a separate adversarial defense layer.
+The writer sets the source level, and the principal bounds it through the harness: each agent that writes observations gets a `max_source` no higher than the lowest source level of what it reads. That is `EXTERNAL_VERIFIED` for a provider that the principal accepts, `EXTERNAL_UNVERIFIED` for any other outside content, and the source level of each observation that the agent reads. The mark space refuses a higher level from that agent ([spec 8.1](spec.md#81-write)). It does not lower the bound by itself: the harness sets it from what the agent is configured to read. Agreement between providers does not raise a source level.
 
-**Reinforcement**: When multiple agents independently write similar observation marks on the same topic, the effective strength increases. The mechanism is direct pheromone reinforcement: more ants on a trail produce a stronger signal, with no voting protocol needed. Convergent independent observations naturally strengthen while divergent observations naturally weaken through low reinforcement and normal decay.
+An agent's local rules weight observations by `trust weight * freshness * confidence`. A single external observation weighs less than a `FLEET` observation of the same strength and age (P6), and old external observations vanish. This mirrors the immune system's self vs non-self recognition, built into the mark protocol rather than added as a separate adversarial defense layer.
+
+**Reinforcement**: When several agents independently write similar observation marks on the same topic, a reader can combine their strengths into one aggregate signal with `reinforce()` ([spec 5](spec.md#5-reinforcement)). The combination is sublinear and bounded. The mechanism is direct pheromone reinforcement: more ants on a trail produce a stronger signal, with no voting protocol needed. `reinforce()` combines the strengths that the reader gives it, and it counts marks, not writers. A reader that wants agreement between independent writers to count selects the observations that agree and gives at most one for each writer; otherwise one writer's repeated observations raise the aggregate as many writers would. Observations that disagree weaken only through normal decay.
 
 ### Mark Type 4: Warning
 
@@ -340,24 +343,23 @@ One limit we cannot fix within a per-agent detector:
 
 ### Agent-Environment Interaction (Adversarial)
 
-**Source authentication on marks.**
+**Source levels of observations.**
 
 | Source | Weight | Condition |
 |--------|--------|-----------|
-| `FLEET` | 1.0 | authenticated, signed |
-| `EXTERNAL_VERIFIED` | 0.7 | cross-referenced against 2+ sources |
-| `EXTERNAL_UNVERIFIED` | 0.3 | single source |
-| `CONTRADICTED` | weight - contradiction_weight | conflicts with higher-trust marks |
+| `FLEET` | 1.0 | the fleet's own work; the writer read no outside content |
+| `EXTERNAL_VERIFIED` | 0.7 | outside content from a provider that the principal accepts, with its authorship proven |
+| `EXTERNAL_UNVERIFIED` | 0.3 | any other outside content |
 
-Effective weight: `trust_weight * freshness * confidence`
+Effective strength: `trust_weight * freshness` ([spec 4.2](spec.md#42-effective-strength)). A reader's local rules can also multiply it by `confidence`.
 
-This handles the "hostile internet" problem. An agent scrapes a webpage that contains prompt injection. The agent writes an observation mark with `source=EXTERNAL_UNVERIFIED`. Other agents read it at 30% weight. If the observation contradicts fleet observations, the contradiction further reduces it. No separate adversarial detection framework. Trust levels are properties of marks, enforced by local rules.
+This handles the "hostile internet" problem. An agent scrapes a webpage that contains prompt injection. The harness gave the scraping agent `max_source=EXTERNAL_UNVERIFIED`, so each observation that the agent writes has at most that source level, whatever the injected text tells it ([spec 8.1](spec.md#81-write)). Each agent that reads those observations also gets `max_source=EXTERNAL_UNVERIFIED`, so the injected text keeps its source level one agent later. Other agents read it at 30% weight. If another agent finds that it contradicts `FLEET` observations, that agent writes a warning that invalidates it, and the warning's strength is subtracted from the observation's ([spec 9.5](spec.md#95-warning-invalidation)). No separate adversarial detection framework. Source levels are properties of marks; the mark space enforces the bound, and local rules apply the weights.
 
 The immune system parallel is instructive. T-cells don't have a "threat detection committee." Each cell has receptors. If the presented antigen matches, the cell activates. If it doesn't, the cell ignores it. False positives (autoimmunity) and false negatives (immune evasion) exist, but the system works at population scale because response strength is proportional to convergence - a single T-cell recognizing an antigen produces a tiny local effect; the response becomes significant only as more cells with the same receptor independently activate and undergo [clonal expansion](https://en.wikipedia.org/wiki/Clonal_expansion). Same principle here: a single unreinforced observation mark carries less weight and decays faster; independent observations that converge strengthen the signal.
 
-The trust model is deliberately simple: three fixed levels with static weights. The primary threat model is external compromise - hostile internet content, untrusted plugins, external data sources, cross-principal agents. The trust levels ensure fleet observations dominate external ones, and unverified external input is heavily discounted. This is the threat that matters most in practice: an agent that scrapes a webpage, calls an external API, or receives input from another organization's agent should not be able to override observations from your own fleet.
+The trust model is deliberately simple: three fixed levels with static weights. The primary threat model is external compromise - hostile internet content, untrusted plugins, external data providers, cross-principal agents. The source levels make a single external observation weigh less than a `FLEET` observation of the same strength and age, and unverified external input is heavily discounted. Source levels apply to observations only: an agent's intents, actions, warnings and needs weigh 1.0 whatever its `max_source`. An agent whose warnings or actions the principal does not trust at full weight gets no permission to write them. This is the threat that matters most in practice: an agent that scrapes a webpage, calls an external API, or receives input from another organization's agent should not be able to override observations from your own fleet.
 
-The computational trust literature offers far more sophisticated approaches. [Marsh (1994)](https://dspace.stir.ac.uk/handle/1893/2010) formalized trust as a continuous value derived from experience, [Granatyr et al. (2015)](https://doi.org/10.1145/2816826) surveyed trust and reputation models for multi-agent systems across two decades. These address a different problem: differentiating reliability *within* a trust class. All FLEET agents currently get weight 1.0, even if one is consistently accurate and another frequently hallucinates. Per-agent computed trust would differentiate them, but requires a ground truth signal (was this observation correct?) that is often unavailable for LLM agents. Classical multi-agent trust models assume agents with stable, observable behavior over many interactions. LLM agents are stochastic - the same agent with the same prompt produces different outputs - making experience-based scoring harder to calibrate.
+The computational trust literature offers far more sophisticated approaches. [Marsh (1994)](https://dspace.stir.ac.uk/handle/1893/2010) formalized trust as a continuous value derived from experience, [Granatyr et al. (2015)](https://doi.org/10.1145/2816826) surveyed trust and reputation models for multi-agent systems across two decades. These address a different problem: differentiating reliability *within* a trust class. All `FLEET` observations currently get weight 1.0, even if one agent is consistently accurate and another frequently hallucinates. Per-agent computed trust would differentiate them, but requires a ground truth signal (was this observation correct?) that is often unavailable for LLM agents. Classical multi-agent trust models assume agents with stable, observable behavior over many interactions. LLM agents are stochastic - the same agent with the same prompt produces different outputs - making experience-based scoring harder to calibrate.
 
 Non-compliance - agents that ignore instructions, hallucinate actions, or drift - is handled by the guard layer (schema validation, authority checks) and optionally the adaptive monitoring layer (envelope, barrier, probe), not by trust scores.
 
@@ -379,20 +381,20 @@ The principal never directly messages an agent. The aggregator has no AI; it sor
 
 ### Cross-Principal Interaction
 
-The adversarial surface (above) handles external data from web scraping and APIs; your agents tag what they find. This surface handles external fleets, where another principal's agents share marks with yours.
+The adversarial surface (above) handles external data from web scraping and APIs: the agents that read it write at most the source level of its provider. This surface handles external fleets, where another principal's agents share marks with yours.
 
-Each fleet has its own mark space. You cannot authenticate another fleet's marks. Only observations cross the boundary. Intent, action, and need marks are fleet-internal; they coordinate your resources and your principal's attention.
+Each fleet has its own mark space. Without a signature on each mark from a key that the other fleet's principal publishes, you cannot authenticate another fleet's marks. Only observations cross the boundary. Intent, action, and need marks are fleet-internal; they coordinate your resources and your principal's attention.
 
 <p align="center"><img src="../figures/cross_principal.svg" alt="Cross-principal boundary" width="700"></p>
 
 At this boundary, and only at this boundary, consensus mechanisms apply:
 
-- **All incoming marks tagged `EXTERNAL_UNVERIFIED`** regardless of their source status in the originating fleet
+- **All incoming marks at `EXTERNAL_UNVERIFIED`** regardless of their source level in the originating fleet
 - **Median aggregation** of claims from multiple external agents (robust below honest majority)
 - **Peer-Agreement Drift (PAD) detection** to identify consistently deviating external agents
 - **Per-item metrics** over distributional ones (resists adaptive evasion)
 
-Incoming marks can be upgraded from `EXTERNAL_UNVERIFIED` to `EXTERNAL_VERIFIED` - for example through cross-referencing against fleet observations (manual), or cryptographic attestation via a shared trust root infrastructure (e.g., the `agent://` URI scheme, [Rodriguez, 2026](https://arxiv.org/abs/2601.14567)). The latter also enables capability-based discovery - locating cross-fleet collaborators by capability path rather than pre-configured identity - at the cost of requiring both fleets to participate in the same naming infrastructure.
+Incoming marks can be upgraded from `EXTERNAL_UNVERIFIED` to `EXTERNAL_VERIFIED` when the principal accepts their provider and the provider's authorship is proven - for example by a signature on each mark from a key that the other principal publishes for this purpose. Agreement with `FLEET` observations is no reason to upgrade. A shared naming infrastructure (e.g., the `agent://` URI scheme, [Rodriguez, 2026](https://arxiv.org/abs/2601.14567)) enables capability-based discovery - locating cross-fleet collaborators by capability path rather than pre-configured identity - at the cost of requiring both fleets to participate in the same naming infrastructure.
 
 Stigmergy handles coordination within a fleet. Consensus applies at exactly one boundary: between fleets, where you cannot trust the other party's marks.
 
@@ -491,7 +493,7 @@ CREATE TABLE mark (
     scope          TEXT NOT NULL,
     resource_id    TEXT,
     content        JSONB NOT NULL,
-    source         TEXT NOT NULL,   -- 'fleet', 'external_verified', 'external_unverified'
+    source         TEXT,            -- observations only: 'fleet', 'external_verified', 'external_unverified'
     confidence     FLOAT,
     strength       FLOAT NOT NULL DEFAULT 1.0,
     created_at     FLOAT NOT NULL,  -- unixtime
@@ -745,6 +747,7 @@ scheduler = Scheduler(space)
 triage_agent = Agent(
     name="ticket-triager",
     scopes={"support-triage": ["observation", "intent", "action"]},
+    max_source=Source.EXTERNAL_UNVERIFIED,  # reads customer text
     manifest=AgentManifest(
         outputs=(
             ("support-triage", MarkType.OBSERVATION),
@@ -790,7 +793,7 @@ space.write(
             "window": "1h",
             "assessment": "Likely auth service degradation, not isolated complaints",
         },
-        source=Source.FLEET,
+        source=Source.EXTERNAL_UNVERIFIED,  # built from customer text
         confidence=0.75,  # LLM's judgment: probable pattern, not certain
     ),
 )
@@ -811,6 +814,7 @@ assessor = Agent(
         "support-triage": ["observation"],  # read only
         "incidents": ["observation", "intent", "action"],
     },
+    max_source=Source.EXTERNAL_UNVERIFIED,  # reads the triager's patterns
     manifest=AgentManifest(
         inputs=(
             WatchPattern(
@@ -881,7 +885,7 @@ The protocol makes specific claims about what it prevents, mitigates, and delibe
 | Denial of service via mass actions (CS5) | Guard enforces manifest constraints on what agents can write; optional scope-level rate limits cap per-agent and fleet-wide write rates ([Observability and Cost Controls](#observability-and-cost-controls)) | Mitigated |
 | Provider value alignment (CS6) | Not addressed (model-internal behavior, below the protocol layer) | Not addressed |
 | Agent coercion / gaslighting (CS7) | Manifest can control whether an agent interacts with humans, but once authorized, the agent's response to social pressure is agent-internal | Not addressed |
-| Identity spoofing (CS8) | Source/trust tags identify mark authors within the protocol, but how an agent verifies human identity on its principal interface is agent-internal | Not addressed |
+| Identity spoofing (CS8) | The harness supplies each mark's `agent_id`, which identifies its author within the protocol, but how an agent verifies human identity on its principal interface is agent-internal | Not addressed |
 | Agent corruption via prompt injection (CS10) | Protocol cannot prevent corruption, but manifest and scope constraints mean a corrupted agent can only write its granted mark types to its granted scopes - corruption degrades to a performance issue (bad output), not a safety violation | Partially mitigated |
 | Libelous broadcast (CS11) | Scope limits blast radius (agents can only write to authorized scopes); content not filtered | Partially mitigated |
 
@@ -924,7 +928,7 @@ A natural question is what a complete multi-agent delegation system requires and
 | Trust and reputation | Partial | Three static source levels (fleet, verified, unverified). No dynamic trust updating, reputation, or experience-based trust. Sufficient for LLM non-compliance; insufficient for rational adversaries. |
 | Permission handling | Partial | Scope-based write authorization, hierarchical scope inheritance, three visibility levels (OPEN/PROTECTED/CLASSIFIED). No just-in-time authorization or privilege attenuation in sub-delegation chains. |
 | Verifiable task completion | Partial | Action marks record outcomes. Supersession chains track state transitions. No verification that the action's result is correct (the protocol records what happened, not whether it was right). |
-| Security | Yes | Guard enforces authorization independent of LLM compliance. Scope visibility controls who can read a mark, through reads, subscriptions and guard decisions. It does not control what an authorized reader writes afterwards: markspace has no write-down rule (see [CS3](#failure-mode-coverage)). A monitor can enforce such a rule, at the cost of blocking harmless writes, but not information flow itself ([Schneider, 2000](https://doi.org/10.1145/353323.353382)). Trust weighting attenuates untrusted sources. Adversarial robustness validated (171 denied attempts). |
+| Security | Yes | Guard enforces authorization independent of LLM compliance. Scope visibility controls who can read a mark, through reads, subscriptions and guard decisions. It does not control what an authorized reader writes afterwards: markspace has no write-down rule (see [CS3](#failure-mode-coverage)). A monitor can enforce such a rule, at the cost of blocking harmless writes, but not information flow itself ([Schneider, 2000](https://doi.org/10.1145/353323.353382)). Trust weighting attenuates observations from untrusted providers. Adversarial robustness validated (171 denied attempts). |
 
 The gaps are intentional. Markspace covers what can be enforced structurally through environment design - shared state, authorization, conflict resolution. The components it omits (task decomposition, assignment, multi-objective optimization) require orchestration-level capabilities or agent-internal mechanisms that operate at a different architectural level.
 

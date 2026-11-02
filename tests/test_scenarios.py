@@ -381,6 +381,7 @@ class TestExternalTrust:
             scopes={
                 "intel": ["observation"],
             },
+            max_source=Source.EXTERNAL_UNVERIFIED,
         )
 
     def test_fleet_outranks_external(
