@@ -1661,6 +1661,7 @@ get_watched_marks(agent, clear=true) -> list[Mark]
 
 Postconditions:
   - Returns marks written since the last poll that match the agent's subscription patterns (P50)
+  - Does not return a mark that is superseded at the time of the poll, as read() does not ([Section 10](#10-generalized-supersession))
   - Each mark is delivered under the scope visibility rules of read() for this agent (Section 7.4): projected for a PROTECTED scope without read authorization, withheld for a CLASSIFIED scope without read authorization
   - If clear=true: the queue is emptied; the same marks will not be returned again (P51)
   - If clear=false: the queue is preserved for re-reading

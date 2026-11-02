@@ -354,6 +354,47 @@ class TestP50WatchSubset:
         marks = space.get_watched_marks(writer)
         assert len(marks) == 0
 
+    def test_superseding_mark_outside_the_patterns_is_not_delivered(
+        self, space: MarkSpace, subscriber: Agent
+    ) -> None:
+        """A superseding mark in an unwatched scope is not delivered."""
+        mover = Agent(
+            name="mover",
+            scopes={"sensors": ["observation"], "filtered": ["observation"]},
+        )
+        space.subscribe(subscriber, [WatchPattern(scope="sensors")])
+        first = space.write(
+            mover, Observation(scope="sensors", topic="reading", content="v1")
+        )
+        assert [m.id for m in space.get_watched_marks(subscriber)] == [first]
+        space.write(
+            mover,
+            Observation(
+                scope="filtered", topic="reading", content="moved", supersedes=first
+            ),
+        )
+        assert space.get_watched_marks(subscriber) == []
+
+    def test_mark_superseded_before_the_poll_is_not_returned(
+        self, space: MarkSpace, subscriber: Agent
+    ) -> None:
+        """Write, supersede from an unwatched scope, then poll: nothing."""
+        mover = Agent(
+            name="mover",
+            scopes={"sensors": ["observation"], "filtered": ["observation"]},
+        )
+        space.subscribe(subscriber, [WatchPattern(scope="sensors")])
+        first = space.write(
+            mover, Observation(scope="sensors", topic="reading", content="v1")
+        )
+        space.write(
+            mover,
+            Observation(
+                scope="filtered", topic="reading", content="moved", supersedes=first
+            ),
+        )
+        assert space.get_watched_marks(subscriber) == []
+
 
 # ---------------------------------------------------------------------------
 # P51: At-Most-Once Delivery

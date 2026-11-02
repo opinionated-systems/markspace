@@ -1145,13 +1145,16 @@ class MarkSpace:
         after retrieval but before processing, those marks will not be
         re-delivered. Production deployments needing at-least-once semantics
         should implement cursor-based delivery on top of the mark space.
+
+        A mark that is superseded by the time of the poll is skipped, as in
+        read().
         """
         with self._lock:
             pending_ids = self._pending_notifications.get(agent.id, [])
             marks: list[AnyMark] = []
             for mark_id in pending_ids:
                 mark = self._marks.get(mark_id)
-                if mark is None:
+                if mark is None or mark_id in self._superseded:
                     continue
                 # Same visibility rules as read() (Section 7.4)
                 visible = self.visible_form(mark, agent)
@@ -1164,36 +1167,15 @@ class MarkSpace:
     def _notify_subscribers(self, mark: AnyMark) -> None:
         """
         Check all subscriptions and queue the mark for matching agents.
-        Called internally by write() after storing a mark.
+        Called by write() and resolve() after storing a mark.
 
-        Agents are not notified about their own writes.
-
-        When a mark supersedes another, subscribers watching the superseded
-        mark's scope are also notified about the new mark so they can
-        detect the supersession (the new mark's .supersedes field points
-        to the now-dead mark).
+        Agents are not notified about their own writes. A mark that matches
+        no pattern is not queued, also when it supersedes a mark that does
+        (P50); the subscriber sees the superseded mark disappear on its next
+        read.
         """
-        # Collect the superseded mark (if any) to expand notification scope.
-        superseded_mark: AnyMark | None = None
-        if mark.supersedes is not None:
-            superseded_mark = self._marks.get(mark.supersedes)
-
         for agent_id, patterns in self._subscriptions.items():
             if mark.agent_id == agent_id:
                 continue  # don't notify the writer about their own marks
-            matched = False
-            for pattern in patterns:
-                if pattern.matches(mark):
-                    matched = True
-                    break
-            # If no pattern matched the new mark directly, check whether
-            # any pattern matches the superseded mark. This ensures
-            # subscribers watching the old mark's scope learn about the
-            # supersession regardless of pattern ordering.
-            if not matched and superseded_mark is not None:
-                for pattern in patterns:
-                    if pattern.matches(superseded_mark):
-                        matched = True
-                        break
-            if matched:
+            if any(pattern.matches(mark) for pattern in patterns):
                 self._pending_notifications.setdefault(agent_id, []).append(mark.id)
