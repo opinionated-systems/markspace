@@ -387,10 +387,10 @@ Each fleet has its own mark space. Without a signature on each mark from a key t
 
 <p align="center"><img src="../figures/cross_principal.svg" alt="Cross-principal boundary" width="700"></p>
 
-At this boundary, and only at this boundary, consensus mechanisms apply:
+At this boundary, and only at this boundary, consensus mechanisms apply. The reference implementation cannot connect two fleets and includes none of the mechanisms below. They are proposed for a deployment that does connect fleets, which would have to build them:
 
 - **All incoming marks at `EXTERNAL_UNVERIFIED`** regardless of their source level in the originating fleet
-- **Median aggregation** of claims from multiple external agents (robust below honest majority)
+- **Median aggregation** of claims from multiple external principals (correct while fewer than half of the principals are adversarial). It counts principals, not agents: one principal can run any number of agents
 - **Peer-Agreement Drift (PAD) detection** to identify consistently deviating external agents
 - **Per-item metrics** over distributional ones (resists adaptive evasion)
 
