@@ -39,6 +39,7 @@ from markspace import (
     Observation,
     PolicyResult,
     PolicyVerdict,
+    QuotaExceededError,
     Scope,
     ScopeVisibility,
     Source,
@@ -1719,6 +1720,67 @@ class TestWriteOrderAfterGc:
         assert guard.pre_action(a2, "desk", "r", "book", 0.5).verdict == (
             GuardVerdict.CONFLICT
         )
+
+
+class TestQuotaCountsEachCurrentMarkOnce:
+    """max_marks_per_agent counts the agent's stored marks that are not superseded."""
+
+    @staticmethod
+    def _space(quota: int) -> tuple[MarkSpace, Agent]:
+        s = MarkSpace(
+            scopes=[Scope(name="notes")],
+            max_marks_per_agent=quota,
+        )
+        s.set_clock(1000000.0)
+        return s, Agent(
+            name="writer", scopes={"notes": ["observation", "need", "action"]}
+        )
+
+    @staticmethod
+    def _obs(content: str, supersedes: uuid.UUID | None = None) -> Observation:
+        return Observation(
+            scope="notes", topic="t", content=content, supersedes=supersedes
+        )
+
+    def test_superseding_write_at_quota_replaces_the_mark(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("other"))
+        s.write(a, self._obs("v2", supersedes=first))  # still 2 current marks
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("third"))
+
+    def test_gc_of_a_superseded_mark_frees_no_second_slot(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("v2", supersedes=first))
+        assert s.gc() == 1  # v1, superseded
+        s.write(a, self._obs("other"))  # 2 current marks: v2, other
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("third"))
+
+    def test_second_supersession_of_one_mark_counts_the_new_mark(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("v2", supersedes=first))
+        s.write(a, self._obs("v3", supersedes=first))  # 2 current marks: v2, v3
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("v4"))
+
+    def test_resolved_need_frees_its_slot_after_gc(self) -> None:
+        s, a = self._space(quota=2)
+        principal = Agent(name="principal", scopes={"notes": ["action"]})
+        need = s.write(a, Need(scope="notes", question="which?"))
+        done = s.write(
+            principal,
+            Action(scope="notes", resource="r", action="answered", result=None),
+        )
+        s.resolve(need, done)
+        assert s.gc() == 2  # the need and its resolved copy
+        s.write(a, self._obs("one"))
+        s.write(a, self._obs("two"))
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("three"))
 
 
 class TestPerIntentCompetingSets:

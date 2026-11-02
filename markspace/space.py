@@ -151,9 +151,11 @@ class MarkSpace:
         # created_at of the latest intent or action per (scope, resource): the
         # next one there gets a later time (P32).
         self._last_claim_at: dict[tuple[str, str], float] = {}
-        # Per-agent write quota. None = unlimited.
+        # Per-agent write quota, a limit of this reference implementation
+        # (the spec has none). None = unlimited.
         self._max_marks_per_agent: int | None = max_marks_per_agent
-        # Per-agent live mark count, maintained incrementally on write/gc.
+        # Per-agent count of current marks (stored and not superseded),
+        # maintained on write, resolve and gc.
         self._agent_mark_counts: dict[uuid.UUID, int] = {}
         # Scope index: maintained incrementally on write() for O(scope) reads
         self._by_scope: dict[str, set[uuid.UUID]] = {}
@@ -276,6 +278,14 @@ class MarkSpace:
                     f"cannot write observations with source={mark.source.value}"
                 )
 
+    def _decrement_mark_count(self, agent_id: uuid.UUID) -> None:
+        """One current mark fewer for *agent_id*. Caller MUST hold self._lock."""
+        count = self._agent_mark_counts.get(agent_id, 0)
+        if count > 1:
+            self._agent_mark_counts[agent_id] = count - 1
+        else:
+            self._agent_mark_counts.pop(agent_id, None)
+
     def _created_at_for(self, mark: AnyMark) -> float:
         """
         created_at for a mark about to be stored: now(). An intent or action
@@ -321,14 +331,22 @@ class MarkSpace:
             scope = self.get_scope(mark.scope)
             self._validate_mark(agent, mark, scope)
 
+            # A write that supersedes a current mark replaces it: the
+            # author's count stays the same, so the quota does not apply.
+            replaces_current = (
+                mark.supersedes is not None
+                and mark.supersedes in self._marks
+                and mark.supersedes not in self._superseded
+            )
+
             # Enforce per-agent write quota
-            if self._max_marks_per_agent is not None:
+            if self._max_marks_per_agent is not None and not replaces_current:
                 current = self._agent_mark_counts.get(agent.id, 0)
                 if current >= self._max_marks_per_agent:
                     raise QuotaExceededError(
-                        f"Agent '{agent.name}' has {current} live marks, "
-                        f"exceeding quota of {self._max_marks_per_agent}. "
-                        f"Wait for GC to reclaim expired marks."
+                        f"Agent '{agent.name}' has {current} current marks, "
+                        f"its quota of {self._max_marks_per_agent}. "
+                        f"gc() removes expired marks."
                     )
 
             # Only a mark's author may supersede it (Section 10): another
@@ -367,18 +385,9 @@ class MarkSpace:
             # Handle supersession (any mark type can supersede a prior mark)
             # The superseded mark stays in storage but will be filtered at read time
             if stored.supersedes is not None:
+                if replaces_current:
+                    self._decrement_mark_count(self._marks[stored.supersedes].agent_id)
                 self._superseded.add(stored.supersedes)
-                # Decrement quota for the superseded mark's agent so supersession
-                # doesn't cause quota self-DoS under tight limits.
-                superseded_mark = self._marks.get(stored.supersedes)
-                if superseded_mark is not None:
-                    sup_count = self._agent_mark_counts.get(superseded_mark.agent_id, 0)
-                    if sup_count > 1:
-                        self._agent_mark_counts[superseded_mark.agent_id] = (
-                            sup_count - 1
-                        )
-                    else:
-                        self._agent_mark_counts.pop(superseded_mark.agent_id, None)
 
             self._marks[new_id] = stored
             # Maintain per-agent mark count
@@ -600,6 +609,7 @@ class MarkSpace:
             )
             self._marks[new_id] = resolved
             self._superseded.add(need_mark_id)
+            self._decrement_mark_count(mark.agent_id)
             # Maintain scope index
             self._by_scope.setdefault(resolved.scope, set()).add(new_id)
             # Maintain per-agent mark count
@@ -985,9 +995,10 @@ class MarkSpace:
         decay (P35). Only marks that are intrinsically dead (expired TTL,
         resolved needs, superseded) are collected.
 
-        Handles supersession chains: if A supersedes B, and A is collected,
-        B's supersession entry is cleaned up (but B itself may also be
-        collected if it has zero strength).
+        Supersession: every superseded mark is collected at once. Removing
+        a mark drops only that mark's own entry in the superseded set, after
+        the mark count reads it: a superseded mark left the count when it
+        was superseded, so gc() does not count it down again.
         """
         if grace_period < 0:
             raise ValueError(f"grace_period must be non-negative, got {grace_period}")
@@ -1056,12 +1067,9 @@ class MarkSpace:
             for mid in to_remove:
                 removed = self._marks.pop(mid, None)
                 if removed is not None:
-                    # Decrement per-agent mark count
-                    count = self._agent_mark_counts.get(removed.agent_id, 0)
-                    if count > 1:
-                        self._agent_mark_counts[removed.agent_id] = count - 1
-                    else:
-                        self._agent_mark_counts.pop(removed.agent_id, None)
+                    # A superseded mark left the count when it was superseded.
+                    if mid not in self._superseded:
+                        self._decrement_mark_count(removed.agent_id)
                     scope_ids = self._by_scope.get(removed.scope)
                     if scope_ids is not None:
                         scope_ids.discard(mid)
