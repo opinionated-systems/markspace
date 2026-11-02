@@ -10,6 +10,7 @@ Run: python -m pytest tests/test_properties.py -v
 
 from __future__ import annotations
 
+import math
 import uuid
 
 import pytest
@@ -32,6 +33,7 @@ from markspace import (
     Severity,
     Source,
     Warning,
+    WatchPattern,
     compute_strength,
     effective_strength,
     hours,
@@ -1158,6 +1160,211 @@ class TestScopeVisibility:
         assert projected.content is None  # type: ignore[union-attr]
         assert obs.content == "secret"  # original unchanged
 
+    # -- A defined child scope keeps its own visibility --
+
+    @staticmethod
+    def _nested_space() -> tuple[MarkSpace, Agent]:
+        """Parents with defined children of a different visibility, and a writer."""
+        s = MarkSpace(
+            scopes=[
+                Scope(name="pub"),
+                Scope(name="pub/secret", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="pub/hr", visibility=ScopeVisibility.PROTECTED),
+                Scope(name="corp", visibility=ScopeVisibility.PROTECTED),
+                Scope(name="corp/merger", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="corp/news"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(
+            name="w", scopes={"pub": ["observation"], "corp": ["observation"]}
+        )
+        for scope in ("pub/secret", "pub/hr", "corp/merger", "corp/news"):
+            s.write(
+                writer,
+                Observation(scope=scope, topic="t", content="X", source=Source.FLEET),
+            )
+        return s, writer
+
+    def test_p22_classified_child_hidden_in_open_parent_read(self) -> None:
+        """P22: Reading OPEN 'pub' must not return CLASSIFIED 'pub/secret' marks."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        marks = s.read(scope="pub", reader=outsider)
+        assert "pub/secret" not in {m.scope for m in marks}
+
+    def test_p21_protected_child_projected_in_open_parent_read(self) -> None:
+        """P21: Reading OPEN 'pub' returns PROTECTED 'pub/hr' marks projected."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        hr = [m for m in s.read(scope="pub", reader=outsider) if m.scope == "pub/hr"]
+        assert len(hr) == 1
+        assert hr[0].projected is True
+        assert hr[0].content is None  # type: ignore[union-attr]
+
+    def test_p25_classified_child_not_projected_in_protected_parent_read(
+        self,
+    ) -> None:
+        """P25: Reading PROTECTED 'corp' must not return CLASSIFIED 'corp/merger'
+        marks, not even projected."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        marks = s.read(scope="corp", reader=outsider)
+        assert "corp/merger" not in {m.scope for m in marks}
+
+    def test_p20_open_child_full_in_protected_parent_read(self) -> None:
+        """P20: A mark in OPEN 'corp/news' is read in full through PROTECTED 'corp'."""
+        s, _ = self._nested_space()
+        outsider = Agent(name="o", scopes={})
+        news = [
+            m for m in s.read(scope="corp", reader=outsider) if m.scope == "corp/news"
+        ]
+        assert len(news) == 1
+        assert news[0].projected is False
+
+    def test_p26_parent_reader_sees_classified_child(self) -> None:
+        """P26: Read authorization for 'corp' covers CLASSIFIED 'corp/merger'."""
+        s, _ = self._nested_space()
+        reader = Agent(name="r", scopes={}, read_scopes=frozenset({"corp"}))
+        merger = [
+            m for m in s.read(scope="corp", reader=reader) if m.scope == "corp/merger"
+        ]
+        assert len(merger) == 1
+        assert merger[0].content == "X"  # type: ignore[union-attr]
+
+    def test_p22_open_child_of_classified_parent_read_like_direct_read(self) -> None:
+        """P22, P26: Reading CLASSIFIED 'legal' returns the marks of its OPEN
+        child 'legal/public' exactly as a direct read of 'legal/public' does."""
+        s = MarkSpace(
+            scopes=[
+                Scope(name="legal", visibility=ScopeVisibility.CLASSIFIED),
+                Scope(name="legal/public"),
+            ]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(name="w", scopes={"legal": ["observation"]})
+        for scope in ("legal", "legal/public"):
+            s.write(
+                writer,
+                Observation(scope=scope, topic="t", content="X", source=Source.FLEET),
+            )
+        outsider = Agent(name="o", scopes={})
+        via_parent = {(m.scope, m.content) for m in s.read(scope="legal", reader=outsider)}  # type: ignore[union-attr]
+        direct = {(m.scope, m.content) for m in s.read(scope="legal/public", reader=outsider)}  # type: ignore[union-attr]
+        assert via_parent == direct == {("legal/public", "X")}
+
+    # -- Subscriptions deliver under the same visibility rules --
+
+    def test_p22_subscription_withholds_classified(
+        self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
+    ) -> None:
+        """P22: A subscription must not deliver CLASSIFIED marks to an agent
+        without read authorization."""
+        visibility_space.subscribe(
+            unauthorized_reader,
+            [WatchPattern(scope="legal", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="legal", topic="case", content="X", source=Source.FLEET),
+        )
+        assert visibility_space.get_watched_marks(unauthorized_reader) == []
+
+    def test_p21_subscription_projects_protected(
+        self, visibility_space: MarkSpace, writer: Agent, unauthorized_reader: Agent
+    ) -> None:
+        """P21: A subscription delivers PROTECTED marks projected to an agent
+        without read authorization."""
+        visibility_space.subscribe(
+            unauthorized_reader,
+            [WatchPattern(scope="hr", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="hr", topic="pay", content="X", source=Source.FLEET),
+        )
+        marks = visibility_space.get_watched_marks(unauthorized_reader)
+        assert len(marks) == 1
+        assert marks[0].projected is True
+        assert marks[0].content is None  # type: ignore[union-attr]
+
+    def test_p26_subscription_full_for_authorized_reader(
+        self, visibility_space: MarkSpace, writer: Agent, authorized_reader: Agent
+    ) -> None:
+        """P26: An authorized subscriber receives CLASSIFIED marks in full."""
+        visibility_space.subscribe(
+            authorized_reader,
+            [WatchPattern(scope="legal", mark_type=MarkType.OBSERVATION)],
+        )
+        visibility_space.write(
+            writer,
+            Observation(scope="legal", topic="case", content="X", source=Source.FLEET),
+        )
+        marks = visibility_space.get_watched_marks(authorized_reader)
+        assert len(marks) == 1
+        assert marks[0].content == "X"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# Decay through a parent scope: each mark decays by its own scope's settings
+# ---------------------------------------------------------------------------
+
+
+class TestChildScopeDecay:
+    @staticmethod
+    def _space() -> MarkSpace:
+        fast = DecayConfig(
+            observation_half_life=60, warning_half_life=60, intent_ttl=60
+        )
+        s = MarkSpace(scopes=[Scope(name="ops"), Scope(name="ops/fast", decay=fast)])
+        s.set_clock(1000000.0)
+        return s
+
+    def test_read_through_parent_uses_child_half_life(self) -> None:
+        s = self._space()
+        writer = Agent(name="w", scopes={"ops": ["observation"]})
+        s.write(
+            writer,
+            Observation(scope="ops/fast", topic="t", content="X", source=Source.FLEET),
+        )
+        s.set_clock(1000000.0 + 600)  # ten child half-lives: strength ~0.001
+        assert s.read(scope="ops/fast") == []
+        assert [m for m in s.read(scope="ops") if m.scope == "ops/fast"] == []
+
+    def test_warning_decays_by_its_own_scope(self) -> None:
+        """A warning in a slow-decaying scope keeps suppressing a mark in a
+        scope whose own warnings decay fast."""
+        slow = DecayConfig(
+            observation_half_life=hours(12), warning_half_life=hours(12), intent_ttl=60
+        )
+        quick = DecayConfig(
+            observation_half_life=hours(6), warning_half_life=60, intent_ttl=60
+        )
+        s = MarkSpace(
+            scopes=[Scope(name="ops", decay=quick), Scope(name="audit", decay=slow)]
+        )
+        s.set_clock(1000000.0)
+        writer = Agent(name="w", scopes={"ops": ["observation"], "audit": ["warning"]})
+        obs_id = s.write(
+            writer,
+            Observation(scope="ops", topic="t", content="X", source=Source.FLEET),
+        )
+        s.write(
+            writer, Warning(scope="audit", invalidates=obs_id, topic="t", reason="r")
+        )
+        s.set_clock(1000000.0 + 600)  # ten of ops' warning half-lives
+        assert s.read(scope="ops") == []
+
+    def test_intents_through_parent_use_child_ttl(self) -> None:
+        s = self._space()
+        writer = Agent(name="w", scopes={"ops": ["intent"]})
+        s.write(
+            writer, Intent(scope="ops/fast", resource="r", action="a", confidence=0.5)
+        )
+        s.set_clock(1000000.0 + 120)  # past the child's 60 s TTL
+        assert s.get_intents("ops/fast", "r") == []
+        assert s.get_intents("ops", "r") == []
+
 
 # ---------------------------------------------------------------------------
 # P30 - Mark Immutability
@@ -1287,7 +1494,7 @@ class TestP32TotalWriteOrdering:
     def test_created_at_monotonically_nondecreasing(
         self, space: MarkSpace, scope: Scope, agent: Agent
     ) -> None:
-        """created_at must be monotonically non-decreasing across writes."""
+        """With a clock that never goes back, created_at never decreases."""
         ids = []
         for i in range(20):
             mid = space.write(
@@ -1307,6 +1514,123 @@ class TestP32TotalWriteOrdering:
             assert (
                 timestamps[i] >= timestamps[i - 1]
             ), f"created_at decreased: {timestamps[i]} < {timestamps[i - 1]}"
+
+    def test_claims_on_one_resource_keep_write_order(
+        self, space: MarkSpace, scope: Scope, agent: Agent
+    ) -> None:
+        """Intents on one resource in one scope, at one clock reading or after the clock goes back."""
+        intent = Intent(scope=scope.name, resource="r", action="book", confidence=0.5)
+        ids = [space.write(agent, intent) for _ in range(3)]
+        space.set_clock(999_000.0)  # the clock goes back
+        ids.append(space.write(agent, intent))
+        marks = [space.get_mark(mid) for mid in ids]
+        timestamps = [m.created_at for m in marks if m is not None]
+        assert len(timestamps) == 4
+        assert timestamps[0] == 1_000_000.0
+        assert all(b > a for a, b in zip(timestamps, timestamps[1:]))
+
+    def test_hidden_writes_leave_no_gap_elsewhere(self) -> None:
+        """Only the order on one resource in one scope is kept (P32)."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="pub"),
+                Scope(name="sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"pub": ["intent", "observation"]})
+        s = Agent(name="s", scopes={"sec": ["intent", "observation"]})
+        first = space.write(
+            w, Intent(scope="pub", resource="r", action="a", confidence=0.5)
+        )
+        for res in ("r", "q"):  # hidden claims, also on the same resource name
+            space.write(
+                s, Intent(scope="sec", resource=res, action="a", confidence=0.5)
+            )
+        space.write(
+            s, Observation(scope="sec", topic="t", content={}, source=Source.FLEET)
+        )
+        other = space.write(
+            w, Intent(scope="pub", resource="q", action="a", confidence=0.5)
+        )
+        note = space.write(
+            w, Observation(scope="pub", topic="t", content={}, source=Source.FLEET)
+        )
+        second = space.write(
+            w, Intent(scope="pub", resource="r", action="a", confidence=0.5)
+        )
+        times = [space.get_mark(m) for m in (first, other, note, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            1_000_000.0,
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),  # one step: only first came before
+        ]
+
+    def test_sibling_claims_leave_no_gap(self) -> None:
+        """Sibling scopes never compete: their claims stay out of each other's times."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="corp/pub"),
+                Scope(name="corp/sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"corp/pub": ["intent"]})
+        s = Agent(name="s", scopes={"corp/sec": ["intent"]})
+        first = space.write(
+            w, Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        )
+        for _ in range(3):
+            space.write(
+                s, Intent(scope="corp/sec", resource="r", action="a", confidence=0.5)
+            )
+        second = space.write(
+            w, Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        )
+        times = [space.get_mark(m) for m in (first, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),
+        ]
+
+    def test_claims_in_other_scopes_leave_no_gap(self) -> None:
+        """A claim in a shared ancestor carries no count from a hidden sibling."""
+        space = MarkSpace(
+            scopes=[
+                Scope(name="corp"),
+                Scope(name="corp/pub"),
+                Scope(name="corp/sec", visibility=ScopeVisibility.CLASSIFIED),
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        w = Agent(name="w", scopes={"corp/pub": ["intent"]})
+        s = Agent(name="s", scopes={"corp/sec": ["intent"]})
+        p = Agent(name="p", scopes={"corp": ["intent"]})
+        claim = Intent(scope="corp/pub", resource="r", action="a", confidence=0.5)
+        first = space.write(w, claim)
+        for _ in range(3):
+            space.write(
+                s, Intent(scope="corp/sec", resource="r", action="a", confidence=0.5)
+            )
+        space.write(p, Intent(scope="corp", resource="r", action="a", confidence=0.5))
+        second = space.write(w, claim)
+        times = [space.get_mark(m) for m in (first, second)]
+        assert [m.created_at for m in times if m is not None] == [
+            1_000_000.0,
+            math.nextafter(1_000_000.0, math.inf),
+        ]
+
+    def test_gc_drops_the_order_of_a_resource_with_no_claims(
+        self, space: MarkSpace, scope: Scope, agent: Agent
+    ) -> None:
+        space.write(
+            agent, Intent(scope=scope.name, resource="r", action="book", confidence=0.5)
+        )
+        assert space._last_claim_at
+        space.set_clock(1_000_000.0 + scope.decay.intent_ttl + 1)
+        assert space.gc() == 1
+        assert space._last_claim_at == {}
 
 
 # ---------------------------------------------------------------------------

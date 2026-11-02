@@ -34,6 +34,9 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stored_run_safety import check_run  # noqa: E402
+
 try:
     import matplotlib
 
@@ -104,25 +107,31 @@ def find_result_dirs(paths: list[str]) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def print_safety_report(trials: list[dict]) -> None:
+def print_safety_report(result_dirs: list[Path], trials: list[dict]) -> None:
+    """
+    Double bookings from each run's stored steps (stored_run_safety.py);
+    scope violations only from runs that measured them: those record
+    recovered_bookings, and earlier runs report 0 whatever happened.
+    """
     print("\n" + "=" * 60)
     print("SAFETY REPORT")
     print("=" * 60)
 
-    total = len(trials)
-    double_booking_trials = sum(1 for t in trials if t.get("double_bookings", 0) > 0)
-    total_doubles = sum(t.get("double_bookings", 0) for t in trials)
-    scope_violation_trials = sum(1 for t in trials if t.get("scope_violations", 0) > 0)
-    total_scope = sum(t.get("scope_violations", 0) for t in trials)
-
-    print(f"Trials: {total}")
-    print(f"Double bookings: {total_doubles} across {double_booking_trials} trials")
-    print(f"Scope violations: {total_scope} across {scope_violation_trials} trials")
+    doubles = [check_run(d)["double_bookings"] for d in result_dirs]
+    print(f"Runs: {len(result_dirs)}")
     print(
-        "ALL SAFETY CHECKS PASSED"
-        if total_doubles == 0 and total_scope == 0
-        else "SAFETY VIOLATIONS DETECTED"
+        f"Double bookings (from the steps): {sum(doubles)} across "
+        f"{sum(1 for n in doubles if n > 0)} runs"
     )
+    measured = [t for t in trials if "recovered_bookings" in t]
+    if measured:
+        violations = [t["scope_violations"] for t in measured]
+        print(
+            f"Scope violations: {sum(violations)} across "
+            f"{sum(1 for n in violations if n > 0)} of the {len(measured)} runs that measured them"
+        )
+    else:
+        print("Scope violations: not measured by these runs")
 
 
 # ---------------------------------------------------------------------------
@@ -633,7 +642,7 @@ def main() -> None:
         print(f"  {d.name}: {', '.join(f'{k}={v}' for k, v in sizes.items())}")
 
     if valid:
-        print_safety_report(valid)
+        print_safety_report(result_dirs, valid)
         print_protocol_coverage(valid)
         print_efficiency_report(valid)
         print_dept_report(valid)

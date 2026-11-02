@@ -22,9 +22,9 @@ Experiment code: [`orchestrate.py`](../../orchestrate.py), runner: [`run.py`](..
 
 | Metric | Result |
 |--------|--------|
-| Safety invariant breaches | **0** across all 6 trials |
-| Double bookings | **0** |
-| Scope violations | **0** |
+| Double bookings | **0** found (from the steps) |
+| Cross-department writes | **780 of 780** denied (from the steps; 2 by the harness before the guard) |
+| Scope violations | not measured ([trials analysis, section 6](../../analysis.md#6-cross-experiment-safety)) |
 | Total steps | 29,907 |
 | Total tokens | 89.7M prompt, 3.76M completion |
 | Total cost | **$19.82** |

@@ -1,3 +1,5 @@
 **/*.jsonl filter=lfs diff=lfs merge=lfs -text
 **/*.png filter=lfs diff=lfs merge=lfs -text
 *.jsonl filter=lfs diff=lfs merge=lfs -text
+experiments/stress_test/results_*/*.log filter=lfs diff=lfs merge=lfs -text
+experiments/stress_test/results_*/*.json filter=lfs diff=lfs merge=lfs -text

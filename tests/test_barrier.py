@@ -231,3 +231,24 @@ class TestAgentBarrier:
         assert barrier.needs_required("hr") is True
         assert barrier.needs_required("hr/payroll") is True
         assert barrier.needs_required("engineering") is False
+
+    def test_snapshot_answers_as_its_barrier(self) -> None:
+        """The guard reads snapshots: they apply the same revocation rules."""
+        barrier, _, _ = _make_barrier()
+        barrier.narrow("hr", "intent")
+        barrier.narrow_all("action")
+        snap = barrier.snapshot()
+        for scope in ("hr", "hr/payroll", "hrx", "eng", "eng/a"):
+            for mark_type in ("intent", "action", "observation"):
+                assert snap.is_allowed_checked(scope, mark_type) == (
+                    barrier.is_allowed_checked(scope, mark_type)
+                )
+        assert not snap.is_allowed_checked("hr/payroll", "intent")
+        assert not snap.is_allowed_checked("eng", "action")
+        assert snap.is_allowed_checked("hrx", "intent")
+        barrier.require_need("hr")
+        snap = barrier.snapshot()
+        for scope in ("hr", "hr/payroll", "hrx", "eng"):
+            assert snap.needs_required(scope) == barrier.needs_required(scope)
+        barrier.require_need_all()
+        assert barrier.snapshot().needs_required("eng")

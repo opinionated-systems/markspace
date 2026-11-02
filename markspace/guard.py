@@ -25,8 +25,11 @@ Spec Section 9.
 
 from __future__ import annotations
 
+import inspect
 import logging
+import math
 import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -49,16 +52,28 @@ from markspace.core import (
     Need,
     Observation,
     Scope,
+    ScopeVisibility,
     Severity,
     Warning,
     hours,
     resolve_conflict,
+    scope_contains,
+    scope_root,
 )
 from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
 from markspace.rate_limit import RateLimitTracker
-from markspace.space import MarkSpace, QuotaExceededError, ScopeError, ValidationError
+from markspace.space import (
+    IntentJudgement,
+    MarkSpace,
+    QuotaExceededError,
+    ScopeError,
+    ValidationError,
+)
 from markspace.telemetry import (
     METRIC_CONFLICTS_RESOLVED,
+    METRIC_LEASES_EXPIRED,
+    METRIC_LEASES_GRANTED,
+    METRIC_LEASES_LOST,
     METRIC_MARKS_WRITTEN,
     METRIC_TOKENS_INPUT,
     METRIC_TOKENS_OUTPUT,
@@ -145,6 +160,53 @@ class GuardVerdict(str, Enum):
     DENIED = "denied"  # Agent not authorized for this scope/action.
 
 
+class NotGrantedError(Exception):
+    """
+    An action written through the guard that no live grant covers (Section
+    6.5, G6): its lease expired or was lost, or a direct claim is refused.
+    Nothing is written.
+    """
+
+
+@dataclass(frozen=True, order=True)
+class FencingToken:
+    """
+    A fencing token (Section 6.5, G8). Tokens compare as (epoch, n): n grows
+    with every grant on one resource in one scope tree, within one epoch. An
+    outside system that rejects a token lower than one it has seen for the
+    resource rejects a stale holder. Burrows, "The Chubby lock service"
+    (sequencers), OSDI 2006.
+    """
+
+    epoch: int
+    n: int
+
+
+class ClaimState(str, Enum):
+    """The claim state of an intent (Section 6.5). Every state but GRANTED is final."""
+
+    GRANTED = "granted"  # holds a lease
+    ACTED = "acted"  # its agent's action superseded it; the action holds (P39)
+    RELEASED = "released"  # a failed action of its agent, or the principal
+    EXPIRED = "expired"  # its lease reached its expiry
+    LOST = "lost"  # refused or beaten; it never competes again
+
+
+@dataclass
+class _Claim:
+    """An intent the lease table holds: granted, or closed. No entry: pending."""
+
+    intent: Intent
+    state: ClaimState
+    token: FencingToken | None = None
+    expires_at: float | None = None
+
+
+def _competes(a: str, b: str) -> bool:
+    """Whether claims in scopes *a* and *b* compete: one contains the other."""
+    return scope_contains(a, b) or scope_contains(b, a)
+
+
 @dataclass
 class GuardDecision:
     """
@@ -161,6 +223,15 @@ class GuardDecision:
     intent_id: uuid.UUID | None = None  # ID of the intent written by this pre_action
     winning_intent: Intent | None = None
     conflicting_intents: list[Intent] = field(default_factory=list)
+    # Telemetry only: True when another agent's intent or action competed for
+    # the resource, including marks in scopes this agent may not read.
+    # Harnesses MUST NOT show it to the agent.
+    conflict_found: bool = field(default=False, repr=False)
+    # With ALLOW: the lease's fencing token and expiry (Section 6.5). The token
+    # goes to the tool and the outside system; harnesses MUST NOT show it to
+    # the agent (it counts grants on the resource, P25).
+    fencing_token: FencingToken | None = field(default=None, repr=False)
+    lease_expires_at: float | None = None
 
 
 @dataclass
@@ -214,7 +285,9 @@ class Guard:
         decision = guard.pre_action(agent, "calendar", "thu-14:00", "book", confidence=0.9)
         if decision.verdict == GuardVerdict.ALLOW:
             result = actual_tool_function()
-            guard.post_action(agent, "calendar", "thu-14:00", "booked", result)
+            guard.post_action(
+                agent, "calendar", "thu-14:00", "booked", result, decision.intent_id
+            )
 
         # Or use the wrapped executor:
         result = guard.execute(agent, "calendar", "thu-14:00", "book", "booked",
@@ -228,6 +301,7 @@ class Guard:
         principal_token: uuid.UUID | None = None,
         telemetry: TelemetrySink | None = None,
         content_policies: list[ContentPolicy] | None = None,
+        epoch: int | None = None,
     ) -> None:
         self.space = space
         self.envelope = envelope
@@ -267,6 +341,29 @@ class Guard:
                     ),
                 )
             )
+        # Grants (Section 6.5): the lease table, one fencing counter per
+        # (scope-tree root, resource), and the lease clock. The table's lock
+        # is taken inside the space lock, or alone for a single read; under it
+        # the guard calls only space methods that re-enter the space lock its
+        # thread holds.
+        # shortcut: the epoch defaults to the wall clock at construction; a
+        # clock that reads lower after a restart makes an outside system
+        # reject new tokens until it passes the old epoch. Pass an epoch from
+        # a persisted counter to fence across restarts.
+        self.epoch: int = time.time_ns() if epoch is None else epoch
+        self._claims: dict[uuid.UUID, _Claim] = {}
+        self._claims_by_resource: dict[tuple[str, str], set[uuid.UUID]] = {}
+        self._granted: dict[tuple[str, str], set[uuid.UUID]] = {}
+        # shortcut: one integer per (root, resource) ever granted stays in
+        # memory; drop counters below a persisted high-water mark when a space
+        # must run with unbounded resource names.
+        self._counters: dict[tuple[str, str], int] = {}
+        self._lease_now = -math.inf
+        self._claim_lock = threading.RLock()
+        # Grant telemetry (metric, labels), emitted after the locks are
+        # released: a sink is outside code.
+        self._lease_events: list[tuple[str, dict[str, str]]] = []
+        space.attach_claim_table(self)
         # Wire envelope to space write hooks
         if envelope is not None:
             envelope.add_exempt_agent(self._system_agent.id)
@@ -279,18 +376,213 @@ class Guard:
         Increments active count on entry, decrements on exit. Entries
         with active == 0 are eligible for cleanup via cleanup_locks().
         """
-        key = (scope, resource)
+        # Competing scopes (one contains the other) share their root, so they
+        # take the same lock (Section 6.1).
+        key = (scope_root(scope), resource)
         with self._meta_lock:
             if key not in self._resource_locks:
                 self._resource_locks[key] = _ResourceLock()
             entry = self._resource_locks[key]
             entry.active += 1
         try:
-            with entry.lock:
+            # Write hooks of writes made under this lock fire after it is
+            # released (Section 8.6).
+            with self.space.hooks_deferred(), entry.lock:
                 yield
         finally:
             with self._meta_lock:
                 entry.active -= 1
+
+    # ------------------------------------------------------------------
+    # Grants: the lease table (Section 6.5)
+    # ------------------------------------------------------------------
+
+    def on_supersede(self, mark: AnyMark) -> None:
+        """
+        The space stored *mark*, which supersedes mark.supersedes. Only the
+        intent's own agent may supersede it (Section 10), so a granted intent
+        superseded by its agent's action ends its lease: acted, or released
+        when the action failed or the mark is not an action.
+        """
+        if mark.supersedes is None:
+            return
+        with self._claim_lock:
+            claim = self._claims.get(mark.supersedes)
+            if claim is None:
+                return
+            if isinstance(mark, Action) and not mark.failed:
+                # post_action checked the lease under the space lock this
+                # write still holds: the action holds the resource.
+                if claim.state == ClaimState.GRANTED:
+                    self._end(claim, ClaimState.ACTED)
+                return
+            if self._live(claim, self._tick()):
+                self._end(claim, ClaimState.RELEASED)
+
+    def on_gc(self) -> None:
+        """gc ran: drop closed entries whose intent mark is gone (never a granted one)."""
+        with self._claim_lock:
+            gone = [
+                iid
+                for iid, c in self._claims.items()
+                if c.state != ClaimState.GRANTED and self.space.get_mark(iid) is None
+            ]
+            for iid in gone:
+                claim = self._claims.pop(iid)
+                key = (scope_root(claim.intent.scope), claim.intent.resource)
+                ids = self._claims_by_resource.get(key)
+                if ids is not None:
+                    ids.discard(iid)
+                    if not ids:
+                        del self._claims_by_resource[key]
+
+    def leases_and_closed(
+        self, scope: str, resource: str
+    ) -> tuple[list[uuid.UUID], set[uuid.UUID]]:
+        """See ClaimTable.leases_and_closed (markspace.space)."""
+        with self._claim_lock:
+            lease_now = self._tick()
+            leases = [
+                c.intent.id for c in self._live_leases(scope, resource, lease_now)
+            ]
+            closed = {
+                iid
+                for iid in self._claims_by_resource.get(
+                    (scope_root(scope), resource), ()
+                )
+                if _competes(self._claims[iid].intent.scope, scope)
+            }
+            return leases, closed
+
+    def claim_state(self, intent_id: uuid.UUID) -> ClaimState | None:
+        """
+        The claim state of an intent (Section 6.5): GRANTED, or how it was
+        closed; None while it is pending, or for an intent this guard has no
+        entry for. A lease past its expiry reads as EXPIRED.
+        """
+        with self.space.locked(), self._claim_lock:
+            claim = self._claims.get(intent_id)
+            if claim is None:
+                return None
+            self._live(claim, self._tick())
+            state = claim.state
+        self._emit_lease_events()
+        return state
+
+    def _tick(self) -> float:
+        """
+        The lease clock: never goes back, so a clock step back cannot make an
+        expired lease live again (Gray, Cheriton, "Leases", SOSP 1989).
+        Caller MUST hold _claim_lock.
+        """
+        self._lease_now = max(self._lease_now, self.space.now())
+        return self._lease_now
+
+    def _end(self, claim: _Claim, state: ClaimState) -> None:
+        """Close a granted claim. Caller MUST hold _claim_lock."""
+        key = (scope_root(claim.intent.scope), claim.intent.resource)
+        ids = self._granted.get(key)
+        if ids is not None:
+            ids.discard(claim.intent.id)
+            if not ids:
+                del self._granted[key]
+        claim.state = state
+        if state == ClaimState.EXPIRED:
+            self._lease_event(METRIC_LEASES_EXPIRED, claim.intent)
+
+    def _store(self, claim: _Claim) -> None:
+        """Record a new entry. Caller MUST hold _claim_lock."""
+        key = (scope_root(claim.intent.scope), claim.intent.resource)
+        self._claims[claim.intent.id] = claim
+        self._claims_by_resource.setdefault(key, set()).add(claim.intent.id)
+        if claim.state == ClaimState.GRANTED:
+            self._granted.setdefault(key, set()).add(claim.intent.id)
+
+    def _lose(self, intent: Intent) -> None:
+        """A pending intent was refused or beaten. Caller MUST hold _claim_lock."""
+        if intent.id not in self._claims:
+            self._store(_Claim(intent=intent, state=ClaimState.LOST))
+            self._lease_event(METRIC_LEASES_LOST, intent)
+
+    def _is_pending(self, intent: Intent) -> bool:
+        """No entry: written, not granted, not closed. Caller MUST hold _claim_lock."""
+        return intent.id not in self._claims
+
+    def _live(self, claim: _Claim, lease_now: float) -> bool:
+        """
+        Whether *claim* holds a live lease; one past its expiry is recorded as
+        expired, for good. Caller MUST hold _claim_lock.
+        """
+        if claim.state != ClaimState.GRANTED:
+            return False
+        assert claim.expires_at is not None  # a granted claim has an expiry
+        if lease_now >= claim.expires_at:
+            self._end(claim, ClaimState.EXPIRED)
+            return False
+        return True
+
+    def _live_leases(self, scope: str, resource: str, lease_now: float) -> list[_Claim]:
+        """
+        Live leases on *resource* in *scope*, its ancestors and its
+        descendants, lowest token first. Caller MUST hold _claim_lock.
+        """
+        live: list[_Claim] = []
+        for iid in list(self._granted.get((scope_root(scope), resource), ())):
+            claim = self._claims[iid]
+            if self._live(claim, lease_now) and _competes(claim.intent.scope, scope):
+                live.append(claim)
+        return sorted(
+            live, key=lambda c: (c.token.n if c.token else 0, str(c.intent.id))
+        )
+
+    def _grant(self, intent: Intent, lease_now: float) -> _Claim:
+        """
+        Grant a lease to *intent* for its scope's intent TTL, with the next
+        fencing token of its scope tree and resource. Caller MUST hold
+        _claim_lock and have checked G1.
+        """
+        key = (scope_root(intent.scope), intent.resource)
+        n = self._counters.get(key, 0) + 1
+        self._counters[key] = n
+        ttl = self.space.get_scope(intent.scope).decay.intent_ttl
+        claim = _Claim(
+            intent=intent,
+            state=ClaimState.GRANTED,
+            token=FencingToken(self.epoch, n),
+            expires_at=lease_now + ttl,
+        )
+        self._store(claim)
+        self._lease_event(METRIC_LEASES_GRANTED, intent)
+        return claim
+
+    def _held_action(
+        self, agent_id: uuid.UUID, scope: str, resource: str, now: float
+    ) -> Action | None:
+        """Another agent's held action on *resource* in a competing scope (P39)."""
+        return next(
+            (
+                a
+                for a in self.space.get_actions(scope, resource, now=now)
+                if not a.failed and a.agent_id != agent_id
+            ),
+            None,
+        )
+
+    def _lease_event(self, name: str, intent: Intent) -> None:
+        """Queue a lease metric: scope and resource, never the token."""
+        self._lease_events.append(
+            (name, {"scope": intent.scope, "resource": intent.resource})
+        )
+
+    def _emit_lease_events(self) -> None:
+        """Emit the grant telemetry queued under the locks."""
+        with self._claim_lock:
+            events, self._lease_events = self._lease_events, []
+        for name, labels in events:
+            try:
+                self._telemetry.record_counter(name, 1, labels)
+            except Exception:
+                logger.debug("Metric emission failed", exc_info=True)
 
     def cleanup_locks(self) -> int:
         """Remove resource locks with no active users. Returns count removed.
@@ -673,8 +965,20 @@ class Guard:
                 f"Use execute() or pre_action()/post_action() for contested writes."
             )
 
-        # Barrier check
+        # Barrier check. A warning that hides an action must also pass the
+        # barrier of the action's own scope (Section 9.5): a restricted agent
+        # could otherwise hide a booking there from another scope.
         barrier_result = self._check_barrier(agent, mark.scope, mark.mark_type)
+        if (
+            barrier_result is None
+            and isinstance(mark, Warning)
+            and mark.invalidates is not None
+        ):
+            target = self.space.get_mark(mark.invalidates)
+            if isinstance(target, Action) and target.scope != mark.scope:
+                barrier_result = self._check_barrier(
+                    agent, target.scope, MarkType.WARNING
+                )
         if barrier_result is not None:
             self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
             self._emit_telemetry(
@@ -807,29 +1111,44 @@ class Guard:
         self, agent: Agent, scope: str, mark_type: MarkType
     ) -> str | None:
         """Check barrier. Returns error message if blocked, None if allowed."""
-        with self._barrier_lock:
-            barrier = self._barriers.get(agent.id)
-            if barrier is None:
-                return None
-            if not barrier.is_allowed_checked(scope, mark_type.value):
+        return self._barrier_refusal(
+            agent, scope, mark_type, self.get_barrier(agent.id)
+        )
+
+    def _barrier_refusal(
+        self,
+        agent: Agent,
+        scope: str,
+        mark_type: MarkType,
+        barrier: BarrierSnapshot | None,
+        now: float | None = None,
+    ) -> str | None:
+        """
+        Why *barrier* blocks *agent* from writing *mark_type* in *scope*, or
+        None. It reads the space without the barrier lock: the barrier lock is
+        never held while the space is read, so a resolution boundary can hold
+        the space while it judges barriers it read before. now: the time of
+        the need read, as in read(); a boundary passes its own.
+        """
+        if barrier is None:
+            return None
+        if not barrier.is_allowed_checked(scope, mark_type.value):
+            return (
+                f"Agent '{agent.name}' blocked by barrier: "
+                f"{mark_type.value} revoked in scope '{scope}'"
+            )
+        if barrier.needs_required(scope) and mark_type != MarkType.NEED:
+            # Check for unresolved Need in this scope
+            needs = self.space.read(scope=scope, mark_type=MarkType.NEED, now=now)
+            has_unresolved = any(
+                isinstance(n, Need) and n.agent_id == agent.id and n.resolved_by is None
+                for n in needs
+            )
+            if not has_unresolved:
                 return (
-                    f"Agent '{agent.name}' blocked by barrier: "
-                    f"{mark_type.value} revoked in scope '{scope}'"
+                    f"Agent '{agent.name}' must write a Need mark in "
+                    f"scope '{scope}' before other writes (barrier requirement)"
                 )
-            if barrier.needs_required(scope) and mark_type != MarkType.NEED:
-                # Check for unresolved Need in this scope
-                needs = self.space.read(scope=scope, mark_type=MarkType.NEED)
-                has_unresolved = any(
-                    isinstance(n, Need)
-                    and n.agent_id == agent.id
-                    and n.resolved_by is None
-                    for n in needs
-                )
-                if not has_unresolved:
-                    return (
-                        f"Agent '{agent.name}' must write a Need mark in "
-                        f"scope '{scope}' before other writes (barrier requirement)"
-                    )
         return None
 
     def _check_envelope(self, agent: Agent, scope: str) -> str | None:
@@ -946,26 +1265,28 @@ class Guard:
         """
         Called before tool execution. Deterministic check:
         1. Is the agent authorized? (scope + mark type)
-        2. Are there conflicting intents on this resource?
-        3. If so, who wins?
+        2. Does another agent's action or lease hold the resource?
+        3. Does a competing intent win?
 
         For deferred scopes (Spec Section 6.2): writes intent and returns BLOCKED
         (pending resolution). The agent must wait for resolve_deferred().
 
-        Writes an intent mark if allowed. Returns decision.
+        Writes an intent mark if allowed. ALLOW grants it a lease with a
+        fencing token (Spec Section 6.5). Returns decision.
 
         The agent does NOT call this - the harness does, automatically,
         before every tool call that modifies a resource.
 
         WARNING: When using pre_action()/post_action() instead of execute(),
-        the caller is responsible for writing a failed Action mark (with
-        failed=True, supersedes=intent_id) if the tool throws. Without this,
-        the intent remains as a zombie until TTL expiry, blocking other agents.
-        Prefer execute() which handles this automatically.
+        the caller is responsible for calling post_action(..., intent_id,
+        failed=True) if the tool throws. Without this, the lease holds the
+        resource until it expires, blocking other agents. Prefer execute()
+        which handles this automatically.
 
         Thread safety: Per-resource locks serialize the read->write->read->decide
         sequence for each (scope, resource) pair. Different resources proceed
-        concurrently. Lock ordering: resource_lock -> space._lock.
+        concurrently. Lock ordering: resource_lock -> space._lock -> the lease
+        table's lock.
         """
         with self._resource_lock(scope, resource):
             return self._pre_action_inner(agent, scope, resource, action, confidence)
@@ -1024,11 +1345,8 @@ class Guard:
         # If the resource is already claimed (action mark exists from another agent),
         # reject immediately. The intent-vs-intent conflict resolution only applies
         # when two agents are both still in the planning phase.
-        existing_actions = self.space.read(
-            scope=scope,
-            resource=resource,
-            mark_type=MarkType.ACTION,
-        )
+        # Includes actions in ancestor and descendant scopes (P39).
+        existing_actions = self.space.get_actions(scope, resource)
         # Filter out failed actions - they record that a tool threw but
         # don't claim the resource. Without this, a failed tool execution
         # permanently blocks the resource for all agents.
@@ -1045,108 +1363,262 @@ class Guard:
             # a potential detection blind spot - audit accordingly.
             if self.envelope is not None:
                 self.envelope.record_attempt(agent.id, MarkType.INTENT)
+            # Name the claimant only if this agent may see its mark (P22).
+            claimant = blocking_actions[0]
+            claimed_by = (
+                f" (agent_id={claimant.agent_id})"
+                if self.space.visible_form(claimant, agent) is not None
+                else ""
+            )
             return GuardDecision(
                 verdict=GuardVerdict.CONFLICT,
-                reason=f"Resource '{resource}' already claimed by action mark "
-                f"(agent_id={blocking_actions[0].agent_id})",
+                reason=f"Resource '{resource}' already claimed by action mark"
+                f"{claimed_by}",
+                conflict_found=True,
             )
 
-        # Write this agent's intent
-        intent_id = self.space.write(
-            agent,
-            Intent(
-                scope=scope,
-                resource=resource,
-                action=action,
-                confidence=confidence,
+        # Write this agent's intent and decide under one hold of the space: no
+        # write, gc or clock step runs between them (an intent the clock
+        # passed in between would be judged dead). Its write hooks fire when
+        # the hold ends.
+        scope_def = self.space.get_scope(scope)
+        need = False
+        with self.space.locked():
+            intent_id = self.space.write(
+                agent,
+                Intent(
+                    scope=scope,
+                    resource=resource,
+                    action=action,
+                    confidence=confidence,
+                ),
+            )
+            if scope_def.deferred:
+                # Deferred resolution (Spec Section 6.2): BLOCKED until
+                # resolve_deferred() is called.
+                return GuardDecision(
+                    verdict=GuardVerdict.BLOCKED,
+                    intent_id=intent_id,
+                    reason="Deferred resolution - pending resolution boundary",
+                )
+            # Immediate mode (Section 6.5, G3), with one time for marks and
+            # one for leases.
+            now = self.space.now()
+            with self._claim_lock:
+                decision, need = self._decide_immediate(
+                    agent, scope, resource, intent_id, now
+                )
+        if need and agent.can_write(scope, MarkType.NEED):
+            # The Need is informational for the principal; BLOCKED holds
+            # without it.
+            self.space.write(
+                agent,
+                Need(
+                    scope=scope,
+                    question=f"Conflict on {resource}: multiple agents want to {action}. Who proceeds?",
+                    context={
+                        "resource": resource,
+                        "action": action,
+                        "agent": agent.name,
+                    },
+                    priority=0.8,
+                    blocking=True,
+                ),
+            )
+        self._emit_lease_events()
+        return decision
+
+    def _decide_immediate(
+        self,
+        agent: Agent,
+        scope: str,
+        resource: str,
+        intent_id: uuid.UUID,
+        now: float,
+    ) -> tuple[GuardDecision, bool]:
+        """
+        G3 rules 4 to 7 for the intent just written: a competitor that beats
+        it, a YIELD_ALL pair, another agent's lease, else a grant. Returns the
+        decision and whether a Need mark is due. Caller MUST hold the
+        resource lock, the space lock and _claim_lock.
+        """
+        lease_now = self._tick()
+        all_intents = self.space.get_intents(scope, resource, now=now)
+        own = next((i for i in all_intents if i.id == intent_id), None)
+        if own is None:
+            raise ValueError(f"Intent {intent_id} not active on {scope}/{resource}")
+        # Intents this agent may see (P22): a decision names no intent from a
+        # scope the agent cannot read. The verdict still counts every intent.
+        others = [
+            i for i in all_intents if i.id != intent_id and self._visible_to(i, agent)
+        ]
+        leases = [
+            c
+            for c in self._live_leases(scope, resource, lease_now)
+            if c.intent.agent_id != agent.id
+        ]
+        pending_others = [
+            o
+            for o in all_intents
+            if o.agent_id != agent.id and o.id != intent_id and self._is_pending(o)
+        ]
+        competed = bool(leases or pending_others)
+
+        def emit(outcome: str) -> None:
+            policy = self.space.get_scope(scope).conflict_policy.value
+            self._lease_events.append(
+                (
+                    METRIC_CONFLICTS_RESOLVED,
+                    {"scope": scope, "policy": policy, "outcome": outcome},
+                )
+            )
+
+        # Rule 4: a live lease, or a pending candidate in an ancestor deferred
+        # scope (outer scope first among waiting claims), that beats it. A
+        # candidate that a held action holds off can never be granted: it is
+        # lost and does not count.
+        beaters = [c.intent for c in leases if self.space.outranks(c.intent, own)]
+        for o in pending_others:
+            if (
+                o.scope == scope
+                or not scope_contains(o.scope, scope)
+                or not self.space.get_scope(o.scope).deferred
+            ):
+                continue
+            if self._held_action(o.agent_id, o.scope, resource, now) is not None:
+                self._lose(o)
+                continue
+            if self.space.outranks(o, own):
+                beaters.append(o)
+        if beaters:
+            self._lose(own)
+            emit("resolved")
+            return (
+                self._yield_decision(agent, intent_id, self._first(beaters), others),
+                False,
+            )
+
+        # Rule 5: a YIELD_ALL pair with another agent's pending intent or
+        # lease goes to the principal; the intent stays pending.
+        pending_others = [o for o in pending_others if self._is_pending(o)]
+        if any(
+            self.space.outranks(own, o) is None
+            for o in [*pending_others, *(c.intent for c in leases)]
+        ):
+            emit("yield_all")
+            return (
+                GuardDecision(
+                    verdict=GuardVerdict.BLOCKED,
+                    intent_id=intent_id,
+                    reason="YIELD_ALL policy - principal decision required",
+                    conflicting_intents=others,
+                    conflict_found=True,
+                ),
+                True,
+            )
+
+        # Rule 6: a granted lease is not pre-empted.
+        if leases:
+            self._lose(own)
+            emit("resolved")
+            return (
+                self._yield_decision(agent, intent_id, leases[0].intent, others),
+                False,
+            )
+
+        # Rule 7: grant.
+        claim = self._grant(own, lease_now)
+        if competed or len(all_intents) > 1:
+            emit("resolved")
+        return (
+            GuardDecision(
+                verdict=GuardVerdict.ALLOW,
+                intent_id=intent_id,
+                # Name the conflict only if this agent can see a competitor;
+                # else the same reason as an agent alone, so nothing hidden
+                # shows.
+                reason="This agent wins the conflict" if others else "No conflict",
+                conflicting_intents=others,
+                conflict_found=competed or len(all_intents) > 1,
+                fencing_token=claim.token,
+                lease_expires_at=claim.expires_at,
             ),
+            False,
         )
 
-        # Deferred resolution (Spec Section 6.2): write intent but don't resolve yet.
-        # Agent gets BLOCKED until resolve_deferred() is called.
-        scope_def = self.space.get_scope(scope)
-        if scope_def.deferred:
-            return GuardDecision(
-                verdict=GuardVerdict.BLOCKED,
-                intent_id=intent_id,
-                reason="Deferred resolution - pending resolution boundary",
-            )
+    def _first(self, beaters: list[Intent]) -> Intent:
+        """
+        The beater to name: in the outermost scope, the first in that scope's
+        order. Beaters lie on one chain of scopes, one scope per depth.
+        """
+        depth = min(b.scope.count("/") for b in beaters)
+        group = [b for b in beaters if b.scope.count("/") == depth]
+        policy = self.space.get_scope(group[0].scope).conflict_policy
+        winner_id = resolve_conflict(group, policy)
+        return next((b for b in group if b.id == winner_id), group[0])
 
-        # Check for conflicts with other intents (concurrent planning phase)
-        all_intents = self.space.get_intents(scope, resource)
-        if len(all_intents) <= 1:
-            # No conflict - this agent is the only one
-            return GuardDecision(
-                verdict=GuardVerdict.ALLOW,
-                intent_id=intent_id,
-                reason="No conflict",
-            )
-
-        # Resolve conflict
-        winner_id = resolve_conflict(all_intents, scope_def.conflict_policy)
-        try:
-            outcome = "yield_all" if winner_id is None else "resolved"
-            self._telemetry.record_counter(
-                METRIC_CONFLICTS_RESOLVED,
-                1,
-                {
-                    "scope": scope,
-                    "policy": scope_def.conflict_policy.value,
-                    "outcome": outcome,
-                },
-            )
-        except Exception:
-            logger.debug("Conflict metric emission failed", exc_info=True)
-
-        if winner_id is None:
-            # YIELD_ALL - everyone must wait for principal.
-            # Only write the Need mark if the agent has permission. The
-            # BLOCKED verdict is returned regardless - the Need is
-            # informational for the principal, not required for blocking.
-            if agent.can_write(scope, MarkType.NEED):
-                self.space.write(
-                    agent,
-                    Need(
-                        scope=scope,
-                        question=f"Conflict on {resource}: multiple agents want to {action}. Who proceeds?",
-                        context={
-                            "resource": resource,
-                            "action": action,
-                            "agent": agent.name,
-                        },
-                        priority=0.8,
-                        blocking=True,
-                    ),
-                )
-            return GuardDecision(
-                verdict=GuardVerdict.BLOCKED,
-                intent_id=intent_id,
-                reason="YIELD_ALL policy - principal decision required",
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
-            )
-
-        if winner_id == intent_id:
-            return GuardDecision(
-                verdict=GuardVerdict.ALLOW,
-                intent_id=intent_id,
-                reason="This agent wins the conflict",
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
-            )
-        else:
-            winner = next((i for i in all_intents if i.id == winner_id), None)
-            if winner is None:
-                raise ValueError(
-                    f"resolve_conflict returned winner_id={winner_id} "
-                    f"not found in intents for {scope}/{resource}"
-                )
+    def _yield_decision(
+        self,
+        agent: Agent,
+        intent_id: uuid.UUID,
+        winner: Intent,
+        others: list[Intent],
+    ) -> GuardDecision:
+        """CONFLICT for an intent that yields to *winner*, named only if visible."""
+        if not self._visible_to(winner, agent):
             return GuardDecision(
                 verdict=GuardVerdict.CONFLICT,
                 intent_id=intent_id,
-                reason=f"Agent '{agent.name}' yields to intent {winner_id} "
-                f"(confidence={winner.confidence}, created_at={winner.created_at})",
-                winning_intent=winner,
-                conflicting_intents=[i for i in all_intents if i.id != intent_id],
+                reason=f"Agent '{agent.name}' yields to an intent in a scope "
+                f"it cannot read",
+                conflicting_intents=others,
+                conflict_found=True,
             )
+        return GuardDecision(
+            verdict=GuardVerdict.CONFLICT,
+            intent_id=intent_id,
+            reason=f"Agent '{agent.name}' yields to intent {winner.id} "
+            f"(confidence={winner.confidence}, created_at={winner.created_at})",
+            winning_intent=winner,
+            conflicting_intents=others,
+            conflict_found=True,
+        )
+
+    def _deferred_refusal(
+        self,
+        intent: Intent,
+        agents: dict[uuid.UUID, Agent] | None,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        now: float,
+    ) -> str | None:
+        """
+        Why a deferred intent may not take part at a resolution boundary, or
+        None. Checked only when the caller passes the agents mapping: the
+        agent must be known, still authorized for the intent's own scope, and
+        not blocked by the barrier there.
+        """
+        if agents is None:
+            return None
+        agent = agents.get(intent.agent_id)
+        if agent is None:
+            return "Agent not found at resolution time"
+        if not agent.can_write(intent.scope, MarkType.INTENT) or not agent.can_write(
+            intent.scope, MarkType.ACTION
+        ):
+            return f"Agent '{agent.name}' authorization revoked since pre_action"
+        barrier = barriers.get(agent.id)
+        if self._barrier_refusal(agent, intent.scope, MarkType.INTENT, barrier, now):
+            return f"Agent '{agent.name}' blocked by barrier at resolution time"
+        return None
+
+    def _visible_to(self, mark: AnyMark, agent: Agent | None) -> bool:
+        """
+        Whether a decision may name *mark* to *agent* (P22, P38). An unknown
+        agent (None) may see only marks in OPEN scopes.
+        """
+        if agent is None:
+            return self.space.get_scope(mark.scope).visibility == ScopeVisibility.OPEN
+        return self.space.visible_form(mark, agent) is not None
 
     def resolve_deferred(
         self,
@@ -1155,9 +1627,10 @@ class Guard:
         agents: dict[uuid.UUID, Agent] | None = None,
     ) -> dict[uuid.UUID, GuardDecision]:
         """
-        Deferred resolution boundary. Collects all active intents on
-        (scope, resource) and applies the scope's conflict policy to the
-        full set. Returns a mapping of agent_id -> GuardDecision.
+        Deferred resolution boundary. Collects the active intents on
+        (scope, resource), its ancestors and its descendants, and judges each
+        against its own competing set (Section 6.1), all at one time. Returns
+        a mapping of agent_id -> GuardDecision.
 
         If an agent has multiple active intents on the same resource, the
         best verdict is kept (ALLOW > BLOCKED > CONFLICT > DENIED).
@@ -1165,7 +1638,10 @@ class Guard:
         agents: optional mapping of agent_id -> Agent for re-verifying
             authorization at resolution time. If provided, agents whose
             permissions have been revoked since pre_action will receive
-            DENIED and be excluded from conflict resolution.
+            DENIED and be excluded from conflict resolution. An agent missing
+            from the mapping also receives DENIED, but its intents stay pending
+            and still count against the intents they beat: it cannot be
+            checked.
 
         Spec Section 6.2 (Phase 3: Batch resolution).
 
@@ -1179,109 +1655,388 @@ class Guard:
         boundary fires before intent TTLs expire, or handle the empty-result
         case by re-issuing intents.
         """
+        # The caller's agents map is copied once. Each agent's barrier is read
+        # once, inside the resource lock, so a restriction applied while the
+        # boundary waits for that lock counts, and before the space is held:
+        # the barrier lock is never held while the space is held (Section
+        # 6.2.3).
+        if agents is not None:
+            agents = dict(agents)
         with self._resource_lock(scope, resource):
-            scope_def = self.space.get_scope(scope)
-            all_intents = self.space.get_intents(scope, resource)
+            barriers = {a: self.get_barrier(a) for a in agents} if agents else {}
+            with self.space.locked():
+                results = self._resolve_locked(scope, resource, agents, barriers)
+        self._emit_lease_events()
+        return results
 
-            if not all_intents:
-                return {}
+    def _resolve_locked(
+        self,
+        scope: str,
+        resource: str,
+        agents: dict[uuid.UUID, Agent] | None,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+    ) -> dict[uuid.UUID, GuardDecision]:
+        """
+        resolve_deferred() under its resource lock and the space lock. The
+        boundary is atomic: no write, gc or read by another thread runs until
+        it returns, so every competing set it reads shows one state.
+        """
+        # One time for every read of marks, one for leases: an intent that
+        # expires during the boundary must not count in one competing set and
+        # not in another.
+        now = self.space.now()
+        all_intents = self.space.get_intents(scope, resource, now=now)
 
-            results: dict[uuid.UUID, GuardDecision] = {}
+        if not all_intents:
+            return {}
 
-            # Re-verify authorization if agent objects are provided.
-            # Filter out intents from agents whose permissions were revoked
-            # between pre_action (deferred) and resolution.
-            eligible_intents = all_intents
-            if agents is not None:
-                eligible_intents = []
-                for intent in all_intents:
-                    agent = agents.get(intent.agent_id)
-                    if agent is None:
-                        # Unknown agent - deny
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason="Agent not found at resolution time",
-                            ),
-                        )
-                    elif not agent.can_write(
-                        scope, MarkType.INTENT
-                    ) or not agent.can_write(scope, MarkType.ACTION):
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason=f"Agent '{agent.name}' authorization revoked since pre_action",
-                            ),
-                        )
-                    elif self._check_barrier(agent, scope, MarkType.INTENT) is not None:
-                        _update_best_decision(
-                            results,
-                            intent.agent_id,
-                            GuardDecision(
-                                verdict=GuardVerdict.DENIED,
-                                intent_id=intent.id,
-                                reason=f"Agent '{agent.name}' blocked by barrier at resolution time",
-                            ),
-                        )
-                    else:
-                        eligible_intents.append(intent)
+        with self._claim_lock:
+            lease_now = self._tick()
+            return self._judge_boundary(
+                resource, agents, barriers, now, lease_now, all_intents
+            )
 
-            if not eligible_intents:
-                return results
+    def _judge_boundary(
+        self,
+        resource: str,
+        agents: dict[uuid.UUID, Agent] | None,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        now: float,
+        lease_now: float,
+        all_intents: list[Intent],
+    ) -> dict[uuid.UUID, GuardDecision]:
+        """
+        G4 (Section 6.5) on the boundary's candidates: the pending intents in
+        its scope, its ancestors and its descendants. Caller MUST hold the
+        resource lock, the space lock and _claim_lock.
+        """
+        results: dict[uuid.UUID, GuardDecision] = {}
 
-            # P14: Consider ALL eligible active intents (get_intents already
-            # filters by strength > 0 and respects TTL/supersession).
-            winner_id = resolve_conflict(eligible_intents, scope_def.conflict_policy)
+        # Each intent is checked once per boundary: a barrier or a
+        # permission that changes during the boundary must not make one
+        # intent eligible to win and absent from other intents' sets.
+        refusals: dict[uuid.UUID, str | None] = {}
 
-            # Pre-index for O(1) lookup and per-intent conflict lists.
-            intent_by_id = {i.id: i for i in eligible_intents}
-            others_by_id = {
-                i.id: [o for o in eligible_intents if o.id != i.id]
-                for i in eligible_intents
-            }
-            winner = intent_by_id.get(winner_id) if winner_id is not None else None
-            if winner_id is not None and winner is None:
-                raise ValueError(
-                    f"resolve_conflict returned winner_id={winner_id} "
-                    f"not found in eligible intents for {scope}/{resource}"
-                )
+        def refusal_of(o: Intent) -> str | None:
+            if o.id not in refusals:
+                refusals[o.id] = self._deferred_refusal(o, agents, barriers, now)
+            return refusals[o.id]
 
-            for intent in eligible_intents:
-                others = others_by_id[intent.id]
-                if winner_id is not None and intent.id == winner_id:
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.ALLOW,
-                        intent_id=intent.id,
-                        reason="Deferred resolution - this agent wins",
-                        conflicting_intents=others,
-                    )
-                elif winner_id is None:
-                    # YIELD_ALL - all blocked
-                    decision = GuardDecision(
-                        verdict=GuardVerdict.BLOCKED,
-                        intent_id=intent.id,
-                        reason="YIELD_ALL - principal decision required",
-                        conflicting_intents=others,
-                    )
+        # An intent whose agent is in the mapping and fails a check takes
+        # no part in any comparison (P14), also outside this boundary's
+        # set. An agent missing from the mapping cannot be checked, so its
+        # intents still count, and stay pending.
+        def is_refused(o: Intent) -> bool:
+            return (
+                agents is not None
+                and o.agent_id in agents
+                and refusal_of(o) is not None
+            )
+
+        candidates: list[Intent] = []
+        for intent in all_intents:
+            if not self._is_pending(intent):
+                continue
+            # An intent pending in an immediate scope went to the principal
+            # (G3 rule 5): it counts here and only the principal grants it,
+            # but an agent that fails a check loses it here too.
+            deferred = self.space.get_scope(intent.scope).deferred
+            refusal = refusal_of(intent)
+            if refusal is None:
+                if deferred:
+                    candidates.append(intent)
+                continue
+            if is_refused(intent):
+                self._lose(intent)
+            elif not deferred:
+                continue  # its agent cannot be checked: it keeps waiting
+            _update_best_decision(
+                results,
+                intent.agent_id,
+                GuardDecision(
+                    verdict=GuardVerdict.DENIED,
+                    intent_id=intent.id,
+                    reason=refusal,
+                ),
+            )
+
+        if not candidates:
+            return results
+
+        # Each candidate's competing set, read once per scope: every intent
+        # (for the names a decision lists), and the pending ones that take
+        # part in judging. A pending intent that a held action holds off can
+        # never be granted: it is lost and takes no part.
+        competing: dict[str, list[Intent]] = {}
+        held: dict[tuple[uuid.UUID, str], Action | None] = {}
+
+        def held_off(o: Intent) -> Action | None:
+            key = (o.agent_id, o.scope)
+            if key not in held:
+                held[key] = self._held_action(o.agent_id, o.scope, resource, now)
+            return held[key]
+
+        tree: dict[uuid.UUID, Intent] = {}
+        for intent in candidates:
+            if intent.scope in competing:
+                continue
+            competing[intent.scope] = [
+                o
+                for o in self.space.get_intents(intent.scope, resource, now=now)
+                if not is_refused(o)
+            ]
+            for o in competing[intent.scope]:
+                if o.id in tree or not self._is_pending(o):
+                    continue
+                if held_off(o) is not None:
+                    self._lose(o)
+                    continue
+                tree[o.id] = o
+        judged = self.space.judge_all(list(tree.values()))
+
+        # Classify: held off by an action, beaten, to the principal, waiting
+        # behind a lease, or a winner.
+        leases_of: dict[str, list[_Claim]] = {}
+
+        def leases_for(o: Intent) -> list[_Claim]:
+            if o.scope not in leases_of:
+                leases_of[o.scope] = self._live_leases(o.scope, resource, lease_now)
+            return [c for c in leases_of[o.scope] if c.intent.agent_id != o.agent_id]
+
+        winners: dict[uuid.UUID, list[Intent]] = {}
+        for intent in candidates:
+            if intent.id in tree and judged[intent.id].wins and not leases_for(intent):
+                winners.setdefault(intent.agent_id, []).append(intent)
+        granted: dict[uuid.UUID, _Claim] = {}
+        for agent_id, own_winners in winners.items():
+            # One grant per agent per boundary: the outermost, then the earliest.
+            first = min(
+                own_winners,
+                key=lambda i: (i.scope.count("/"), i.created_at, str(i.id)),
+            )
+            granted[first.id] = self._grant(first, lease_now)
+
+        # A decision names the other intents its receiver may see: what a
+        # receiver may see depends only on the mark's scope, so each
+        # (receiver, scope) is checked once, and each scope's intents are
+        # listed once and sliced around the intent itself.
+        visible: dict[tuple[uuid.UUID | None, str], bool] = {}
+        listed: dict[str, dict[str, list[Intent]]] = {}
+        # An intent's index in each listing: the listings of two scopes
+        # can order the same intents differently.
+        position: dict[tuple[str, uuid.UUID], int] = {}
+        for intent in candidates:
+            # Each decision names only intents its receiver may see (P22,
+            # P38). Without the agents mapping the receiver is unknown,
+            # and only intents in OPEN scopes are named.
+            receiver = agents.get(intent.agent_id) if agents is not None else None
+            own_set = competing[intent.scope]
+            if intent.scope not in listed:
+                listed[intent.scope] = {}
+                for o in own_set:
+                    group = listed[intent.scope].setdefault(o.scope, [])
+                    position[(intent.scope, o.id)] = len(group)
+                    group.append(o)
+            visible_others: list[Intent] = []
+            for sc, group in listed[intent.scope].items():
+                key = (receiver.id if receiver is not None else None, sc)
+                if key not in visible:
+                    visible[key] = self._visible_to(group[0], receiver)
+                if not visible[key]:
+                    continue
+                if sc == intent.scope:
+                    k = position[(intent.scope, intent.id)]
+                    visible_others += group[:k] + group[k + 1 :]
                 else:
-                    assert winner is not None  # validated above
+                    visible_others += group
+            has_others = len(own_set) > 1
+            claimant = held_off(intent)
+            if claimant is not None:
+                # P39 at the boundary: a completed action holds the resource.
+                claimed_by = (
+                    f" (agent_id={claimant.agent_id})"
+                    if self._visible_to(claimant, receiver)
+                    else ""
+                )
+                decision = GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent.id,
+                    reason=f"Deferred resolution - resource already claimed "
+                    f"by action mark{claimed_by}",
+                    conflicting_intents=visible_others,
+                    conflict_found=True,
+                )
+                _update_best_decision(results, intent.agent_id, decision)
+                continue
+            judgement = judged[intent.id]
+            winner = judgement.winner
+            if intent.id in granted:
+                claim = granted[intent.id]
+                decision = GuardDecision(
+                    verdict=GuardVerdict.ALLOW,
+                    intent_id=intent.id,
+                    reason="Deferred resolution - this agent wins",
+                    conflicting_intents=visible_others,
+                    conflict_found=has_others,
+                    fencing_token=claim.token,
+                    lease_expires_at=claim.expires_at,
+                )
+            elif winner is not None and winner.id in granted:
+                # Beaten by a candidate granted now: lost.
+                self._lose(intent)
+                if self._visible_to(winner, receiver):
                     decision = GuardDecision(
                         verdict=GuardVerdict.CONFLICT,
                         intent_id=intent.id,
                         reason=f"Deferred resolution - yields to agent "
                         f"'{winner.agent_id}' (confidence={winner.confidence})",
                         winning_intent=winner,
-                        conflicting_intents=others,
+                        conflicting_intents=visible_others,
+                        conflict_found=True,
                     )
-                _update_best_decision(results, intent.agent_id, decision)
+                else:
+                    decision = GuardDecision(
+                        verdict=GuardVerdict.CONFLICT,
+                        intent_id=intent.id,
+                        reason="Deferred resolution - yields to an intent in a "
+                        "scope this agent cannot read",
+                        conflicting_intents=visible_others,
+                        conflict_found=True,
+                    )
+            elif judgement.yield_all:
+                # YIELD_ALL - the principal decides; no mark is written here.
+                decision = GuardDecision(
+                    verdict=GuardVerdict.BLOCKED,
+                    intent_id=intent.id,
+                    reason="YIELD_ALL - principal decision required",
+                    conflicting_intents=visible_others,
+                    conflict_found=has_others,
+                )
+            else:
+                # Waits: behind a waiting beater, a live lease, or its own
+                # agent's grant at this boundary. It stays pending.
+                decision = GuardDecision(
+                    verdict=GuardVerdict.BLOCKED,
+                    intent_id=intent.id,
+                    reason="Deferred resolution - waits for a claim that holds "
+                    "or precedes it",
+                    conflicting_intents=visible_others,
+                    conflict_found=True,
+                )
+            _update_best_decision(results, intent.agent_id, decision)
 
-            return results
+        return results
+
+    # ------------------------------------------------------------------
+    # Principal grant and release (Section 6.5, G5)
+    # ------------------------------------------------------------------
+
+    def grant(self, intent_id: uuid.UUID, principal_token: uuid.UUID) -> GuardDecision:
+        """
+        The principal grants a pending intent whose mark is live, if no other
+        agent holds the resource in a competing scope (G1): ALLOW with the
+        token and expiry, or CONFLICT naming the holder. A wrong principal
+        token gets DENIED; an intent that is not pending gets CONFLICT.
+        """
+        if principal_token != self._principal_token:
+            return GuardDecision(
+                verdict=GuardVerdict.DENIED, reason="Wrong principal token"
+            )
+        mark = self.space.get_mark(intent_id)
+        if not isinstance(mark, Intent):
+            return GuardDecision(
+                verdict=GuardVerdict.CONFLICT,
+                intent_id=intent_id,
+                reason="No live intent with this id",
+            )
+        with self._resource_lock(mark.scope, mark.resource):
+            with self.space.locked():
+                now = self.space.now()
+                live = any(
+                    i.id == intent_id
+                    for i in self.space.get_intents(mark.scope, mark.resource, now=now)
+                )
+                with self._claim_lock:
+                    lease_now = self._tick()
+                    decision = self._grant_checked(mark, live, now, lease_now)
+        self._emit_lease_events()
+        return decision
+
+    def _grant_checked(
+        self, intent: Intent, live: bool, now: float, lease_now: float
+    ) -> GuardDecision:
+        """grant() under its locks. Caller MUST hold all three."""
+        if not live or not self._is_pending(intent):
+            return GuardDecision(
+                verdict=GuardVerdict.CONFLICT,
+                intent_id=intent.id,
+                reason="The intent is not pending",
+            )
+        action = self._held_action(intent.agent_id, intent.scope, intent.resource, now)
+        if action is not None:
+            return GuardDecision(
+                verdict=GuardVerdict.CONFLICT,
+                intent_id=intent.id,
+                reason=f"Resource '{intent.resource}' already claimed by action "
+                f"mark {action.id}",
+                conflict_found=True,
+            )
+        leases = [
+            c
+            for c in self._live_leases(intent.scope, intent.resource, lease_now)
+            if c.intent.agent_id != intent.agent_id
+        ]
+        if leases:
+            return GuardDecision(
+                verdict=GuardVerdict.CONFLICT,
+                intent_id=intent.id,
+                reason=f"Intent {leases[0].intent.id} holds a lease on "
+                f"'{intent.resource}'",
+                winning_intent=leases[0].intent,
+                conflict_found=True,
+            )
+        claim = self._grant(intent, lease_now)
+        return GuardDecision(
+            verdict=GuardVerdict.ALLOW,
+            intent_id=intent.id,
+            reason="Granted by the principal",
+            fencing_token=claim.token,
+            lease_expires_at=claim.expires_at,
+        )
+
+    def release(self, intent_id: uuid.UUID, principal_token: uuid.UUID) -> bool:
+        """
+        The principal ends a lease or closes a pending intent (released).
+        Returns False for a wrong token, an unknown intent or a closed one.
+        """
+        if principal_token != self._principal_token:
+            return False
+        with self._claim_lock:
+            claim = self._claims.get(intent_id)
+        if claim is not None:
+            scope, resource = claim.intent.scope, claim.intent.resource
+        else:
+            mark = self.space.get_mark(intent_id)
+            if not isinstance(mark, Intent):
+                return False
+            scope, resource = mark.scope, mark.resource
+        try:
+            with self._resource_lock(scope, resource):
+                with self.space.locked():
+                    with self._claim_lock:
+                        claim = self._claims.get(intent_id)
+                        if claim is None:
+                            mark = self.space.get_mark(intent_id)
+                            if not isinstance(mark, Intent):
+                                return False
+                            self._store(_Claim(intent=mark, state=ClaimState.RELEASED))
+                            return True
+                        if not self._live(claim, self._tick()):
+                            return False  # closed, or found expired just now
+                        self._end(claim, ClaimState.RELEASED)
+                        return True
+        finally:
+            self._emit_lease_events()
 
     def post_action(
         self,
@@ -1291,74 +2046,133 @@ class Guard:
         action: str,
         result: Any,
         intent_id: uuid.UUID | None = None,
+        failed: bool = False,
     ) -> uuid.UUID:
         """
-        Called after tool execution succeeds. Writes an action mark
-        (and supersedes the intent if provided).
+        Called after tool execution. Writes an action mark that supersedes
+        the intent, only under a live grant (Section 6.5, G6):
 
-        Section 6.3 (Post-Action Resolution): If another agent already wrote
-        a successful action on this resource (race condition where both got
-        ALLOW before either wrote its action), the later action supersedes
-        the earlier one. The intent expires via TTL. The agent whose action
-        was superseded SHOULD be notified via a warning mark (not implemented
-        here - left to the harness).
+        - failed=True: writes the failed action, which holds nothing, and
+          ends the lease if it is live: intent_id's, or without intent_id
+          this agent's live lease on this scope and resource. It never
+          raises for a lease.
+        - With intent_id: only if that intent holds a live lease of this
+          agent, scope and resource, and no other agent holds the resource
+          (G1; a warning on another agent's action may have decayed).
+        - Without intent_id: under this agent's live lease on this scope and
+          resource if it has one; else a direct claim, only in an immediate
+          scope that is not YIELD_ALL, when no other agent holds the
+          resource and no other agent's pending intent competes.
+
+        Otherwise raises NotGrantedError and writes nothing.
 
         The agent does NOT call this - the harness does, automatically,
-        after every successful tool call.
-
-        WARNING: If the tool threw an exception, call this with a failed
-        Action mark instead (failed=True) to free the resource. See
-        execute() for the reference pattern. Failing to do so leaves
-        the intent as a zombie until TTL expiry.
-
-        Limitation (three-way race): If 3+ agents all get ALLOW and finish
-        their tools concurrently, each post_action supersedes at most one
-        prior action (the first it finds via read()). With agents A, B, C
-        finishing in that order: B supersedes A, C supersedes B - correct.
-        But if B and C both run post_action before either's write is visible,
-        both supersede A, leaving two unsuperseded actions. The mark's
-        ``supersedes`` field is a single UUID, so chaining is not possible
-        without a second pass. This is unlikely in practice (requires 3+
-        agents racing on the same resource with overlapping tool calls) and
-        the harness can detect it via multiple visible actions on a resource.
+        after every tool call. execute() calls it with failed=True when the
+        tool throws.
         """
-        # Section 6.3: check for a prior successful action from another
-        # agent on this resource. This handles the race where both agents
-        # got ALLOW (via conflict resolution on intents) while the other's
-        # tool was still running. The later action supersedes the earlier.
-        existing_actions = self.space.read(
-            scope=scope, resource=resource, mark_type=MarkType.ACTION
-        )
-        prior_action = next(
-            (
-                a
-                for a in existing_actions
-                if isinstance(a, Action) and not a.failed and a.agent_id != agent.id
-            ),
-            None,
-        )
+        try:
+            with self._resource_lock(scope, resource):
+                with self.space.locked():
+                    now = self.space.now()
+                    with self._claim_lock:
+                        lease_now = self._tick()
+                        if not failed:
+                            supersedes = self._covering_intent(
+                                agent, scope, resource, intent_id, now, lease_now
+                            )
+                        elif intent_id is not None:
+                            supersedes = intent_id
+                        else:
+                            supersedes = self._own_lease(
+                                agent, scope, resource, lease_now
+                            )
+                    return self.space.write(
+                        agent,
+                        Action(
+                            scope=scope,
+                            resource=resource,
+                            action=action,
+                            result=result,
+                            failed=failed,
+                            supersedes=supersedes,
+                        ),
+                    )
+        finally:
+            # Also when it raises: an expiry it recorded is reported.
+            self._emit_lease_events()
 
-        if prior_action is not None:
-            # Later action supersedes the earlier one (Section 6.3).
-            # The intent (if any) expires via TTL.
-            supersedes_id = prior_action.id
-        else:
-            # Note: if the intent expired and was GC'd before this call,
-            # intent_id references a missing mark. This is harmless - the
-            # supersession adds a stale UUID to _superseded which is a no-op
-            # (GC already removed the mark, and read() filters by _superseded).
-            supersedes_id = intent_id
+    def _own_lease(
+        self, agent: Agent, scope: str, resource: str, lease_now: float
+    ) -> uuid.UUID | None:
+        """
+        The intent of this agent's live lease on this scope and resource, if
+        it holds one. Caller MUST hold _claim_lock.
+        """
+        own = [
+            c
+            for c in self._live_leases(scope, resource, lease_now)
+            if c.intent.agent_id == agent.id and c.intent.scope == scope
+        ]
+        return own[0].intent.id if own else None
 
-        return self.space.write(
-            agent,
-            Action(
-                scope=scope,
-                resource=resource,
-                action=action,
-                result=result,
-                supersedes=supersedes_id,
-            ),
-        )
+    def _covering_intent(
+        self,
+        agent: Agent,
+        scope: str,
+        resource: str,
+        intent_id: uuid.UUID | None,
+        now: float,
+        lease_now: float,
+    ) -> uuid.UUID | None:
+        """
+        The intent whose lease covers this action, None for an allowed direct
+        claim; raises NotGrantedError otherwise. Caller MUST hold the
+        resource lock, the space lock and _claim_lock.
+        """
+        if intent_id is None:
+            intent_id = self._own_lease(agent, scope, resource, lease_now)
+        holder = self._held_action(agent.id, scope, resource, now)
+        other_leases = [
+            c
+            for c in self._live_leases(scope, resource, lease_now)
+            if c.intent.agent_id != agent.id
+        ]
+        if intent_id is not None:
+            claim = self._claims.get(intent_id)
+            if claim is None or not self._live(claim, lease_now):
+                raise NotGrantedError(f"Intent {intent_id} holds no live lease")
+            if (
+                claim.intent.agent_id != agent.id
+                or claim.intent.scope != scope
+                or claim.intent.resource != resource
+            ):
+                raise NotGrantedError(
+                    f"The lease of intent {intent_id} is not this agent's on "
+                    f"{scope}/{resource}"
+                )
+            if holder is not None or other_leases:
+                raise NotGrantedError(
+                    f"Another agent holds '{resource}' in a competing scope"
+                )
+            return intent_id
+        scope_def = self.space.get_scope(scope)
+        if scope_def.deferred or scope_def.conflict_policy == ConflictPolicy.YIELD_ALL:
+            raise NotGrantedError(
+                f"A direct claim needs a grant in scope '{scope}' (deferred or "
+                f"YIELD_ALL)"
+            )
+        if holder is not None or other_leases:
+            raise NotGrantedError(
+                f"Another agent holds '{resource}' in a competing scope"
+            )
+        if any(
+            o.agent_id != agent.id and self._is_pending(o)
+            for o in self.space.get_intents(scope, resource, now=now)
+        ):
+            raise NotGrantedError(
+                f"Another agent's pending intent competes for '{resource}'"
+            )
+        return None
 
     def execute(
         self,
@@ -1388,9 +2202,9 @@ class Guard:
         Thread safety: The per-resource lock is held for pre_action and
         post_action separately, but released during tool_fn execution.
         This prevents slow tool calls (network, LLM inference) from
-        blocking other agents on the same resource. The intent mark
-        written during pre_action protects the resource via conflict
-        resolution while the lock is released.
+        blocking other agents on the same resource. The lease granted by
+        pre_action holds the resource while the lock is released, and
+        post_action records the action only under it (Spec Section 6.5).
 
             decision, result = guard.execute(
                 agent=booker,
@@ -1405,6 +2219,12 @@ class Guard:
         """
         if tool_kwargs is None:
             tool_kwargs = {}
+        # Whether the tool takes the fencing token, read before a lease is
+        # granted: a callable with no readable signature takes none.
+        try:
+            takes_token = "fencing_token" in inspect.signature(tool_fn).parameters
+        except (TypeError, ValueError):
+            takes_token = False
 
         # Phase 1: pre_action under resource lock (declare intent, check conflicts)
         with self._resource_lock(scope, resource):
@@ -1420,7 +2240,7 @@ class Guard:
             intent_action,
             decision.verdict.value,
             conflict_check=True,
-            conflict_found=len(decision.conflicting_intents) > 0,
+            conflict_found=decision.conflict_found,
             reason=decision.reason,
         )
 
@@ -1429,29 +2249,49 @@ class Guard:
 
         intent_id = decision.intent_id
 
-        # Phase 2: execute tool WITHOUT holding the resource lock.
-        # The intent mark protects the resource via conflict resolution.
+        # Phase 2: execute tool WITHOUT holding the resource lock. The lease
+        # holds the resource; the tool gets its fencing token when it takes a
+        # parameter named fencing_token (Section 6.5, G8).
+        if takes_token:
+            tool_kwargs = {**tool_kwargs, "fencing_token": decision.fencing_token}
         try:
             result = tool_fn(*tool_args, **tool_kwargs)
         except Exception as exc:
-            # Write a failed action that supersedes the intent
-            with self._resource_lock(scope, resource):
-                self.space.write(
-                    agent,
-                    Action(
-                        scope=scope,
-                        resource=resource,
-                        action=result_action,
-                        result={"error": str(exc), "status": "failed"},
-                        failed=True,
-                        supersedes=intent_id,
-                    ),
-                )
+            # A failed action ends the lease and holds nothing.
+            self.post_action(
+                agent,
+                scope,
+                resource,
+                result_action,
+                {"error": str(exc), "status": "failed"},
+                intent_id,
+                failed=True,
+            )
             raise
 
-        # Phase 3: post_action under resource lock (record action mark)
-        with self._resource_lock(scope, resource):
+        # Phase 3: record the action, only under the live lease (G6).
+        try:
             self.post_action(agent, scope, resource, result_action, result, intent_id)
+        except NotGrantedError as exc:
+            # The lease was lost while the tool ran: a failed action is the
+            # trace for readers and the principal, and the agent yields.
+            self.post_action(
+                agent,
+                scope,
+                resource,
+                result_action,
+                {"error": "lease lost", "status": "failed", "detail": str(exc)},
+                intent_id,
+                failed=True,
+            )
+            return (
+                GuardDecision(
+                    verdict=GuardVerdict.CONFLICT,
+                    intent_id=intent_id,
+                    reason="lease lost",
+                ),
+                None,
+            )
 
         # Telemetry for completed execution
         self._emit_write_metric(agent, scope, "action", "accepted")

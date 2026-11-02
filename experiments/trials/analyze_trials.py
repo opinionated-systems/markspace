@@ -22,6 +22,10 @@ import math
 import sys
 from pathlib import Path
 
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stress_test"))
+from stored_run_safety import check_run  # noqa: E402
+
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 # Pricing ($ per million tokens)
@@ -34,6 +38,21 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def double_bookings(record: dict) -> int:
+    """A run's double bookings, from its stored steps (stored_run_safety.py)."""
+    return check_run(Path(record["_path"]).parent)["double_bookings"]
+
+
+def scope_violations(record: dict) -> int | str:
+    """
+    The run's scope violations, or "not measured": runs that measured them
+    record recovered_bookings; earlier ones report 0 whatever happened.
+    """
+    if "recovered_bookings" in record:
+        return record["scope_violations"]
+    return "not measured"
 
 
 def load_trials(experiment: str) -> list[dict]:
@@ -126,12 +145,18 @@ def analyze_multi_trial() -> None:
         print(f"\n## {model} ({n} trials)\n")
 
         # Safety
-        total_double = sum(t.get("double_bookings", 0) for t in trials)
-        total_scope = sum(t.get("scope_violations", 0) for t in trials)
+        total_double = sum(double_bookings(t) for t in trials)
+        scope = [scope_violations(t) for t in trials]
         print(f"| Metric | Value |")
         print(f"|--------|-------|")
-        print(f"| Double bookings | {rule_of_three(n, total_double)} |")
-        print(f"| Scope violations | {rule_of_three(n, total_scope)} |")
+        print(
+            f"| Double bookings (from the steps) | {rule_of_three(n, total_double)} |"
+        )
+        counted = [v for v in scope if isinstance(v, int)]
+        if len(counted) == len(scope):
+            print(f"| Scope violations | {rule_of_three(n, sum(counted))} |")
+        else:
+            print("| Scope violations | not measured |")
 
         # Manifest completion
         completions: dict[str, list[float]] = {}
@@ -194,8 +219,8 @@ def analyze_adversarial() -> None:
             t = by_model[model].get(mode)
             if not t:
                 continue
-            db = t.get("double_bookings", 0)
-            sv = t.get("scope_violations", 0)
+            db = double_bookings(t)
+            sv = scope_violations(t)
             steps = t.get("total_steps", 0)
             wasted = t.get("total_wasted", 0)
             # Average completion across depts
@@ -258,8 +283,8 @@ def analyze_scaling() -> None:
             rounds = t.get("n_rounds", 0)
             steps = t.get("total_steps", 0)
             wasted = t.get("total_wasted", 0)
-            db = t.get("double_bookings", 0)
-            sv = t.get("scope_violations", 0)
+            db = double_bookings(t)
+            sv = scope_violations(t)
             mc = t.get("manifest_completion", {})
             avg_comp = sum(mc.values()) / len(mc) if mc else 0
             wall = t.get("wall_clock_seconds", 0)
@@ -271,7 +296,7 @@ def analyze_scaling() -> None:
             )
 
             xs.append(n)
-            ys_safety.append(db + sv)
+            ys_safety.append(db)
             ys_completion.append(avg_comp)
             ys_time.append(wall)
             ys_cost.append(cost)
@@ -308,8 +333,8 @@ def _try_plot(
     ax = axes[0][0]
     ax.plot(xs, safety, "ro-", linewidth=2, markersize=8)
     ax.set_xlabel("Number of Agents")
-    ax.set_ylabel("Safety Violations")
-    ax.set_title("Safety vs Scale")
+    ax.set_ylabel("Double bookings (from the steps)")
+    ax.set_title("Double bookings vs Scale")
     ax.set_xscale("log")
     ax.grid(True, alpha=0.3)
 
@@ -387,8 +412,8 @@ def analyze_defense() -> None:
             t = by_model[model].get(scenario)
             if not t:
                 continue
-            db = t.get("double_bookings", 0)
-            sv = t.get("scope_violations", 0)
+            db = double_bookings(t)
+            sv = scope_violations(t)
             steps = t.get("total_steps", 0)
             mc = t.get("manifest_completion", {})
             avg_comp = sum(mc.values()) / len(mc) if mc else 0

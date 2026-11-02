@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 270" width="600" height="338" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    .card-bg { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+      .card-bg { fill: #1a1a2e; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+  </defs>
+
+  <!-- steps -->
+  <text x="80" y="24" font-size="11" class="fg" text-anchor="middle">agent</text>
+  <line x1="80" y1="32" x2="80" y2="62" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="90" y="51" font-size="10" class="fg">tool call</text>
+
+  <text x="80" y="80" font-size="11" class="fg" text-anchor="middle">pre_action</text>
+  <line x1="124" y1="70" x2="260" y2="70" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="192" y="64" font-size="10" class="fg" text-anchor="middle">CONFLICT · DENIED</text>
+  <text x="268" y="74" font-size="11" class="fg" opacity="0.45">tool not called</text>
+  <line x1="124" y1="96" x2="260" y2="96" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="192" y="90" font-size="10" class="fg" text-anchor="middle">BLOCKED</text>
+  <text x="268" y="100" font-size="11" class="fg">pending</text>
+  <line x1="80" y1="88" x2="80" y2="138" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="90" y="118" font-size="10" class="fg">ALLOW</text>
+  <text x="130" y="118" font-size="11" class="accent">granted</text>
+
+  <text x="80" y="156" font-size="11" class="fg" text-anchor="middle">tool <tspan fill-opacity="0.45" font-size="9">token</tspan></text>
+  <line x1="124" y1="152" x2="260" y2="152" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="192" y="146" font-size="10" class="fg" text-anchor="middle">raises</text>
+  <text x="268" y="156" font-size="11" class="fg" opacity="0.45">released</text>
+  <line x1="80" y1="164" x2="80" y2="194" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <text x="80" y="212" font-size="11" class="fg" text-anchor="middle">post_action</text>
+  <line x1="124" y1="208" x2="260" y2="208" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="192" y="202" font-size="10" class="fg" text-anchor="middle">lease ended · G1</text>
+  <text x="268" y="212" font-size="11" class="fg" opacity="0.45">CONFLICT · failed action</text>
+  <line x1="80" y1="220" x2="80" y2="250" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="90" y="239" font-size="10" class="fg">action</text>
+  <text x="80" y="266" font-size="11" class="accent" text-anchor="middle">acted</text>
+</svg>

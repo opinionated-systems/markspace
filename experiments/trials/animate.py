@@ -16,6 +16,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# The step-based safety checks (stored_run_safety.py) live with the stress test.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stress_test"))
+from stored_run_safety import check_run  # noqa: E402
+
 random.seed(42)
 
 
@@ -145,6 +149,7 @@ for line in open(results_dir / "rounds.jsonl"):
     r = json.loads(line)
     rounds_data[r["round_num"]] = r
 trial = json.loads(open(results_dir / "trial.jsonl").read().strip())
+double_bookings = check_run(results_dir)["double_bookings"]
 
 total_agents = trial["total_agents"]
 n_rounds = trial["n_rounds"]
@@ -393,9 +398,10 @@ def draw_header(draw, current_round, step_idx):
         draw.rectangle([bx + 1, 14, bx + 1 + fw, 20], fill=ACCENT)
     draw.text((bx + bw + 8, 9), f"{step_idx}/{total_steps}", font=font, fill=FG)
 
-    # Safety badge
-    draw.text((W - 208, 9), "SAFETY VIOLATIONS", font=font_b, fill=FG)
-    draw.text((W - 18, 7), "0", font=font_b, fill=GREEN)
+    # Double bookings, counted from the steps (stored_run_safety.py)
+    draw.text((W - 208, 9), "DOUBLE BOOKINGS", font=font_b, fill=FG)
+    badge = GREEN if double_bookings == 0 else VERDICT_COLORS["denied"]
+    draw.text((W - 18, 7), str(double_bookings), font=font_b, fill=badge)
 
     draw.line([(0, HDR_H), (W, HDR_H)], fill=DIM)
 

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="750" height="500" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    .card-bg { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+      .card-bg { fill: #1a1a2e; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+  </defs>
+
+  <text x="60" y="20" font-size="11" class="fg" text-anchor="middle">A</text>
+  <text x="150" y="20" font-size="11" class="fg" text-anchor="middle">B</text>
+  <text x="240" y="20" font-size="11" class="fg" text-anchor="middle">C</text>
+  <text x="510" y="20" font-size="11" class="fg" text-anchor="middle">guard</text>
+  <line x1="60" y1="30" x2="60" y2="390" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+  <line x1="150" y1="30" x2="150" y2="390" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+  <line x1="240" y1="30" x2="240" y2="390" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+  <line x1="510" y1="30" x2="510" y2="390" class="fg-stroke" stroke-width="1.5" opacity="0.2"/>
+
+  <!-- intents: each is pending -->
+  <line x1="60" y1="48" x2="505" y2="48" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="42" font-size="10" class="fg" text-anchor="middle">intent 0.5</text>
+  <rect x="32" y="60" width="56" height="16" class="card-bg"/>
+  <text x="60" y="72" font-size="11" class="fg" text-anchor="middle">pending</text>
+
+  <line x1="150" y1="96" x2="505" y2="96" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="90" font-size="10" class="fg" text-anchor="middle">intent 0.95</text>
+  <rect x="122" y="108" width="56" height="16" class="card-bg"/>
+  <text x="150" y="120" font-size="11" class="fg" text-anchor="middle">pending</text>
+
+  <line x1="240" y1="144" x2="505" y2="144" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="138" font-size="10" class="fg" text-anchor="middle">intent 0.7</text>
+  <rect x="212" y="156" width="56" height="16" class="card-bg"/>
+  <text x="240" y="168" font-size="11" class="fg" text-anchor="middle">pending</text>
+
+  <!-- the resolution boundary -->
+  <line x1="20" y1="192" x2="530" y2="192" class="fg-stroke" stroke-width="2"/>
+  <text x="535" y="196" font-size="10" class="fg">boundary</text>
+
+  <!-- B: granted -->
+  <line x1="505" y1="216" x2="155" y2="216" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="210" font-size="10" class="fg" text-anchor="middle">ALLOW</text>
+  <rect x="122" y="228" width="56" height="16" class="card-bg"/>
+  <text x="150" y="240" font-size="11" class="accent" text-anchor="middle">granted</text>
+
+  <!-- C, A: lost -->
+  <line x1="505" y1="264" x2="245" y2="264" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="258" font-size="10" class="fg" text-anchor="middle">CONFLICT</text>
+  <rect x="222" y="276" width="36" height="16" class="card-bg"/>
+  <text x="240" y="288" font-size="11" class="fg" text-anchor="middle" opacity="0.45">lost</text>
+
+  <line x1="505" y1="312" x2="65" y2="312" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="306" font-size="10" class="fg" text-anchor="middle">CONFLICT</text>
+  <rect x="42" y="324" width="36" height="16" class="card-bg"/>
+  <text x="60" y="336" font-size="11" class="fg" text-anchor="middle" opacity="0.45">lost</text>
+
+  <!-- B: acted -->
+  <line x1="150" y1="360" x2="505" y2="360" class="fg-stroke" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="380" y="354" font-size="10" class="fg" text-anchor="middle">action</text>
+  <rect x="128" y="372" width="44" height="16" class="card-bg"/>
+  <text x="150" y="384" font-size="11" class="accent" text-anchor="middle">acted</text>
+</svg>

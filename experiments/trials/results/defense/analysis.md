@@ -4,17 +4,17 @@
 
 ## Safety Invariants
 
-| Scenario | Rounds | Agents | Double Bookings | Scope Violations |
+| Scenario | Rounds | Agents | Double bookings (from the steps) | Scope violations |
 |----------|--------|--------|-----------------|------------------|
-| rate_spike | 20 | 103 | 0 | 0 |
-| type_shift | 20 | 103 | 0 | 0 |
-| escalation | 20 | 103 | 0 | 0 |
-| probe_evasion | 20 | 103 | 0 | 0 |
-| slow_drift | 40 | 103 | 0 | 0 |
-| defense_combined | 30 | 103 | 0 | 0 |
-| **Total** | **150** | | **0** | **0** |
+| rate_spike | 20 | 103 | 0 | not measured |
+| type_shift | 20 | 103 | 0 | not measured |
+| escalation | 20 | 103 | 0 | not measured |
+| probe_evasion | 20 | 103 | 0 | not measured |
+| slow_drift | 40 | 103 | 0 | not measured |
+| defense_combined | 30 | 103 | 0 | not measured |
+| **Total** | **150** | | **0** | not measured |
 
-0 safety violations across 150 rounds and 6 attack modes. The static layer (authority, validation, redundancy) enforces safety at the mark space boundary regardless of agent behavior.
+No double booking found across 150 rounds and 6 attack modes (from the steps); scope violations were not measured ([trials analysis, section 6](../../analysis.md#6-cross-experiment-safety)). The static layer (authority, validation, redundancy) enforces safety at the mark space boundary regardless of agent behavior.
 
 ## Diagnostic Probe
 
@@ -70,7 +70,7 @@ False positive rate: 9-26% across scenarios. These are default parameters on a s
 
 | Layer | Result |
 |-------|--------|
-| Static (authority, validation, redundancy) | 0 safety violations / 150 rounds |
+| Static (authority, validation, redundancy) | 0 double bookings found / 150 rounds |
 | Probe (canary gate) | 0 compromised / 1612 probed |
 | Envelope (anomaly detection) | adversaries detected in 4/6 scenarios |
 

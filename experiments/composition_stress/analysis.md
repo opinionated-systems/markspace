@@ -181,7 +181,7 @@ The unit tests in `test_composition.py` (30 tests) verify these properties in is
 | **Topology** | Linear pipeline with fan-in/fan-out | Flat (all agents access shared scopes) |
 | **Scopes** | 6 (one per stage + audit scope added by hot-swap) | 7 resource types + department scopes |
 | **Conflict policy** | FIRST_WRITER only | All 3 (FIRST_WRITER, HIGHEST_CONFIDENCE, YIELD_ALL) |
-| **Key validation** | Pipeline connectivity, 4 hot-swaps (simultaneous, mid-processing, permission change), reactive delivery | Zero double bookings, zero scope violations, adversarial containment |
+| **Key validation** | Pipeline connectivity, 4 hot-swaps (simultaneous, mid-processing, permission change), reactive delivery | No double booking found (from the steps), cross-department writes denied, adversarial containment |
 | **Marks written** | 833-923 | 927 actions + 1,212 intents |
 | **Wall clock** | 0.30s | 470s |
 | **Cost** | Zero (no LLM calls) | ~8.0M tokens |
