@@ -69,13 +69,13 @@ class AnomalyDetector(ABC):
         ...
 
     @abstractmethod
-    def export_state(self) -> dict[str, Any]:
-        """Serialize detector state for persistence/transfer."""
+    def save_state(self) -> dict[str, Any]:
+        """Serialize detector state, to load it after a restart."""
         ...
 
     @abstractmethod
-    def import_state(self, data: dict[str, Any]) -> None:
-        """Restore detector state from serialized form."""
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Load detector state that save_state() returned."""
         ...
 
     def seed_baseline(self, expected: dict[MarkType, float]) -> None:  # noqa: ARG002
@@ -200,7 +200,7 @@ class WelfordDetector(AnomalyDetector):
             current_counts
         )
 
-    def export_state(self) -> dict[str, Any]:
+    def save_state(self) -> dict[str, Any]:
         return {
             "completed_windows": self._completed_windows,
             "active_windows": self._active_windows,
@@ -209,7 +209,7 @@ class WelfordDetector(AnomalyDetector):
             "welford_m2": {k.value: v for k, v in self._m2.items()},
         }
 
-    def import_state(self, data: dict[str, Any]) -> None:
+    def load_state(self, data: dict[str, Any]) -> None:
         self._completed_windows = max(
             self._completed_windows, data.get("completed_windows", 0)
         )
@@ -223,7 +223,7 @@ class WelfordDetector(AnomalyDetector):
             self._mean[MarkType(k)] = v
         for k, v in data.get("welford_m2", {}).items():
             self._m2[MarkType(k)] = v
-        # Imported state is already initialized - skip cold buffer
+        # Loaded state is already initialized - skip cold buffer
         self._cold_buffer = None
 
     # -- Private --
@@ -627,20 +627,23 @@ class StatisticalEnvelope:
             state.restricted = False
             return True
 
-    def export_stats(self) -> dict[str, Any]:
-        """Export all agent detector states as a serializable dict."""
+    def save_state(self) -> dict[str, Any]:
+        """
+        Save the state of each agent (detector state and the restricted
+        flag) as a serializable dict, to load it after a restart.
+        """
         with self._lock:
             result: dict[str, Any] = {}
             for agent_id, state in self._agents.items():
-                exported = state.detector.export_state()
-                exported["restricted"] = state.restricted
-                result[str(agent_id)] = exported
+                saved = state.detector.save_state()
+                saved["restricted"] = state.restricted
+                result[str(agent_id)] = saved
             return result
 
-    def import_stats(self, data: dict[str, Any]) -> None:
-        """Import previously exported stats. Additive."""
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Load state that save_state() returned. Additive."""
         with self._lock:
-            for agent_id_str, stat_data in data.items():
+            for agent_id_str, saved_agent in data.items():
                 agent_id = uuid.UUID(agent_id_str)
                 state = self._agents.get(agent_id)
                 if state is None:
@@ -649,10 +652,10 @@ class StatisticalEnvelope:
                         current_window=_WindowCounts(start=self._clock()),
                     )
                     self._agents[agent_id] = state
-                state.detector.import_state(stat_data)
+                state.detector.load_state(saved_agent)
                 # Loading saved state can set a restriction, never lift it (P40).
                 state.restricted = state.restricted or bool(
-                    stat_data.get("restricted", False)
+                    saved_agent.get("restricted", False)
                 )
 
     # ------------------------------------------------------------------

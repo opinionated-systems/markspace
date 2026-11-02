@@ -4,7 +4,7 @@ Statistical Envelope - Unit Tests
 
 Tests for StatisticalEnvelope behavioral anomaly detection.
 Covers rate anomalies, cold start safety, monotonicity, concentration,
-type filtering, Welford correctness, window rotation, and export/import.
+type filtering, Welford correctness, window rotation, and save/load.
 
 Run: python -m pytest tests/test_envelope.py -v
 """
@@ -270,22 +270,22 @@ class TestStatisticalEnvelope:
         assert env.reset(agent_id, uuid.uuid4()) is False
         assert env.check(agent_id) == EnvelopeVerdict.RESTRICTED
 
-    def test_import_does_not_lift_a_restriction(self) -> None:
+    def test_load_does_not_lift_a_restriction(self) -> None:
         env, agent_id, clock, config = self._restricted(uuid.uuid4())
-        saved = env.export_stats()
+        saved = env.save_state()
         saved[str(agent_id)]["restricted"] = False
-        env.import_stats(saved)
+        env.load_state(saved)
         _advance_window(clock, config)  # a clean window: no new anomaly
         env.record(agent_id, _obs())
         assert env.check(agent_id) == EnvelopeVerdict.RESTRICTED
 
-    def test_import_restores_a_restriction(self) -> None:
+    def test_load_restores_a_restriction(self) -> None:
         env, agent_id, _, _ = self._restricted(uuid.uuid4())
-        saved = env.export_stats()
+        saved = env.save_state()
         fresh = StatisticalEnvelope(
             config=_default_config(min_samples=3), principal_token=uuid.uuid4()
         )
-        fresh.import_stats(saved)
+        fresh.load_state(saved)
         assert fresh.check(agent_id) == EnvelopeVerdict.RESTRICTED
 
     def test_guard_envelope_cannot_be_replaced(self) -> None:
@@ -502,8 +502,8 @@ class TestStatisticalEnvelope:
         # The mean is populated only after min_samples active windows.
         assert stats.welford_mean.get(MarkType.OBSERVATION, 0.0) == 0.0
 
-    def test_export_import_roundtrip(self) -> None:
-        """export_stats then import_stats preserves key statistical state."""
+    def test_save_load_roundtrip(self) -> None:
+        """save_state then load_state keeps the detector state."""
         clock = _make_clock()
         config = _default_config(min_samples=3)
         env = StatisticalEnvelope(config=config, clock=_clock_fn(clock))
@@ -513,20 +513,20 @@ class TestStatisticalEnvelope:
         # Build some history
         _build_baseline(env, agent.id, clock, config, n_windows=5, marks_per_window=8)
 
-        # Export
-        exported = env.export_stats()
-        assert str(agent.id) in exported
+        # Save
+        saved = env.save_state()
+        assert str(agent.id) in saved
 
-        agent_data = exported[str(agent.id)]
+        agent_data = saved[str(agent.id)]
         assert agent_data["completed_windows"] == 5
         assert "welford_n" in agent_data
         assert "welford_mean" in agent_data
         assert "welford_m2" in agent_data
 
-        # Import into a fresh envelope
+        # Load into a fresh envelope
         clock2 = _make_clock(start=9999.0)
         env2 = StatisticalEnvelope(config=config, clock=_clock_fn(clock2))
-        env2.import_stats(exported)
+        env2.load_state(saved)
 
         # Verify stats match
         stats2 = env2.get_stats(agent.id)
@@ -545,9 +545,9 @@ class TestStatisticalEnvelope:
                 original_stats.welford_m2.get(mt, 0.0)
             )
 
-        # Re-export from env2 should match original export
-        re_exported = env2.export_stats()
-        re_data = re_exported[str(agent.id)]
+        # Saving env2 again gives the original state
+        re_saved = env2.save_state()
+        re_data = re_saved[str(agent.id)]
         assert re_data["completed_windows"] == agent_data["completed_windows"]
         assert re_data["restricted"] == agent_data["restricted"]
 
