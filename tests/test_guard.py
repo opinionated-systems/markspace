@@ -47,7 +47,7 @@ from markspace import (
     hours,
     minutes,
 )
-from markspace.barrier import BarrierSnapshot
+from markspace.barrier import AgentBarrier, BarrierSnapshot
 from markspace.core import AnyMark, resolve_conflict, scope_contains
 
 
@@ -1803,6 +1803,71 @@ class TestSystemScopeIsClassified:
         protected = Scope(name="_system", visibility=ScopeVisibility.PROTECTED)
         with pytest.raises(ValueError):
             Guard(MarkSpace(scopes=[protected]))
+
+
+class TestSetBarrierNeedsThePrincipal:
+    @staticmethod
+    def _guard(token: uuid.UUID) -> tuple[Guard, Agent]:
+        space = MarkSpace(scopes=[Scope(name="s")])
+        agent = Agent(name="a", scopes={"s": ["observation"]})
+        return Guard(space, principal_token=token), agent
+
+    @staticmethod
+    def _restricted_snapshot(guard: Guard, agent: Agent) -> BarrierSnapshot:
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow("s", "observation")
+        barrier.require_need("s")
+        barrier.increment_flags()
+        barrier.flagged_scopes.add("s")
+        saved = guard.get_barrier(agent.id)
+        assert saved is not None
+        return saved
+
+    def test_wrong_token_keeps_the_barrier(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        guard.get_or_create_barrier(agent.id).narrow("s", "observation")
+        empty = AgentBarrier(agent_id=agent.id, _principal_token=token)
+        assert guard.set_barrier(agent.id, empty, uuid.uuid4()) is False
+        kept = guard.get_barrier(agent.id)
+        assert kept is not None
+        assert not kept.is_allowed_checked("s", "observation")
+        assert guard.set_barrier(agent.id, empty, token) is True
+
+    def test_snapshot_loads_into_a_new_guard(self) -> None:
+        from markspace.space import ScopeError
+
+        token = uuid.uuid4()
+        old, agent = self._guard(token)
+        saved = self._restricted_snapshot(old, agent)
+        new, _ = self._guard(token)
+        assert new.set_barrier(agent.id, saved, token) is True
+        assert new.get_barrier(agent.id) == saved
+        with pytest.raises(ScopeError):
+            new.write_mark(agent, Observation(scope="s", topic="t", content="x"))
+        assert new.get_or_create_barrier(agent.id).restore("s", "observation", token)
+
+    def test_other_objects_are_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        not_a_barrier: Any = object()
+        with pytest.raises(TypeError):
+            guard.set_barrier(agent.id, not_a_barrier, token)
+
+    def test_barrier_of_another_agent_is_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        saved = self._restricted_snapshot(guard, agent)
+        other = Agent(name="b", scopes={"s": ["observation"]})
+        with pytest.raises(ValueError):
+            guard.set_barrier(other.id, saved, token)
+
+    def test_barrier_with_another_token_is_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        foreign = AgentBarrier(agent_id=agent.id, _principal_token=uuid.uuid4())
+        with pytest.raises(ValueError):
+            guard.set_barrier(agent.id, foreign, token)
 
 
 class TestPerIntentCompetingSets:

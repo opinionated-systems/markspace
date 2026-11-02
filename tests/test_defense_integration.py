@@ -173,7 +173,7 @@ class TestEnvelopeTriggersBarrier:
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.INTENT.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # pre_action should be denied
         decision = guard.pre_action(agent, "test", "room-1", "book", confidence=0.9)
@@ -193,7 +193,7 @@ class TestPrincipalRestore:
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.OBSERVATION.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # Verify blocked
         with pytest.raises(ScopeError):
@@ -244,7 +244,7 @@ class TestResolvedDeferredWithBarrier:
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.INTENT.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # resolve_deferred should deny this agent
         results = guard.resolve_deferred("test", "room-1", agents={agent.id: agent})

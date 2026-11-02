@@ -1111,10 +1111,39 @@ class Guard:
                 self._barriers[agent_id] = barrier
             return barrier
 
-    def set_barrier(self, agent_id: uuid.UUID, barrier: AgentBarrier) -> None:
-        """Set a barrier for an agent (principal action)."""
+    def set_barrier(
+        self,
+        agent_id: uuid.UUID,
+        barrier: AgentBarrier | BarrierSnapshot,
+        principal_token: uuid.UUID,
+    ) -> bool:
+        """
+        Set the barrier of an agent (principal action, P45): an AgentBarrier
+        with the guard's principal token, or a BarrierSnapshot from
+        get_barrier(), for example one saved before a restart, which the
+        guard turns into an AgentBarrier with its token. A wrong principal
+        token changes nothing and returns False.
+        """
+        if principal_token != self._principal_token:
+            return False
+        if isinstance(barrier, BarrierSnapshot):
+            barrier = AgentBarrier(
+                agent_id=barrier.agent_id,
+                _principal_token=self._principal_token,
+                _revoked=set(barrier.revoked),
+                _require_need_scopes=set(barrier.require_need_scopes),
+                _flag_count=barrier.flag_count,
+                flagged_scopes=set(barrier.flagged_scopes),
+            )
+        elif not isinstance(barrier, AgentBarrier):
+            raise TypeError(f"not a barrier: {type(barrier).__name__}")
+        elif barrier._principal_token != self._principal_token:
+            raise ValueError("the barrier has another principal token")
+        if barrier.agent_id != agent_id:
+            raise ValueError(f"barrier of agent {barrier.agent_id}, not {agent_id}")
         with self._barrier_lock:
             self._barriers[agent_id] = barrier
+        return True
 
     def _check_barrier(
         self, agent: Agent, scope: str, mark_type: MarkType
