@@ -330,10 +330,19 @@ class Guard:
         )
         # Register the _system scope for guard-originated marks (budget
         # warnings, audit needs) that don't belong to any user-defined scope.
-        if "_system" not in space._scopes:
+        # It is CLASSIFIED: its marks name agents and scopes, also
+        # CLASSIFIED ones.
+        system_scope = space._scopes.get("_system")
+        if (
+            system_scope is not None
+            and system_scope.visibility != ScopeVisibility.CLASSIFIED
+        ):
+            raise ValueError("the _system scope must be CLASSIFIED (spec 9.13)")
+        if system_scope is None:
             space.register_scope(
                 Scope(
                     name="_system",
+                    visibility=ScopeVisibility.CLASSIFIED,
                     decay=DecayConfig(
                         observation_half_life=hours(24),
                         warning_half_life=hours(12),

@@ -1401,7 +1401,7 @@ A `ContentPolicy` is an abstract class with an `evaluate(agent, mark, scope) -> 
 
 The order is important. Cheap checks (length limits, regex) should come before expensive checks (LLM calls). This minimizes the cost on the common path.
 
-**FLAG behavior.** After a FLAG verdict, the write of the observation mark succeeds. The guard also emits a warning to the `_system` scope. This warning records the flag reason.
+**FLAG behavior.** After a FLAG verdict, the write of the observation mark succeeds. The guard also emits a warning to the `_system` scope. This warning records the flag reason. The guard registers `_system` as a CLASSIFIED scope, because its marks name agents and scopes, and, when it is built, it refuses a `_system` scope that the space already holds with another visibility. An agent sees these marks only with read authorization for `_system`.
 
 A FLAG gives no input to the statistical envelope. The envelope already sees the written mark through the write hook. A call to `record_attempt()` would count the write twice. This double count would distort the anomaly baseline of the agent. FLAG is an observability signal, not an enforcement signal.
 

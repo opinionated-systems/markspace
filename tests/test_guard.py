@@ -1783,6 +1783,28 @@ class TestQuotaCountsEachCurrentMarkOnce:
             s.write(a, self._obs("three"))
 
 
+class TestSystemScopeIsClassified:
+    def test_agent_without_read_authorization_sees_no_system_mark(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="work")])
+        space.set_clock(1000000.0)
+        Guard(space)
+        ops = Agent(name="ops", scopes={"_system": ["warning"]})
+        reader = Agent(name="reader", scopes={"work": ["observation"]})
+        space.write(ops, Warning(scope="_system", topic="t", reason="names a scope"))
+        assert space.read(scope="_system", reader=reader) == []
+        assert len(space.read(scope="_system")) == 1
+
+    def test_an_open_system_scope_is_refused(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="_system")])
+        with pytest.raises(ValueError):
+            Guard(space)
+
+    def test_a_protected_system_scope_is_refused(self) -> None:
+        protected = Scope(name="_system", visibility=ScopeVisibility.PROTECTED)
+        with pytest.raises(ValueError):
+            Guard(MarkSpace(scopes=[protected]))
+
+
 class TestPerIntentCompetingSets:
     """Section 6.1: each intent is judged against its own competing set. An
     intent in an outer scope beats one in an inner scope; inside one scope the
