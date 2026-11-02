@@ -429,9 +429,13 @@ class StatisticalEnvelope:
         self,
         config: EnvelopeConfig | None = None,
         clock: Callable[[], float] | None = None,
+        principal_token: uuid.UUID | None = None,
     ) -> None:
         self._config = config or EnvelopeConfig()
         self._clock = clock or time.time
+        # Only this token resets a restricted agent (P40). Without one, the
+        # envelope takes the token of the guard it is given to.
+        self._principal_token: uuid.UUID | None = principal_token
         self._lock = threading.RLock()
         self._agents: dict[uuid.UUID, _AgentState] = {}
         # Cross-agent: (scope, topic) -> set of agent_ids in current window
@@ -593,11 +597,29 @@ class StatisticalEnvelope:
                 return None
             return self._make_agent_stats(state)
 
-    def reset(self, agent_id: uuid.UUID, principal_token: uuid.UUID) -> bool:
-        """Reset an agent's RESTRICTED status. Requires principal token.
+    def accepts_principal(self, principal_token: uuid.UUID) -> bool:
+        """Whether bind_principal(principal_token) would succeed."""
+        with self._lock:
+            return self._principal_token in (None, principal_token)
 
-        Note: principal_token validation is the caller's responsibility.
+    def bind_principal(self, principal_token: uuid.UUID) -> None:
         """
+        Take the principal token of the guard. An envelope created with
+        another token raises ValueError: one stack has one principal token.
+        """
+        with self._lock:
+            if self._principal_token is None:
+                self._principal_token = principal_token
+            elif self._principal_token != principal_token:
+                raise ValueError("the statistical envelope has another principal token")
+
+    def reset(self, agent_id: uuid.UUID, principal_token: uuid.UUID) -> bool:
+        """
+        Reset an agent's RESTRICTED status (P40). A wrong principal token, or
+        an envelope without one, changes nothing and returns False.
+        """
+        if self._principal_token is None or principal_token != self._principal_token:
+            return False
         with self._lock:
             state = self._agents.get(agent_id)
             if state is None or not state.restricted:
@@ -628,7 +650,10 @@ class StatisticalEnvelope:
                     )
                     self._agents[agent_id] = state
                 state.detector.import_state(stat_data)
-                state.restricted = stat_data.get("restricted", False)
+                # Loading saved state can set a restriction, never lift it (P40).
+                state.restricted = state.restricted or bool(
+                    stat_data.get("restricted", False)
+                )
 
     # ------------------------------------------------------------------
     # Private

@@ -304,7 +304,7 @@ class Guard:
         epoch: int | None = None,
     ) -> None:
         self.space = space
-        self.envelope = envelope
+        self._envelope = envelope
         self._principal_token = principal_token or uuid.uuid4()
         self._telemetry: TelemetrySink = telemetry or NullSink()
         self._content_policies: list[ContentPolicy] = content_policies or []
@@ -372,7 +372,18 @@ class Guard:
         # Grant telemetry (metric, labels), emitted after the locks are
         # released: a sink is outside code.
         self._lease_events: list[tuple[str, dict[str, str]]] = []
+        # One principal token for the whole stack (P40): refuse another token
+        # before the space is attached, bind once the space has accepted this
+        # guard, so that neither refusal leaves the other bound. The check and
+        # the bind are two steps: build guards that share one envelope one at
+        # a time.
+        if envelope is not None and not envelope.accepts_principal(
+            self._principal_token
+        ):
+            raise ValueError("the statistical envelope has another principal token")
         space.attach_claim_table(self)
+        if envelope is not None:
+            envelope.bind_principal(self._principal_token)
         # Wire envelope to space write hooks
         if envelope is not None:
             envelope.add_exempt_agent(self._system_agent.id)
@@ -1080,6 +1091,11 @@ class Guard:
     # ------------------------------------------------------------------
     # Barrier management
     # ------------------------------------------------------------------
+
+    @property
+    def envelope(self) -> StatisticalEnvelope | None:
+        """The statistical envelope, fixed when the guard is built (P40)."""
+        return self._envelope
 
     def get_barrier(self, agent_id: uuid.UUID) -> BarrierSnapshot | None:
         """Get a frozen snapshot of an agent's barrier, if any.

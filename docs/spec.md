@@ -1179,7 +1179,7 @@ Real measurements refine the seeded baseline over time. The synthetic variance o
 
 **`write_mark()` as single enforcement point.** Every agent write uses `Guard.write_mark()`. This method checks the barrier, the envelope, the rate limit and, for observation marks, the content policies. Then it delegates the write to `space.write()`. `write_mark()` rejects intent and action marks with a ValueError. These marks use `pre_action()`/`post_action()` instead. This makes sure that the guard monitors every observation, warning and need write.
 
-**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until a call to `reset(agent, principal_token)`. The `restricted` flag stays set.
+**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until a call to `reset(agent, principal_token)` with the principal token of the envelope. An envelope created without a token takes the token of its guard. `reset()` MUST reject any other token, and loading saved state MUST NOT clear the flag. The `restricted` flag stays set.
 
 **P41: Envelope Cold Start Safety**: `check(agent)` MUST return NORMAL for any agent whose detector reports `is_ready() == False`. For the default `WelfordDetector`, this means that the detector has fewer than `min_samples` completed windows. The envelope does not flag a new agent while its baseline is not yet ready.
 
