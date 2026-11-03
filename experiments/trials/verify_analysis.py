@@ -423,7 +423,12 @@ def main():
 
     print(f"  Later rebookings: {per_run('later_rebookings')}")
     print(f"  Unwarned rebookings: {per_run('unwarned_rebookings')}")
-    print(f"  Parking spots or boardroom slots given twice: {per_run('given_twice')}")
+    print(
+        f"  Parking spots or boardroom slots given to two agents: {per_run('given_to_two_agents')}"
+    )
+    print(
+        f"  Given again to the agent that held them: {per_run('given_again_to_holder')}"
+    )
     print(
         f"  Agents with two parking spots on one day: {per_run('agents_with_two_spots_on_one_day')}"
     )

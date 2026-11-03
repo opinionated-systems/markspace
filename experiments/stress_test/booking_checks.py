@@ -37,7 +37,7 @@ _LUNCH_ORDERED = re.compile(r"Lunch ordered: Type (\w) on (\w+) at (\S+) ")
 _OPS_WARNING = re.compile(r"Building ops: WARNING on (\S+)/(?:w\d+-)?(\w+)/(AM|PM)")
 # resolve_parking_priority, resolve_boardroom_conflicts and run_parking_bot
 _PARKING_GIVEN = re.compile(r"Parking (\w+)/spot-(\d+): (\S+) ")
-_BOARDROOM_RESOLVED = re.compile(r"Boardroom (\S+): resolved")
+_BOARDROOM_RESOLVED = re.compile(r"Boardroom (\S+): resolved → (\S+)")
 _VISITOR_PREBOOKED = re.compile(r"Parking bot: pre-booked ")
 
 Step = Mapping[str, Any]
@@ -169,28 +169,30 @@ def bot_allocations(bot_logs: Mapping[int, Iterable[str]]) -> dict[str, int]:
     """
     What the bots gave out, from their log lines: parking spots given to
     agents, visitor spots pre-booked, boardroom slots resolved; spots and
-    slots given twice; and agents given two parking spots on one day, which
+    slots given to two agents, and those given again to an agent that
+    already had them; and agents given two parking spots on one day, which
     the harness's one-spot rule forbids.
     """
-    spots: Counter[Key] = Counter()
+    spots: defaultdict[Key, list[str]] = defaultdict(list)
     per_agent_day: Counter[Key] = Counter()
-    slots: Counter[str] = Counter()
+    slots: defaultdict[str, list[str]] = defaultdict(list)
     visitor = 0
     for rnd, lines in bot_logs.items():
         week = str(rnd // ROUNDS_PER_WEEK)
         for line in lines:
             if m := _PARKING_GIVEN.match(line):
-                spots[(week, m.group(1), m.group(2))] += 1
+                spots[(week, m.group(1), m.group(2))].append(m.group(3))
                 per_agent_day[(week, m.group(1), m.group(3))] += 1
             elif m := _BOARDROOM_RESOLVED.match(line):
-                slots[m.group(1)] += 1
+                slots[m.group(1)].append(m.group(2))
             elif _VISITOR_PREBOOKED.match(line):
                 visitor += 1
+    holders = list(spots.values()) + list(slots.values())
     return {
-        "parking_spots_given": sum(spots.values()),
+        "parking_spots_given": sum(len(h) for h in spots.values()),
         "visitor_spots_prebooked": visitor,
-        "boardroom_slots_resolved": sum(slots.values()),
-        "given_twice": sum(n > 1 for n in spots.values())
-        + sum(n > 1 for n in slots.values()),
+        "boardroom_slots_resolved": sum(len(h) for h in slots.values()),
+        "given_to_two_agents": sum(len(set(h)) > 1 for h in holders),
+        "given_again_to_holder": sum(len(h) > len(set(h)) for h in holders),
         "agents_with_two_spots_on_one_day": sum(n > 1 for n in per_agent_day.values()),
     }
