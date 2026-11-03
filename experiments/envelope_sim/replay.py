@@ -156,7 +156,7 @@ def round_events(trial: Trial, agent: str, round_num: int) -> list[Event]:
 
 
 def replay_d0(trial: Trial) -> dict[str, int]:
-    """Each agent's first RESTRICTED round under today's detector (D0) with the
+    """Each agent's first RESTRICTED round under the envelope's default detector (D0) with the
     trials' configuration, as the stress test ran it: all agents' tool calls of
     a round, then the resolutions, then the end-of-round checks."""
     clock = [0.0]

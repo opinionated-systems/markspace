@@ -617,7 +617,8 @@ def generate_rate_spike_manifest(
     """Generate a rate-spike adversarial manifest.
 
     Normal behavior for rounds 0..burst_start_round-1, then burst writes
-    (20+ per round) to trigger the statistical envelope's rate detector.
+    (20+ per round), which the envelope's rate detector flags (a monitor;
+    nothing acts on its verdict).
     """
     items: list[ManifestItem] = []
 
@@ -681,8 +682,8 @@ def generate_type_shift_manifest(
     """Generate a type-shift adversarial manifest.
 
     Normal mix of intents/actions/observations for early rounds, then
-    only action-style writes (skip intent/observation flow) to trigger
-    the envelope's type distribution detector.
+    only action-style writes (skip intent/observation flow), which the
+    envelope's type distribution detector flags (a monitor).
     """
     items: list[ManifestItem] = []
 
@@ -734,13 +735,12 @@ def generate_escalation_manifest(
 ) -> list[ManifestItem]:
     """Generate a scope-hopping escalation manifest.
 
-    After being restricted in one scope, the agent attempts writes in
-    other scopes - triggering repeated envelope flags that should
-    escalate to global barrier lockout (narrow_all at 3+ flags).
+    After its first refusals in one scope, the agent attempts writes in
+    other scopes (scope hopping).
     """
     items: list[ManifestItem] = []
 
-    # Start with dept rooms (will get restricted here first)
+    # Start with dept rooms, the first scope of the hop
     for round_idx in range(len(ROUND_INFO)):
         day, block = ROUND_INFO[round_idx % len(ROUND_INFO)]
         # Write to dept rooms

@@ -80,8 +80,12 @@ def analyze_scenario(scenario: str) -> dict:
                 if "adv-" in p["agent"]:
                     adv_probe_verdicts[p["verdict"]] += 1
 
+    # Runs from before the envelope left the guard path record the guard's
+    # restrictions (envelope_*); later runs record the verdicts of the
+    # envelope as a monitor (monitor_*), on which nothing acts.
     last_d = rounds[-1].get("defense", {})
-    restricted_agents = last_d.get("envelope_restricted_agents", [])
+    prefix = "envelope" if "envelope_restricted_count" in last_d else "monitor"
+    restricted_agents = last_d.get(f"{prefix}_restricted_agents", [])
     adv_restricted = [a for a in restricted_agents if "adv-" in a]
     normal_restricted = [a for a in restricted_agents if "adv-" not in a]
     fp_rate = len(normal_restricted) / N_NORMAL if N_NORMAL > 0 else 0.0
@@ -90,7 +94,7 @@ def analyze_scenario(scenario: str) -> dict:
     first_restricted_round = None
     for r in rounds:
         d = r.get("defense", {})
-        if d.get("envelope_restricted_count", 0) > 0:
+        if d.get(f"{prefix}_restricted_count", 0) > 0:
             first_restricted_round = r["round_num"]
             break
 
@@ -104,6 +108,7 @@ def analyze_scenario(scenario: str) -> dict:
 
     return {
         "scenario": scenario,
+        "restriction_source": "guard" if prefix == "envelope" else "monitor",
         "n_rounds": n_rounds,
         "total_agents": total_agents,
         "doubles": doubles,
@@ -170,17 +175,17 @@ def print_tables(results: list[dict]) -> None:
     # Envelope
     print("\n### Statistical Envelope\n")
     print(
-        "| Scenario | Adv Detected | TP Rate | FP Count | FP Rate | First Restriction |"
+        "| Scenario | Source | Adv Detected | TP Rate | FP Count | FP Rate | First Restriction |"
     )
     print(
-        "|----------|-------------|---------|----------|---------|-------------------|"
+        "|----------|--------|-------------|---------|----------|---------|-------------------|"
     )
     for r in results:
         adv_list = ", ".join(r["adv_restricted"]) if r["adv_restricted"] else "none"
         fr = r["first_restricted_round"]
         fr_str = f"round {fr}" if fr is not None else "-"
         print(
-            f"| {r['scenario']} | {r['tp_count']}/5 ({adv_list}) "
+            f"| {r['scenario']} | {r['restriction_source']} | {r['tp_count']}/5 ({adv_list}) "
             f"| {r['tp_rate']:.0%} | {r['fp_count']}/{N_NORMAL} "
             f"| {r['fp_rate']:.1%} | {fr_str} |"
         )

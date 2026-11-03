@@ -13,10 +13,10 @@ from typing import Any
 
 import pytest
 
-from markspace import Agent, Guard, MarkSpace, Observation, Scope, Warning
+from markspace import Agent, MarkSpace, Observation, Scope, Warning
 from markspace.core import DecayConfig, minutes
 from markspace.write_budget import BurnTier, WriteBudget
-from markspace.guard import ScopeError
+from markspace.envelope import EnvelopeVerdict
 
 from .driver import declared_rates, resampled_rounds, run_stream, run_write_budget
 from .measure import (
@@ -74,8 +74,10 @@ def test_step_events_follow_the_tool_rules() -> None:
     assert step_events("view_rooms", "...") == []
 
 
-def _guard_refusal_time(stream: Stream) -> float | None:
-    """The time of the first write that Guard.write_mark refuses."""
+def _monitor_restriction_time(stream: Stream) -> float | None:
+    """The time of the first write before which the envelope, attached to a
+    space as a monitor by a write hook, says RESTRICTED: the check that the
+    guard made before each write while it used the envelope."""
     clock = [0.0]
     space = MarkSpace(
         scopes=[
@@ -89,33 +91,36 @@ def _guard_refusal_time(stream: Stream) -> float | None:
             )
         ]
     )
-    guard = Guard(space, envelope=L.envelope(lambda: clock[0]))
+    monitor = L.envelope(lambda: clock[0])
+    space.add_write_hook(lambda agent_id, mark: monitor.record(agent_id, mark))
     agent = Agent(name="a", scopes={"s": ["observation", "warning"]})
     for t, event, _ in stream:
         if event == CHECK:
-            continue  # write_mark checks the envelope itself
+            continue
         clock[0] = t
         space.set_clock(t)
-        mark = (
-            Observation(scope="s", topic="t", content="c")
-            if event == O
-            else Warning(scope="s", topic="t", reason="r")
-        )
-        try:
-            guard.write_mark(agent, mark)
-        except ScopeError:
+        if monitor.check(agent.id) == EnvelopeVerdict.RESTRICTED:
             return t
+        space.write(
+            agent,
+            (
+                Observation(scope="s", topic="t", content="c")
+                if event == O
+                else Warning(scope="s", topic="t", reason="r")
+            ),
+        )
     return None
 
 
 @pytest.mark.parametrize("seed", range(1, 7))
-def test_run_stream_refuses_the_write_that_the_guard_refuses(seed: int) -> None:
+def test_run_stream_restricts_where_a_hooked_monitor_does(seed: int) -> None:
     """Generated streams with observations and warnings, through run_stream and
-    through Guard.write_mark: the first refused write is the same one."""
+    through a monitor fed by a space's write hook: the first RESTRICTED
+    verdict comes before the same write."""
     stream = PROFILES["steady_5"].generate(random.Random(seed), 600)
     result = run_stream(stream, L)
     assert result.restricted_at is not None
-    assert result.restricted_at == _guard_refusal_time(stream)
+    assert result.restricted_at == _monitor_restriction_time(stream)
 
 
 def test_judged_windows_skip_cold_start_and_count_the_restriction_window() -> None:

@@ -90,7 +90,7 @@ This document specifies a coordination protocol for fleets of autonomous agents.
 
 A Python reference implementation and property tests accompany this specification. Every normative statement (MUST, SHOULD, MAY) maps to an executable test. The reference implementation shows that these properties hold together consistently. Any language can reimplement it, if the new implementation satisfies the same test suite.
 
-**Verification level.** Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)) verify the 46 mandatory properties (P1-P39, P47 and P71-P76) empirically. The verification does not use formal model checking (for example, [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47) or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests apply randomized inputs and edge cases to each property.
+**Verification level.** Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)) verify the 47 mandatory properties (P1-P39, P42, P47 and P71-P76) empirically. The verification does not use formal model checking (for example, [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47) or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests apply randomized inputs and edge cases to each property.
 
 The [stress test](../experiments/stress_test/analysis.md) tests P1-P39 and P47 under a realistic concurrent load. Its stored runs are older than P71-P76. It uses up to 1,050 agents across 20 rounds, with adversarial participants. The [trial results](../experiments/trials/analysis.md) show no double booking across all 21 trial runs and 4,010 agent instances (from their stored steps).
 
@@ -650,7 +650,7 @@ The guard still reads marks at the time of the mark space. A forward clock step 
 
 **G3 (immediate mode).** In an immediate scope, `pre_action` does these steps in this order:
 
-1. Check the authorization, the barrier, the envelope and the scope rate limit. The barrier refuses the intent when the agent is restricted in the scope (Section 9.8), and when it requires a need mark that the agent does not hold there.
+1. Check the authorization, the barrier and the scope rate limit. The barrier refuses the intent when the agent is restricted in the scope (Section 9.8), and when it requires a need mark that the agent does not hold there.
 2. If another agent has a held action, return CONFLICT. Do not write an intent.
 3. Write the intent.
 4. If one of these beats the intent, return CONFLICT and close the intent as lost:
@@ -997,7 +997,7 @@ A write hook receives `(agent_id, stored_mark)` after the mark space commits the
 3. **Silent failure.** If a hook raises an exception, the mark space catches it silently. The exception does not affect the stored mark or any later read (P33).
 4. **Snapshot semantics.** The mark space takes a snapshot of the set of hooks to fire while it holds its write lock. Thus if code adds or removes a hook while the hooks fire, the hook dispatch of the current write does not change.
 
-The main user of write hooks is the statistical envelope (Section 9.7). The envelope registers a hook that records every write for anomaly detection.
+A harness that runs the statistical envelope as a monitor (Section 9.7) registers a hook that records every stored mark for anomaly detection.
 
 **P33: Hook Non-Interference**: A failure of a write hook MUST NOT affect the stored mark or later reads. Hooks are informational observers. They are not gatekeepers.
 
@@ -1027,7 +1027,7 @@ The safety properties (P36-P39, P71-P76) hold only when the harness sends all to
 pre_action(agent, scope, resource, action, confidence) → GuardDecision
 
   1. Check agent authorization, barrier (a restricted agent: DENIED naming the revoked
-     type; then a required need mark), envelope and scope rate
+     type; then a required need mark) and scope rate
   2. Check for held action marks on (scope, resource) from OTHER agents
      - If found: return CONFLICT (the resource is already claimed); no intent is written
   3. Write an intent mark on behalf of the agent
@@ -1142,11 +1142,17 @@ If the winner is hidden, `winning_intent` is null. The reason then says that the
 
 **P39: Action Precedence**: Consider an action mark from agent X on a resource, in the acting scope, an ancestor or a descendant. If such a mark exists, the guard MUST return CONFLICT for the intent of any other agent on that resource. Completed actions take precedence over new intents. Without this rule, conflict resolution that uses only intents would not detect resources that executed actions already claimed.
 
+**`write_mark()` as single enforcement point.** Every agent write of an observation, a warning or a need uses `Guard.write_mark()`. This method checks the barrier, the scope rate limit, the content policies (observation marks only) and the write budget. Then it delegates the write to `space.write()`, which checks the authorization and the schema. `write_mark()` rejects intent and action marks with a ValueError; these marks use `pre_action()`/`post_action()` instead.
+
+**P42: Write-Mark Atomicity**: A `write_mark()` refusal, by the authorization, the barrier, a write budget, a scope rate limit or a content policy, MUST prevent storage of the mark. There are no partial writes.
+
 Ref: [`markspace/guard.py::Guard`](../markspace/guard.py), [`tests/test_guard.py`](../tests/test_guard.py)
 
 ### 9.7 Statistical Envelope
 
-The statistical envelope gives behavioral anomaly detection for the write patterns of agents. It tracks the write rate of each agent. To compute a streaming mean and variance, it uses [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)). It detects three categories of anomaly: rate spikes, type distribution shifts, and cross-agent concentration.
+The statistical envelope gives behavioral anomaly detection for the write patterns of agents, as a monitor: nothing in the library acts on its verdicts, and the guard does not call it. It tracks the write rate of each agent. To compute a streaming mean and variance, it uses [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)). It detects three categories of anomaly: rate spikes, type distribution shifts, and cross-agent concentration. Its verdicts are signals for the principal and for measurement; an automatic stop comes from the write budgets (Section 9.14), the barrier (Section 9.8) and the scope rate limits (Section 9.12). The reasons are in [framework.md, Write Budgets](framework.md#write-budgets).
+
+**Feeding the monitor.** The envelope sees only what its caller feeds it. A harness attaches it to a space with a write hook (Section 8.6) that calls `record(agent_id, mark)` for each stored mark. A refused attempt stores no mark, so the harness reports it with `record_attempt(agent_id, mark_type)`, for example after a guard call that returns CONFLICT with no intent id. The harness calls `check(agent)` when it wants a verdict.
 
 **Detection algorithm.** The envelope divides time into tumbling windows. The default window is 300 seconds. At the end of each window, the envelope adds the per-type counts of the window to Welford accumulators. Each `check(agent)` call runs three checks:
 
@@ -1154,49 +1160,30 @@ The statistical envelope gives behavioral anomaly detection for the write patter
 2. **Type shift** (per-agent): the fraction of mark types in the current window differs from the historical distribution by more than `type_shift_threshold` (default 0.5).
 3. **Concentration** (cross-agent): three or more agents wrote to the same `(scope, topic)` in the current window.
 
-**Known false restrictions.** The reference detector restricts an agent in these cases, also when the agent behaves as it always does:
+**Known false RESTRICTED verdicts.** The reference detector says RESTRICTED for an agent in these cases, also when the agent behaves as it always does:
 
-- The type shift compares the fractions of the current window with no minimum count, so the first marks of a window decide it. An agent with a baseline of 2 observations and 1 warning per window is restricted when a window starts with its warning. An agent that writes its mark types in batches is restricted in the same way.
-- The rate threshold of a type with a small mean is below 1. After one window with one warning, a later window with one warning can restrict the agent (with the defaults: one warning in window 11, then one in window 16). An agent that writes one warning in every fifth window is restricted at its fourth warning.
+- The type shift compares the fractions of the current window with no minimum count, so the first marks of a window decide it. An agent with a baseline of 2 observations and 1 warning per window gets RESTRICTED when a window starts with its warning. An agent that writes its mark types in batches gets it in the same way.
+- The rate threshold of a type with a small mean is below 1. After one window with one warning, a later window with one warning can give RESTRICTED (with the defaults: one warning in window 11, then one in window 16). An agent that writes one warning in every fifth window gets RESTRICTED at its fourth warning.
 
 **Blind spots.** For a type with a mean of exactly 0, the rate threshold is 0 and the rate check does not fire. The type shift then finds a burst of that type only when the type is more than half of the tracked marks of the window. The mean after cold start is the median of the cold-start windows, so with three or more tracked types every mean can be 0. Then neither check fires for that agent.
 
-**Recovery.** The principal calls `reset()` on the envelope and `restore_all()` on the barrier of the agent. A reset in the window that holds the trigger is undone, because the next write of the agent is judged on the same counts. Thus the principal resets after that window ends. Each attempt that the barrier lets through and the envelope refuses is a new flag: a need mark in a flagged scope, a warning or an intent there once the agent holds a need, or a write in another scope. An attempt that the barrier refuses is not a flag. So after a false restriction, two such attempts restrict the agent in every scope (escalation policy, item 3). The warnings that the restriction wrote on the observations of the agent stay until they decay.
+**Recovery.** The principal calls `reset(agent, principal_token)`. A reset in the window that holds the trigger is undone, because the next check judges the same counts. Thus the principal resets after that window ends.
 
-A deployment measures these cases on its own workload before it gives the guard a statistical envelope.
+**Verdicts.** `check(agent)` returns one of these verdicts. No verdict changes what the agent may write.
 
-**Verdicts.** `check(agent)` returns one of these verdicts:
+| Verdict | Trigger |
+|---------|---------|
+| NORMAL | No anomaly detected |
+| FLAGGED | Concentration detected (cross-agent pattern) |
+| RESTRICTED | Individual anomaly (rate spike or type shift), until a reset (P40) |
 
-| Verdict | Trigger | Consequence |
-|---------|---------|-------------|
-| NORMAL | No anomaly detected | No action |
-| FLAGGED | Concentration detected (cross-agent pattern) | Warning mark written; no barrier |
-| RESTRICTED | Individual anomaly (rate spike or type shift) | Barrier created/narrowed on the flagged scope |
+**Declared baselines.** A caller seeds an agent's baseline with `seed_baseline(agent_id, rates)`, for example from the `expected_activity` of the agent's manifest (Section 13.2). The rates are expected marks per hour; the envelope uses `window_seconds` to convert them to counts per window. A seeded baseline removes the cold-start blind spot for agents with known behavior. Real measurements refine the seeded baseline over time. The synthetic variance of the seed is 25% of the mean squared (stddev = 0.5 * mean). Thus small natural deviations from the declared rates do not give RESTRICTED.
 
-**Escalation policy.** When the guard receives a RESTRICTED verdict, it uses `_apply_restriction()` to narrow the barrier by scope:
+**Exempt agents.** The caller adds agents to the `exempt_agents` set of the envelope, whose marks it does not record: the guard's system agent (`Guard.system_agent_id`) and the diagnostic probe agent (Section 9.9). A deployment should use exemption rarely. The envelope should monitor external bots and integrations with their own baselines. A deployment should not exempt them.
 
-1. At the first flag on a scope, the guard revokes observations and actions in that scope and requires a need mark there before a warning or an intent. The agent is then restricted there (Section 9.8).
-2. Each subsequent flag on a different scope narrows one more scope.
-3. After `global_escalation_threshold` flags in total (default 3), the guard revokes observations and actions in every scope and requires a need mark in each scope before a warning or an intent there.
-4. Each restriction writes invalidation warnings on the recent observations of the agent in the flagged scope. It also writes an audit need mark for the principal.
+**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until a call to `reset(agent, principal_token)` with the principal token the envelope was created with. `reset()` MUST reject any other token; an envelope created without a token keeps a RESTRICTED verdict for good. Loading saved state MUST NOT clear the flag.
 
-**Declared baselines.** An agent can declare its expected activity in its manifest with `expected_activity: dict[str, float]`. This field maps a mark type value to the expected marks per hour. The rate does not depend on the window. The envelope uses `window_seconds` to convert the rate to counts per window. Thus agent creators do not need to know the window size.
-
-When `expected_activity` is present, the envelope calls `detector.seed_baseline()` at registration time. This call loads the declared baseline into the detector in advance. It removes the cold-start blind spot for agents with known behavior. The envelope flags deviations from the declared baseline immediately.
-
-Real measurements refine the seeded baseline over time. The synthetic variance of the seed is 25% of the mean squared (stddev = 0.5 * mean). Thus small natural deviations from the declared rates do not cause false positives.
-
-**Exempt agents.** The `exempt_agents` set of the envelope contains the system agent of the guard and the diagnostic probe agent (Section 9.9). The envelope does not see their writes. This prevents feedback loops in which the warning and need marks of the guard cause more anomalies. A deployment should use exemption rarely. The envelope should monitor external bots and integrations with their own baselines (with `expected_activity` declarations). A deployment should not exempt them.
-
-**`write_mark()` as single enforcement point.** Every agent write uses `Guard.write_mark()`. This method checks the barrier, the envelope, the rate limit and, for observation marks, the content policies. Then it delegates the write to `space.write()`. `write_mark()` rejects intent and action marks with a ValueError. These marks use `pre_action()`/`post_action()` instead. This makes sure that the guard monitors every observation, warning and need write.
-
-**P40: Envelope Monotonicity**: If `check(agent)` returns RESTRICTED at time t, it MUST return RESTRICTED for all t' > t until a call to `reset(agent, principal_token)` with the principal token of the envelope. An envelope created without a token takes the token of its guard. `reset()` MUST reject any other token, and loading saved state MUST NOT clear the flag. The `restricted` flag stays set.
-
-**P41: Envelope Cold Start Safety**: `check(agent)` MUST return NORMAL for any agent whose detector reports `is_ready() == False`. For the default `WelfordDetector`, this means that the detector has fewer than `min_samples` completed windows. The envelope does not flag a new agent while its baseline is not yet ready.
-
-**P42: Write-Mark Atomicity**: A `write_mark()` rejection, from a barrier check or an envelope restriction, MUST prevent storage of the mark. There are no partial writes.
-
-**P43: Escalation Boundedness**: Automatic barrier escalation from the envelope MUST NOT restrict more than one scope for each envelope flag. Global restriction (require-need-all) MUST require `global_escalation_threshold` flags.
+**P41: Envelope Cold Start Safety**: `check(agent)` MUST return NORMAL for any agent whose detector reports `is_ready() == False`. For the default `WelfordDetector`, this means that the detector has fewer than `min_samples` completed windows. The envelope does not say RESTRICTED for a new agent while its baseline is not yet ready.
 
 Ref: [`markspace/envelope.py::StatisticalEnvelope`](../markspace/envelope.py), [`tests/test_envelope.py`](../tests/test_envelope.py), [`tests/test_defense_integration.py`](../tests/test_defense_integration.py)
 
@@ -1229,13 +1216,11 @@ What has happened is still recorded: an action under a lease granted before the 
 
 **A restricted agent asks the principal.** A need mark that an agent writes with `write_mark` in a scope where it is restricted goes to the principal. The guard writes it in `_system` as its system agent, at the default strength, with the agent's id, the scope, and the agent's question and context, and `write_mark` returns its id. `_system` is CLASSIFIED, only a mark's author supersedes it, and no agent warns on a mark in `_system` (Section 9.5), so no agent reads, hides or supersedes this need mark. The agent holds at most one such need mark open (current and not resolved, Section 8.3). While it is open, `write_mark` refuses the agent's next need mark in a scope where it is restricted. The open need mark meets the barrier's need requirement in the scope it names and in that scope's ancestors, as a need mark in a scope does, while the agent is restricted there. Need marks in scopes where the agent is not restricted, and need marks written before the barrier, keep the usual rules. The need mark counts against the agent's write budget for `need` (Section 9.14).
 
-The guard's system agent writes these need marks and the breach need marks. The space's limit on marks per agent (`MarkSpace(max_marks_per_agent=...)`) applies to it. A breach need mark that the limit refuses is not written, and the guard logs it; for the agent's own need mark, `write_mark` raises `QuotaExceededError`. The envelope's restriction (Section 9.7) refuses every write of the agent in `write_mark` and `pre_action`, need marks included. The principal's `grant()`, a boundary and a direct claim read only the barrier, so they do not see a restriction that the envelope has latched but not yet turned into barrier revocations.
+The guard's system agent writes these need marks and the breach need marks. The space's limit on marks per agent (`MarkSpace(max_marks_per_agent=...)`) does not refuse the need marks of the guard's system agent, because the guard keeps each kind to one open. Its other marks, the content-policy warnings (Section 9.13), count against the limit; one that the limit refuses is not written, and the guard logs it.
 
 **Monotonicity.** `narrow()` only adds to the revocation set. There is no `un-narrow()`. Only `restore()` or `Guard.set_barrier()` with the correct principal token can re-grant a revoked permission. This makes barriers safe under concurrent access. Without principal intervention, the set of revocations can only grow and never shrink.
 
 **Wildcard support.** `narrow_all(mark_type)` stores `("*", mark_type)` in the revocation set. `is_allowed_checked()` checks the exact `(scope, mark_type)` entry and the wildcard `("*", mark_type)` entry.
-
-**Escalation counter.** Each barrier records a `flag_count`. The count increases by one at every envelope flag. The guard uses this counter to decide between two escalation levels: to narrow one scope, or to require need marks globally.
 
 **P44: Barrier Monotonicity**: If `is_allowed(scope, mark_type)` returns False, it MUST return False for all subsequent calls until `restore(scope, mark_type, principal_token)` or `Guard.set_barrier()` with the principal token succeeds. Without principal authentication, no operation can reverse a revocation.
 
@@ -1263,7 +1248,7 @@ The diagnostic probe verifies the health of agents with canary injection and an 
 
 **Scope isolation.** The probe writes only to a dedicated diagnostic scope (default `"diagnostics"`). The permissions of the probe agent cover only this scope. The probe agent has no write access to production scopes. Thus probe infrastructure does not pollute production mark data.
 
-**Envelope exemption.** The probe agent is in the `exempt_agents` set of the envelope. Probe writes can be frequent during health checks. They are not part of the anomaly detection statistics of the envelope.
+**Monitor exemption.** A harness that runs the envelope as a monitor puts the probe agent in its `exempt_agents` set (Section 9.7). Probe writes can be frequent during health checks. They are not part of the anomaly statistics.
 
 **Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. A harness can then apply a global barrier, which revokes observations and actions in every scope and requires a need mark in a scope before a warning or an intent there. The reference probe writes the need mark; the stress-test harness also applies the barrier. Until the principal restores access, the agent is restricted in every scope (Section 9.8): it writes no observation and gets no new lease, from `pre_action`, a boundary or the principal's `grant()`. What has already happened is still recorded: actions under leases granted before the barrier, failed actions, and direct claims, each direct claim with a need mark for the principal. The agent can still write need marks, one open at a time (Section 9.8), and warnings in a scope where it holds a need.
 
@@ -1362,7 +1347,7 @@ Ref: [`markspace/telemetry.py`](../markspace/telemetry.py), [`tests/test_telemet
 
 ### 9.12 Scope Rate Limits
 
-A scope MAY define per-agent and fleet-wide write rate limits. The guard enforces these limits at write time. It enforces them independently of the statistical envelope and the token budgets (P66).
+A scope MAY define per-agent and fleet-wide write rate limits. The guard enforces these limits at write time. It enforces them independently of the token budgets and the write budgets (P66).
 
 ```protobuf
 message ScopeRateLimit {
@@ -1374,13 +1359,13 @@ message ScopeRateLimit {
 
 This section adds the `rate_limit` field to the Scope definition. When a scope omits this field, no rate limit applies.
 
-**P64: Rate Limit Enforcement**: When a scope has a rate limit and an agent exceeds `max_writes_per_agent_per_window`, the guard MUST reject the write. The rejection MUST be visible to the envelope through `record_attempt()`.
+**P64: Rate Limit Enforcement**: When a scope has a rate limit and an agent exceeds `max_writes_per_agent_per_window`, the guard MUST reject the write. The rejection stores no mark (P42).
 
 **P65: Rate Limit Fleet Cap**: When the total writes to a scope exceed `max_total_writes_per_window`, the guard MUST reject ALL further writes until the window rotates. Per-agent usage has no effect on this rule.
 
-**P66: Rate Limit Independence**: Rate limits operate independently of the statistical envelope and token budgets:
-- If the envelope flags an agent that is within its rate limit, envelope restrictions still apply to the agent.
-- If an agent is within its envelope baseline but exceeds its rate limit, the guard still rejects the agent.
+**P66: Rate Limit Independence**: Rate limits operate independently of the token budgets and the write budgets:
+- If an agent is within its rate limit but has spent its write budget of a type, the guard still refuses its writes of that type.
+- If an agent is within its write budget but exceeds its rate limit, the guard still rejects the agent.
 
 Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.py::_check_rate_limit`](../markspace/guard.py), [`tests/test_rate_limit.py`](../tests/test_rate_limit.py)
 
@@ -1389,7 +1374,7 @@ Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.
 The enforcement layers that the guard already has operate on structural properties of marks: the author, the scope, the type and the count. None of these layers inspects mark content. Content policies add a pluggable content inspection layer for observation marks. This layer is between the rate limit check and scope validation in the `write_mark()` enforcement stack:
 
 ```
-authorization -> barrier -> envelope -> rate limit -> CONTENT POLICY -> scope validation -> write
+barrier -> rate limit -> CONTENT POLICY -> write budget -> authorization and scope validation (the space) -> write
 ```
 
 Content policies run late in the stack because they can be expensive (LLM calls). Cheap structural checks filter writes first.
@@ -1427,7 +1412,7 @@ The order is important. Cheap checks (length limits, regex) should come before e
 
 **FLAG behavior.** After a FLAG verdict, the write of the observation mark succeeds. The guard also emits a warning to the `_system` scope. This warning records the flag reason. The guard registers `_system` as a CLASSIFIED scope, because its marks name agents and scopes, and, when it is built, it refuses a `_system` scope that the space already holds with another visibility. An agent sees these marks only with read authorization for `_system`.
 
-A FLAG gives no input to the statistical envelope. The envelope already sees the written mark through the write hook. A call to `record_attempt()` would count the write twice. This double count would distort the anomaly baseline of the agent. FLAG is an observability signal, not an enforcement signal.
+FLAG is an observability signal, not an enforcement signal. A monitor attached by a write hook (Section 9.7) sees the stored mark once.
 
 **P67: Content Policy Atomicity**: A REJECT verdict MUST prevent storage of the observation mark. There are no partial writes.
 
@@ -1435,7 +1420,7 @@ A FLAG gives no input to the statistical envelope. The envelope already sees the
 
 **P69: Content Policy Scope**: Content policies MUST apply only to observation marks. Content policies MUST only modify the `content` field, through REWRITE. A policy MUST NOT change the mark identity (`id`, `agent_id`, `scope`, `mark_type`, `created_at`) or the structural fields (`topic`, `confidence`, `source`).
 
-**P70: Content Policy Independence**: Content policies operate independently of the envelope, the barrier and the rate limits. A REJECT from a content policy does not narrow the barrier. The envelope does not record the REJECT. A FLAG does not cause a call to `record_attempt()`.
+**P70: Content Policy Independence**: Content policies operate independently of the barrier and the rate limits. A REJECT from a content policy does not narrow the barrier and stores no mark.
 
 Ref: [`markspace/guard.py::ContentPolicy`](../markspace/guard.py), [`markspace/guard.py::_check_content_policies`](../markspace/guard.py), [`tests/test_guard.py::TestContentPolicies`](../tests/test_guard.py)
 
@@ -1460,19 +1445,19 @@ message WriteBudget {
 
 The budget of a type is `per_hour x period / 3600` writes over the trailing period.
 
-**Counting.** The guard counts a write when it is made. It reserves the write after the checks that can refuse it outright and releases the reservation when the write is not made: in `write_mark`, after the barrier, the envelope, the scope rate limit and the content policies, for a write that the agent's permissions allow, released when the space refuses the write or the guard refuses a restricted agent's need mark (Section 9.8); in `pre_action`, after the authorization, barrier, envelope, rate-limit and held-resource checks, released when the space refuses the intent; in `post_action`, for an action that the agent's permissions allow, released when no action is recorded. A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
+**Counting.** The guard counts a write when it is made. It reserves the write after the checks that can refuse it outright and releases the reservation when the write is not made: in `write_mark`, after the barrier, the scope rate limit and the content policies, for a write that the agent's permissions allow, released when the space refuses the write or the guard refuses a restricted agent's need mark (Section 9.8); in `pre_action`, after the authorization, barrier, rate-limit and held-resource checks, released when the space refuses the intent; in `post_action`, for an action that the agent's permissions allow, released when no action is recorded. A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
 
 **Exhaustion.** A write that would bring the agent's count of its type over the trailing period above the budget is refused and not counted, and so is every further write of that type until the count over the trailing period is below the budget again. When the agent's action budget is spent, `pre_action` also refuses its intents, without counting them. `pre_action` checks the action budget against the agent's counted actions; it does not count the agent's leases that have no action yet. `post_action` counts each action that it records, and it records an action also over the budget, because its tool has run. So the agent's actions can exceed the action budget by its leases that had no action yet when the budget was spent, by leases that a resolution boundary or the principal's `grant()` gives later, by its failed actions, and by its direct claims. Every lease has an intent that `pre_action` counted, so the intent budget bounds the leases; nothing in the write budget bounds the failed actions and the direct claims. An exhaustion of a type starts at the first write of that type that is refused or recorded over the budget, and at the first intent refused because the action budget is spent (an exhaustion of actions), each after the agent's last counted write of that type within the budget. Exhaustion is the only refusal of a write budget; a write budget restricts no scope.
 
 **Burn-rate alerts.** The burn rate is the speed at which the agent spends its budget, relative to the period: a burn rate of 1 spends exactly the budget over the period. A tier that spends `budget_fraction` of the budget in its long window has the burn rate `budget_fraction x period / long_window_seconds`; its threshold for a window is `burn rate x per_hour x window / 3600` writes. A tier fires on a counted write when the agent's counted writes of the type exceed its threshold over both its long and its short window; both windows are half-open, `(now - window, now]`. A tier stops at a counted write that does not exceed both thresholds. A tier refuses nothing. The default tiers are the starting values of [Google's Site Reliability Workbook, chapter 5](https://sre.google/workbook/alerting-on-slos/) (Table 5-8), with burn rates 14.4, 6 and 1 over the default period: 2 % of the budget in 1 h (short window 5 min) and 5 % in 6 h (30 min) page; 10 % in 3 days (6 h) opens a ticket.
 
-**Need marks.** The guard writes a need mark in `_system` for the principal when a tier starts firing (priority 0.9 for a page, 0.5 for a ticket) and when an exhaustion starts (priority 0.9), with the agent, the mark type and the kind (`page`, `ticket` or `exhausted`) in its context. It writes none while the last one of the same kind for that agent and type is still open, that is, not resolved (Section 8.3). The space's limit on marks per agent (`MarkSpace(max_marks_per_agent=...)`) applies to the guard's system agent too: a need mark that the limit refuses is not written, and the guard logs it. The guard records which need marks are open. `set_write_budget` forgets the agent's counted writes, its alert state and this record, so a new budget is a fresh start: the guard can write a need mark of a kind while an earlier one of that kind is still open.
+**Need marks.** The guard writes a need mark in `_system` for the principal when a tier starts firing (priority 0.9 for a page, 0.5 for a ticket) and when an exhaustion starts (priority 0.9), with the agent, the mark type and the kind (`page`, `ticket` or `exhausted`) in its context. It writes none while the last one of the same kind for that agent and type is still open, that is, not resolved (Section 8.3). The space's limit on marks per agent does not refuse these need marks (Section 9.8). The guard records which need marks are open. `set_write_budget` forgets the agent's counted writes, its alert state and this record, so a new budget is a fresh start: the guard can write a need mark of a kind while an earlier one of that kind is still open.
 
 **P77: Write Budget Exhaustion**: When a write would bring an agent's count of a mark type over the trailing period above its budget, the guard MUST refuse it in `write_mark` and `pre_action`, MUST NOT count it, and MUST refuse further writes of that type until the count over the trailing period is below the budget. `pre_action` MUST refuse an intent while the agent's action budget is spent. A write that another check refuses MUST NOT be counted.
 
 **P78: Write Budget Room**: The write budget MUST NOT refuse a write that keeps the agent's count of its type over the trailing period within the budget, except an intent that P77 refuses because the action budget is spent. A burn-rate tier MUST NOT refuse any write.
 
-**P79: Write Budget Alerts**: When a burn-rate tier starts firing, or an exhaustion starts, for an agent and a mark type, the guard MUST write a need mark in `_system` naming the agent, the type and the kind, unless the last one of the same kind for that agent and type is still open by the guard's record or the space's limit on marks per agent refuses the write. Only the principal token changes the guard's table of write budgets.
+**P79: Write Budget Alerts**: When a burn-rate tier starts firing, or an exhaustion starts, for an agent and a mark type, the guard MUST write a need mark in `_system` naming the agent, the type and the kind, unless the last one of the same kind for that agent and type is still open by the guard's record. Only the principal token changes the guard's table of write budgets.
 
 Ref: [`markspace/write_budget.py`](../markspace/write_budget.py), [`markspace/guard.py::_reserve_write`](../markspace/guard.py), [`tests/test_write_budget.py`](../tests/test_write_budget.py)
 
@@ -1519,7 +1504,7 @@ message Agent {
 
 `read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` has no effect. `permissions` and `read_scopes` both support hierarchical matching.
 
-The harness assigns the `id` of an agent. The agent does not choose it. The mark space and the guard identify an agent only by its `id`. They keep state by the `id`, for example: the barrier restrictions ([Section 9.8](#98-absorbing-barrier)), the detector state of the statistical envelope ([Section 9.7](#97-statistical-envelope)), the leases ([Section 6.5](#65-grants)), the token budgets ([Section 9.10](#910-token-budgets)), the scope rate limits ([Section 9.12](#912-scope-rate-limits)), the write budgets, their counted writes, their alert state and the record of open need marks ([Section 9.14](#914-write-budgets)), the subscriptions ([Section 13.3](#133-subscription)) and the right to supersede the agent's own marks ([Section 10](#10-generalized-supersession)). An agent with a new `id` has none of that state. A harness that gives a restricted agent a new `id` lifts the restriction without the principal (compare P44).
+The harness assigns the `id` of an agent. The agent does not choose it. The mark space, the guard and the envelope identify an agent only by its `id`. They keep state by the `id`, for example: the barrier restrictions ([Section 9.8](#98-absorbing-barrier)), the detector state of the statistical envelope ([Section 9.7](#97-statistical-envelope)), the leases ([Section 6.5](#65-grants)), the token budgets ([Section 9.10](#910-token-budgets)), the scope rate limits ([Section 9.12](#912-scope-rate-limits)), the write budgets, their counted writes, their alert state and the record of open need marks ([Section 9.14](#914-write-budgets)), the subscriptions ([Section 13.3](#133-subscription)) and the right to supersede the agent's own marks ([Section 10](#10-generalized-supersession)). An agent with a new `id` has none of that state. A harness that gives a restricted agent a new `id` lifts the restriction without the principal (compare P44).
 
 The reference implementation keeps this state in memory, so a restart loses it, also when the `id` stays the same. The right to supersede is the exception: it comes from the `agent_id` of the stored marks. A deployment that keeps marks across a restart gives each agent its old `id` again. It also saves the barrier snapshots from `Guard.get_barrier` and loads them with `Guard.set_barrier` and the principal token. It saves and loads the detector state of the statistical envelope with `StatisticalEnvelope.save_state` and `StatisticalEnvelope.load_state`. The reference implementation has no save or load methods for the leases, the token budgets, the scope rate limits, the guard's table of write budgets, the counted writes, the alert state and the record of open need marks, the subscriptions and their queues, and the per-agent mark counts.
 
@@ -1549,8 +1534,8 @@ The reference implementation is in Python (3.11+). Its runtime dependencies are 
 markspace/
   core.py          -- types, decay, trust, reinforcement, conflict resolution
   space.py         -- MarkSpace (stateful read/write/query, watch/subscribe, write hooks)
-  guard.py         -- Guard (deterministic enforcement layer, write_mark, barrier/envelope wiring)
-  envelope.py      -- StatisticalEnvelope (pluggable per-agent anomaly detection)
+  guard.py         -- Guard (deterministic enforcement layer, write_mark, barrier, write budgets)
+  envelope.py      -- StatisticalEnvelope (pluggable per-agent anomaly detection, a monitor)
   barrier.py       -- AgentBarrier (monotonic permission restriction)
   probe.py         -- DiagnosticProbe (canary injection and response checking)
   compose.py       -- composition validation (pipeline, manifest-permission checks)
@@ -1562,7 +1547,7 @@ markspace/
 tests/
   test_properties.py         -- property tests (P1-P13, P19-P35)
   test_guard.py              -- guard enforcement, supersession, deferred resolution (P14-P16, P36-P47)
-  test_envelope.py           -- envelope property tests (P40-P41, P42, P43)
+  test_envelope.py           -- envelope property tests (P40-P41)
   test_barrier.py            -- barrier property tests (P44-P45)
   test_probe.py              -- probe property tests (P46)
   test_defense_integration.py -- defense-in-depth integration tests
@@ -1692,7 +1677,7 @@ message AgentManifest {
   repeated WatchPattern  inputs            = 1;  // marks this agent reads (triggers)
   repeated ManifestOutput outputs          = 2;  // marks this agent writes
   optional double        schedule_interval = 3;  // seconds between activations ([Section 14](#14-scheduling))
-  map<string, double>    expected_activity = 4;  // MarkType.value -> expected marks per hour ([Section 9.7](#97-statistical-envelope)); also sets the write budget ([Section 9.14](#914-write-budgets))
+  map<string, double>    expected_activity = 4;  // MarkType.value -> expected marks per hour; sets the write budget ([Section 9.14](#914-write-budgets)) and can seed a monitor's baseline ([Section 9.7](#97-statistical-envelope))
   optional TokenBudget   budget            = 5;  // token budget ([Section 9.10](#910-token-budgets))
 }
 ```
@@ -1700,7 +1685,7 @@ message AgentManifest {
 The manifest is purely declarative. It does not execute anything. It has these uses:
 - **Composition validation**: check that a sequence of agents forms a connected pipeline.
 - **Permission validation**: check that the declared outputs agree with the write permissions of the agent.
-- **Anomaly detection**: `expected_activity` gives the statistical envelope an initial baseline. For agents with known behavior, the initial baseline removes the cold-start blind spot ([Section 9.7](#97-statistical-envelope)).
+- **Anomaly detection**: a harness can seed the monitor's baseline from `expected_activity` with `seed_baseline()`. For agents with known behavior, the seeded baseline removes the cold-start blind spot ([Section 9.7](#97-statistical-envelope)).
 - **Documentation**: read the manifest of an agent to understand what the agent does. You do not have to read its code.
 
 ### 13.3 Subscription
@@ -1824,9 +1809,10 @@ Ref: [`markspace/schedule.py`](../markspace/schedule.py), [`tests/test_schedule.
 
 ## 15. Properties Summary
 
-This section collects all normative properties. A conforming implementation MUST satisfy P1-P39, P47 and P71-P76. These properties are OPTIONAL:
+This section collects all normative properties. A conforming implementation MUST satisfy P1-P39, P42, P47 and P71-P76. These properties are OPTIONAL:
 
-- P40-P45 (adaptive layer)
+- P40, P41 (statistical envelope, a monitor)
+- P44, P45 (absorbing barrier)
 - P46 (diagnostic probe)
 - P48-P55 (composition)
 - P56 (scheduling)
@@ -1888,11 +1874,10 @@ Property numbers are stable identifiers. The table gives the section of each pro
 | P37 | Guard Atomicity | 9.6 |
 | P38 | Guard Transparency | 9.6 |
 | P39 | Action Precedence | 9.6 |
-| | **Statistical Envelope** (optional) | |
+| P42 | Write-Mark Atomicity | 9.6 |
+| | **Statistical Envelope** (optional, a monitor) | |
 | P40 | Envelope Monotonicity | 9.7 |
 | P41 | Envelope Cold Start Safety | 9.7 |
-| P42 | Write-Mark Atomicity | 9.7 |
-| P43 | Escalation Boundedness | 9.7 |
 | | **Absorbing Barrier** (optional) | |
 | P44 | Barrier Monotonicity | 9.8 |
 | P45 | Barrier Principal Exclusivity | 9.8 |
@@ -1954,14 +1939,14 @@ An implementation is conformant if:
 8. It supports generalized supersession across all mark types ([Section 10](#10-generalized-supersession)).
 9. It enforces scope visibility (OPEN/PROTECTED/CLASSIFIED) with projections and content redaction ([Section 7.4](#74-scope-visibility)).
 10. It supports write hooks ([Section 8.6](#86-write-hooks)).
-11. It satisfies all mandatory formal properties P1-P39, P47 and P71-P76 ([Section 15](#15-properties-summary)).
+11. It satisfies all mandatory formal properties P1-P39, P42, P47 and P71-P76 ([Section 15](#15-properties-summary)).
 12. It grants leases with fencing tokens. It records a successful action written through the guard only in these two cases ([Section 6.5](#65-grants)):
     - under a live lease of the action's own agent, scope and resource
     - as an uncontested direct claim
 
 An implementation MAY differ from the reference implementation in storage backend, concurrency model, garbage collection strategy or internal data structures, if the properties hold.
 
-An implementation MAY also support the adaptive monitoring layer: the statistical envelope ([Section 9.7](#97-statistical-envelope)) and the absorbing barrier ([Section 9.8](#98-absorbing-barrier)). If it supports this layer, it MUST satisfy P40-P45. Adaptive layer support is OPTIONAL for conformance.
+An implementation MAY also support the statistical envelope as a monitor ([Section 9.7](#97-statistical-envelope)) and the absorbing barrier ([Section 9.8](#98-absorbing-barrier)). If it supports the envelope, it MUST satisfy P40 and P41; if it supports the barrier, P44 and P45. Both are OPTIONAL for conformance.
 
 An implementation MAY also support diagnostic probes ([Section 9.9](#99-diagnostic-probe)). If it supports them, it MUST satisfy P46. Probe support is OPTIONAL for conformance.
 

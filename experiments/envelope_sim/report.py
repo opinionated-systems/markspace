@@ -19,7 +19,7 @@ METHOD = """## Configurations and method
 
 - L, the library default: observations and warnings tracked, 300 s windows, 10 cold-start windows, `k_sigma` 3.5, type-shift threshold 0.5.
 - T, the stress test and the defense trials: intents, actions, observations, warnings and needs tracked, 4 h windows (one per round, two rounds a day), 8 cold-start windows.
-- The driver calls the envelope as the guard does: a check before each write, the count after it (`test_run_stream_refuses_the_write_that_the_guard_refuses` compares it with `Guard.write_mark` on generated streams).
+- The driver checks the envelope before each write and counts the write after it, as the guard did while it used the envelope; the envelope is now a monitor (spec 9.7). `test_run_stream_restricts_where_a_hooked_monitor_does` compares the driver with a monitor fed by a space's write hook on generated streams.
 - Each seed is one agent, run until its first RESTRICTED verdict. The result for a normal profile is the share of agents restricted within a horizon of simulated time, with an exact (Clopper-Pearson) 95 % interval. A share by horizon, not a rate per window: the chance of a restriction is not constant over an agent's life, so a rate per window would depend on the length of the run.
 - In configuration L an envelope window starts at the first event at or after the end of the previous one, so an idle stretch makes no window. In T the harness checks every agent at the end of every round, so every round is a window.
 - An attack writes inside one envelope window (the boundary burst across the end of one). An agent counts as detected when its first restriction comes after its first attack write and at most one window after its last; a restriction before the attack, a later one, and none are counted apart.
@@ -120,7 +120,7 @@ def render(results: dict[str, Any]) -> str:
     stored_normal = sum(v["normal_restricted"] for v in replays.values())
 
     lines = [
-        "# Envelope simulator: today's detector (D0)",
+        "# Envelope simulator: the envelope's default detector (D0)",
         "",
         f"Measured with `python -m experiments.envelope_sim.measure` ({cfg['seeds']} seeds of {cfg['windows']:,} windows per profile); the numbers are in [`results/d0.json`](results/d0.json), and this file is written from it by `report.py`.",
         "",

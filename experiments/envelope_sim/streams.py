@@ -2,10 +2,10 @@
 """
 Mark streams for the envelope simulator.
 
-A stream is one agent's envelope events in time order, as the guard makes
-them (spec 9.7): CHECK is the envelope check before a write
-(Guard.write_mark, pre_action); a MarkType is the write that the envelope
-counts after it (the write hook, or record_attempt). Each item also says
+A stream is one agent's envelope events in time order (spec 9.7): CHECK is
+the envelope's check before a write, as the guard made it while it used the
+envelope; a MarkType is the write that the envelope counts after it (a write
+hook, or record_attempt). Each item also says
 whether the write belongs to an attack, so that the driver can count the
 harmful writes before a restriction.
 
@@ -50,7 +50,7 @@ class SimConfig:
     min_samples: int
 
     def envelope(self, clock: Callable[[], float]) -> StatisticalEnvelope:
-        """Today's envelope with today's detector (D0) in this configuration."""
+        """The envelope with its default detector (D0) in this configuration."""
         welford = WelfordConfig(
             k_sigma=3.5,
             min_samples=self.min_samples,

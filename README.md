@@ -16,7 +16,7 @@ If you're coordinating multiple LLM agents, you've likely hit some of these:
 
 Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy) - a mechanism by which biological systems coordinate at scale. Agents leave traces in a shared environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution. These constraints live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes. Over time, the environment becomes a model of the world the agents operate in.
 
-The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, trust-weighted decay, and [76 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
+The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, trust-weighted decay, and [78 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
 ## Motivation
 
@@ -59,7 +59,7 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 **Decay:** Coordination is a dynamical process - the goal is stability against continuous change, not a fixed solution reached once. Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
 
-Full protocol design in [`framework.md`](docs/framework.md). Formal specification (76 properties, conformance checklist) in [`spec.md`](docs/spec.md).
+Full protocol design in [`framework.md`](docs/framework.md). Formal specification (78 properties, conformance checklist) in [`spec.md`](docs/spec.md).
 
 ## Composition and isolation
 
@@ -95,7 +95,7 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (705):**
+**Unit tests (711):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
@@ -107,7 +107,7 @@ The reference implementation and experiments verify that the protocol's properti
 - **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps, write budgets (a spent budget refuses further writes of its type; burn-rate tiers page or ticket the principal with need marks)
 - **LLM client and stress-test pacing** - Retry-After handling, cached and reasoning token accounting, arrival-ordered pacing under rate limits (real threads)
 - **Stress-test safety metrics** - double bookings counted from the guard's decisions, recovered bookings apart, scope violations checked on every mark the harness hands an agent
-- **Envelope simulator** - the simulator drives the envelope as the guard does; the replay of the stored defense trials reproduces the stored first restriction of every agent it can compare (all but the 5 slow_drift adversaries, whose writes were not stored)
+- **Envelope simulator** - the simulator checks the envelope before each write, as a monitor fed by a write hook would answer; the replay of the stored defense trials reproduces the stored first restriction of every agent it can compare (all but the 5 slow_drift adversaries, whose writes were not stored)
 
 **[Stress test:](experiments/stress_test/analysis.md)** AI personal assistants for a simulated office - one per employee, plus adversarial agents that attempt to breach scope boundaries. No central scheduler, all coordination through the shared mark space. The scenario exercises 7 resource types across natural permission boundaries:
 
@@ -150,7 +150,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 705 tests, no API key needed
+pytest            # 711 tests, no API key needed
 ```
 
 ### Use the protocol
@@ -237,7 +237,7 @@ See [`experiments/guide.md`](experiments/guide.md) for CLI reference and cost es
 ## Documentation
 
 - [`docs/framework.md`](docs/framework.md) - protocol design, biological foundations, composition, architecture, failure analysis
-- [`docs/spec.md`](docs/spec.md) - formal specification (76 properties, conformance checklist)
+- [`docs/spec.md`](docs/spec.md) - formal specification (78 properties, conformance checklist)
 - [`experiments/guide.md`](experiments/guide.md) - running experiments (setup, CLI reference, analysis, costs)
 - [`experiments/validation/`](experiments/validation/analysis.md) - safety, visibility, concurrency, scaling
 - [`experiments/stress_test/`](experiments/stress_test/) - 105-agent stress test ([design](experiments/stress_test/design.md), [analysis](experiments/stress_test/analysis.md))
@@ -255,7 +255,7 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 | [`core.py`](markspace/core.py) | Mark types, enums, decay, trust, reinforcement, watch patterns, manifests. Stateless. |
 | [`space.py`](markspace/space.py) | Thread-safe mark space. Read, write, query, watch/subscribe. |
 | [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks and per-agent write budgets for each mark type. |
-| [`envelope.py`](markspace/envelope.py) | Optional. Pluggable per-agent anomaly detection (default: Welford's online algorithm). Manifest-declared baselines. |
+| [`envelope.py`](markspace/envelope.py) | Optional monitor. Pluggable per-agent anomaly detection (default: Welford's online algorithm); nothing in the library acts on its verdicts. Seeded baselines. |
 | [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching; the guard enforces it and gives a restricted agent no new lease. |
 | [`probe.py`](markspace/probe.py) | Optional. Diagnostic canary injection. Verifies agent health through the mark space. |
 | [`budget.py`](markspace/budget.py) | Optional. Per-agent token budgets with configurable warning thresholds and hard stops. |

@@ -40,6 +40,17 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 # ---------------------------------------------------------------------------
 
 
+def envelope_restrictions(defense: dict) -> tuple[int, str]:
+    """The envelope's restriction count and its source. Runs from before the
+    envelope left the guard path record the guard's restrictions
+    (envelope_restricted_count); later runs record the verdicts of the
+    envelope as a monitor (monitor_restricted_count), on which nothing
+    acts."""
+    if "envelope_restricted_count" in defense:
+        return defense["envelope_restricted_count"], "guard"
+    return defense.get("monitor_restricted_count", 0), "monitor"
+
+
 def double_bookings(record: dict) -> int:
     """A run's double bookings, from its stored steps (stored_run_safety.py)."""
     return check_run(Path(record["_path"]).parent)["double_bookings"]
@@ -424,7 +435,7 @@ def analyze_defense() -> None:
     # Defense metrics table
     print("\n## Defense Metrics\n")
     print(
-        "| Model | Scenario | Envelope Restricted | Barriers | "
+        "| Model | Scenario | Envelope Restricted (source) | Barriers | "
         "Probe Healthy | Probe Suspicious | Probe Compromised |"
     )
     print(
@@ -445,7 +456,7 @@ def analyze_defense() -> None:
             if not t:
                 continue
             defense = t.get("defense", {})
-            n_restricted = defense.get("envelope_restricted_count", 0)
+            n_restricted, source = envelope_restrictions(defense)
             barriers = defense.get("barriers", {})
             n_barriers = len(barriers)
 
@@ -462,7 +473,7 @@ def analyze_defense() -> None:
             )
 
             print(
-                f"| {model} | {scenario} | {n_restricted} | {n_barriers} | "
+                f"| {model} | {scenario} | {n_restricted} ({source}) | {n_barriers} | "
                 f"{probe_healthy} | {probe_suspicious} | {probe_compromised} |"
             )
 
@@ -489,14 +500,16 @@ def analyze_defense() -> None:
 
             print(f"**{scenario}**:")
             for agent_id, barrier_info in barriers.items():
-                flags = barrier_info.get("flag_count", 0)
                 revoked = barrier_info.get("revoked_count", 0)
-                scopes = barrier_info.get("flagged_scopes", [])
-                print(
-                    f"  - Agent {agent_id[:8]}...: "
-                    f"{flags} flags, {revoked} revoked, "
-                    f"scopes: {scopes}"
+                # Runs from before the envelope left the guard path also
+                # record its escalation counter.
+                flags = (
+                    f"{barrier_info['flag_count']} flags, "
+                    f"scopes: {barrier_info.get('flagged_scopes', [])}, "
+                    if "flag_count" in barrier_info
+                    else ""
                 )
+                print(f"  - Agent {agent_id[:8]}...: {flags}{revoked} revoked")
 
     # Verdict breakdown
     print("\n## Verdict Breakdown\n")
@@ -547,6 +560,7 @@ def _save_defense_csv(records: list[dict], path: Path) -> None:
         "scope_violations",
         "completion",
         "envelope_restricted",
+        "envelope_restricted_source",
         "barriers",
         "probe_healthy",
         "probe_suspicious",
@@ -562,6 +576,7 @@ def _save_defense_csv(records: list[dict], path: Path) -> None:
             probe_results = defense.get("probe_results", [])
             mc = r.get("manifest_completion", {})
             avg_comp = sum(mc.values()) / len(mc) if mc else 0
+            n_restricted, source = envelope_restrictions(defense)
             row = {
                 "model": r.get("_model", r.get("model", "")),
                 "scenario": r.get("_variant", ""),
@@ -574,7 +589,8 @@ def _save_defense_csv(records: list[dict], path: Path) -> None:
                 "double_bookings": r.get("double_bookings", ""),
                 "scope_violations": r.get("scope_violations", ""),
                 "completion": f"{avg_comp:.4f}",
-                "envelope_restricted": defense.get("envelope_restricted_count", 0),
+                "envelope_restricted": n_restricted,
+                "envelope_restricted_source": source,
                 "barriers": len(defense.get("barriers", {})),
                 "probe_healthy": sum(
                     1 for p in probe_results if p.get("verdict") == "healthy"

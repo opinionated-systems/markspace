@@ -154,6 +154,10 @@ class MarkSpace:
         # Per-agent write quota, a limit of this reference implementation
         # (the spec has none). None = unlimited.
         self._max_marks_per_agent: int | None = max_marks_per_agent
+        # The attached guard's own agent (attach_claim_table): the quota does
+        # not refuse its need marks for the principal, each kind of which
+        # the guard keeps to one open; its other marks stay under the quota.
+        self._quota_exempt: uuid.UUID | None = None
         # Per-agent count of current marks (stored and not superseded),
         # maintained on write, resolve and gc.
         self._agent_mark_counts: dict[uuid.UUID, int] = {}
@@ -184,16 +188,20 @@ class MarkSpace:
         with self._lock:
             self._scopes[scope.name] = scope
 
-    def attach_claim_table(self, table: ClaimTable) -> None:
+    def attach_claim_table(
+        self, table: ClaimTable, quota_exempt: uuid.UUID | None = None
+    ) -> None:
         """
         Attach the guard that holds this space's grants (Section 6.5). A
         space has at most one: a second guard would grant the same resource
-        again.
+        again. quota_exempt: the guard's own agent, whose need marks for the
+        principal the per-agent quota does not refuse.
         """
         with self._lock:
             if self._claims is not None:
                 raise ValueError("This MarkSpace already has a guard")
             self._claims = table
+            self._quota_exempt = quota_exempt
 
     def add_write_hook(self, hook: Callable[[uuid.UUID, AnyMark], None]) -> uuid.UUID:
         """Register a post-write hook. Returns a handle for removal."""
@@ -285,13 +293,28 @@ class MarkSpace:
                 f"initial_strength {mark.initial_strength} is outside [0.0, 1.0]"
             )
 
-    def _decrement_mark_count(self, agent_id: uuid.UUID) -> None:
-        """One current mark fewer for *agent_id*. Caller MUST hold self._lock."""
-        count = self._agent_mark_counts.get(agent_id, 0)
+    def _counts_toward_quota(self, agent_id: uuid.UUID, mark_type: MarkType) -> bool:
+        """Whether a mark counts against its agent's quota: every mark but
+        the need marks of the attached guard's own agent, which the guard
+        keeps to one open per kind."""
+        return not (agent_id == self._quota_exempt and mark_type == MarkType.NEED)
+
+    def _increment_mark_count(self, mark: AnyMark) -> None:
+        """One current mark more for its agent. Caller MUST hold self._lock."""
+        if self._counts_toward_quota(mark.agent_id, mark.mark_type):
+            self._agent_mark_counts[mark.agent_id] = (
+                self._agent_mark_counts.get(mark.agent_id, 0) + 1
+            )
+
+    def _decrement_mark_count(self, mark: AnyMark) -> None:
+        """One current mark fewer for its agent. Caller MUST hold self._lock."""
+        if not self._counts_toward_quota(mark.agent_id, mark.mark_type):
+            return
+        count = self._agent_mark_counts.get(mark.agent_id, 0)
         if count > 1:
-            self._agent_mark_counts[agent_id] = count - 1
+            self._agent_mark_counts[mark.agent_id] = count - 1
         else:
-            self._agent_mark_counts.pop(agent_id, None)
+            self._agent_mark_counts.pop(mark.agent_id, None)
 
     def _created_at_for(self, mark: AnyMark) -> float:
         """
@@ -323,7 +346,7 @@ class MarkSpace:
         (id, agent_id, created_at). The original mark object is not modified.
 
         WARNING: Direct calls to write() bypass the Guard's enforcement stack
-        (barrier, envelope). Production code should route writes through
+        (barrier, write budgets, rate limits). Production code should route writes through
         Guard.write_mark() for observations/warnings/needs, or
         Guard.execute()/pre_action()/post_action() for intents/actions.
         Direct write() is for guard-internal writes, probe writes, and tests.
@@ -340,14 +363,23 @@ class MarkSpace:
 
             # A write that supersedes a current mark replaces it: the
             # author's count stays the same, so the quota does not apply.
-            replaces_current = (
-                mark.supersedes is not None
-                and mark.supersedes in self._marks
+            replaced = (
+                self._marks.get(mark.supersedes)
+                if mark.supersedes is not None
                 and mark.supersedes not in self._superseded
+                else None
+            )
+            replaces_current = replaced is not None
+            replaces_counted = replaced is not None and self._counts_toward_quota(
+                replaced.agent_id, replaced.mark_type
             )
 
             # Enforce per-agent write quota
-            if self._max_marks_per_agent is not None and not replaces_current:
+            if (
+                self._max_marks_per_agent is not None
+                and not replaces_counted
+                and self._counts_toward_quota(agent.id, mark.mark_type)
+            ):
                 current = self._agent_mark_counts.get(agent.id, 0)
                 if current >= self._max_marks_per_agent:
                     raise QuotaExceededError(
@@ -393,14 +425,12 @@ class MarkSpace:
             # The superseded mark stays in storage but will be filtered at read time
             if stored.supersedes is not None:
                 if replaces_current:
-                    self._decrement_mark_count(self._marks[stored.supersedes].agent_id)
+                    self._decrement_mark_count(self._marks[stored.supersedes])
                 self._superseded.add(stored.supersedes)
 
             self._marks[new_id] = stored
             # Maintain per-agent mark count
-            self._agent_mark_counts[stored.agent_id] = (
-                self._agent_mark_counts.get(stored.agent_id, 0) + 1
-            )
+            self._increment_mark_count(stored)
             # Maintain scope index
             self._by_scope.setdefault(stored.scope, set()).add(new_id)
             # Maintain warning invalidation index
@@ -616,13 +646,11 @@ class MarkSpace:
             )
             self._marks[new_id] = resolved
             self._superseded.add(need_mark_id)
-            self._decrement_mark_count(mark.agent_id)
+            self._decrement_mark_count(mark)
             # Maintain scope index
             self._by_scope.setdefault(resolved.scope, set()).add(new_id)
             # Maintain per-agent mark count
-            self._agent_mark_counts[resolved.agent_id] = (
-                self._agent_mark_counts.get(resolved.agent_id, 0) + 1
-            )
+            self._increment_mark_count(resolved)
             # Notify subscribers about the resolved need (supersession)
             self._notify_subscribers(resolved)
             return new_id
@@ -1082,7 +1110,7 @@ class MarkSpace:
                 if removed is not None:
                     # A superseded mark left the count when it was superseded.
                     if mid not in self._superseded:
-                        self._decrement_mark_count(removed.agent_id)
+                        self._decrement_mark_count(removed)
                     scope_ids = self._by_scope.get(removed.scope)
                     if scope_ids is not None:
                         scope_ids.discard(mid)

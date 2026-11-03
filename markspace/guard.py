@@ -60,7 +60,6 @@ from markspace.core import (
     scope_contains,
     scope_root,
 )
-from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
 from markspace.rate_limit import RateLimitTracker
 from markspace.space import (
     IntentJudgement,
@@ -81,7 +80,7 @@ from markspace.telemetry import (
     TelemetryEvent,
     TelemetrySink,
 )
-from markspace.write_budget import Burn, WriteBudget, WriteBudgetMeter
+from markspace.write_budget import WriteBudget, WriteBudgetMeter
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +308,7 @@ class Guard:
     def __init__(
         self,
         space: MarkSpace,
-        envelope: StatisticalEnvelope | None = None,
+        *,
         principal_token: uuid.UUID | None = None,
         telemetry: TelemetrySink | None = None,
         content_policies: list[ContentPolicy] | None = None,
@@ -317,7 +316,6 @@ class Guard:
         write_budgets: dict[uuid.UUID, WriteBudget] | None = None,
     ) -> None:
         self.space = space
-        self._envelope = envelope
         self._principal_token = principal_token or uuid.uuid4()
         self._telemetry: TelemetrySink = telemetry or NullSink()
         self._content_policies: list[ContentPolicy] = content_policies or []
@@ -345,8 +343,7 @@ class Guard:
         # across the check and the write; never taken under the space lock.
         self._open_needs: dict[tuple[Any, ...], uuid.UUID] = {}
         self._need_lock = threading.Lock()
-        # System agent for guard-originated warnings/needs.
-        # Exempt from envelope monitoring to prevent feedback loops.
+        # System agent for guard-originated warnings and need marks.
         self._system_agent = Agent(
             name="_guard",
             scopes={"*": ["warning", "need"], "_system": ["warning", "need"]},
@@ -396,22 +393,7 @@ class Guard:
         # Grant telemetry (metric, labels), emitted after the locks are
         # released: a sink is outside code.
         self._lease_events: list[tuple[str, dict[str, str]]] = []
-        # One principal token for the whole stack (P40): refuse another token
-        # before the space is attached, bind once the space has accepted this
-        # guard, so that neither refusal leaves the other bound. The check and
-        # the bind are two steps: build guards that share one envelope one at
-        # a time.
-        if envelope is not None and not envelope.accepts_principal(
-            self._principal_token
-        ):
-            raise ValueError("the statistical envelope has another principal token")
-        space.attach_claim_table(self)
-        if envelope is not None:
-            envelope.bind_principal(self._principal_token)
-        # Wire envelope to space write hooks
-        if envelope is not None:
-            envelope.add_exempt_agent(self._system_agent.id)
-            space.add_write_hook(lambda agent_id, mark: envelope.record(agent_id, mark))
+        space.attach_claim_table(self, quota_exempt=self._system_agent.id)
 
     @contextmanager
     def _resource_lock(self, scope: str, resource: str) -> Iterator[None]:
@@ -766,7 +748,7 @@ class Guard:
                     ),
                 )
             except Exception:
-                logger.debug(
+                logger.warning(
                     "Failed to write content-policy-flag warning", exc_info=True
                 )
 
@@ -995,10 +977,11 @@ class Guard:
           restricted in the mark's scope goes to the principal: the guard
           writes it in _system, one open per agent, and returns its id
           (Section 9.8).
-        - Envelope check (is this agent anomalous?)
         - Rate limit check (is this scope rate-limited?)
         - Content policy check (Observation marks only, P67-P70)
-        - Schema/scope validation (delegated to space.write())
+        - Write budget (Section 9.14)
+        - Authorization and schema/scope validation (delegated to
+          space.write())
 
         For intents and actions on contested resources, use execute()
         or pre_action()/post_action() instead.
@@ -1045,27 +1028,9 @@ class Guard:
             )
             raise ScopeError(barrier_result)
 
-        # Envelope check
-        envelope_result = self._check_envelope(agent, mark.scope)
-        if envelope_result is not None:
-            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
-            self._emit_telemetry(
-                agent,
-                "write_mark",
-                mark.scope,
-                mark.mark_type.value,
-                "rejected",
-                reason=envelope_result,
-                envelope_status="restricted",
-            )
-            raise ScopeError(envelope_result)
-
         # Rate limit check (P64, P65)
         rate_limit_result = self._check_rate_limit(agent, mark.scope)
         if rate_limit_result is not None:
-            # Make rate limit rejections visible to the envelope
-            if self.envelope is not None:
-                self.envelope.record_attempt(agent.id, mark.mark_type)
             self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
             self._emit_telemetry(
                 agent,
@@ -1424,9 +1389,10 @@ class Guard:
     # ------------------------------------------------------------------
 
     @property
-    def envelope(self) -> StatisticalEnvelope | None:
-        """The statistical envelope, fixed when the guard is built (P40)."""
-        return self._envelope
+    def system_agent_id(self) -> uuid.UUID:
+        """The id of the guard's own agent, which writes its warnings and its
+        need marks for the principal; a harness exempts it from a monitor."""
+        return self._system_agent.id
 
     def get_barrier(self, agent_id: uuid.UUID) -> BarrierSnapshot | None:
         """Get a frozen snapshot of an agent's barrier, if any.
@@ -1479,8 +1445,6 @@ class Guard:
                 _principal_token=self._principal_token,
                 _revoked=set(barrier.revoked),
                 _require_need_scopes=set(barrier.require_need_scopes),
-                _flag_count=barrier.flag_count,
-                flagged_scopes=set(barrier.flagged_scopes),
             )
         elif not isinstance(barrier, AgentBarrier):
             raise TypeError(f"not a barrier: {type(barrier).__name__}")
@@ -1539,109 +1503,6 @@ class Guard:
                     f"scope '{scope}' before other writes (barrier requirement)"
                 )
         return None
-
-    def _check_envelope(self, agent: Agent, scope: str) -> str | None:
-        """Check envelope. Returns error message if RESTRICTED, None otherwise."""
-        if self.envelope is None:
-            return None
-        verdict = self.envelope.check(agent.id)
-        if verdict == EnvelopeVerdict.RESTRICTED:
-            self._apply_restriction(agent, scope)
-            return (
-                f"Agent '{agent.name}' restricted by statistical envelope "
-                f"in scope '{scope}'"
-            )
-        if verdict == EnvelopeVerdict.FLAGGED:
-            # Emit warning but don't block
-            try:
-                self.space.write(
-                    self._system_agent,
-                    Warning(
-                        scope="_system",
-                        topic="envelope-flag",
-                        reason=(
-                            f"Concentration detected involving agent "
-                            f"'{agent.name}' in scope '{scope}'"
-                        ),
-                        severity=Severity.CAUTION,
-                    ),
-                )
-            except Exception:
-                logger.debug("Failed to write envelope-flag warning", exc_info=True)
-        return None
-
-    def _apply_restriction(self, agent: Agent, scope: str) -> None:
-        """Create/update barrier in response to RESTRICTED verdict."""
-        with self._barrier_lock:
-            barrier = self._barriers.get(agent.id)
-            if barrier is None:
-                barrier = AgentBarrier(
-                    agent_id=agent.id,
-                    _principal_token=self._principal_token,
-                )
-                self._barriers[agent.id] = barrier
-
-            # Scope-scoped narrowing
-            barrier.narrow(scope, MarkType.OBSERVATION.value)
-            barrier.narrow(scope, MarkType.ACTION.value)
-            barrier.require_need(scope)
-            flag_count = barrier.increment_flags()
-            barrier.flagged_scopes.add(scope)
-
-        # Escalation: global restriction on 3+ flags
-        if (
-            flag_count >= self.envelope.global_escalation_threshold
-            if self.envelope
-            else 3
-        ):
-            with self._barrier_lock:
-                barrier.narrow_all(MarkType.OBSERVATION.value)
-                barrier.narrow_all(MarkType.ACTION.value)
-                barrier.require_need_all()
-
-        # Write invalidation warnings for the agent's recent observations
-        try:
-            recent_obs = self.space.read(scope=scope, mark_type=MarkType.OBSERVATION)
-            agent_obs = [m for m in recent_obs if m.agent_id == agent.id]
-            for obs in agent_obs:
-                self.space.write(
-                    self._system_agent,
-                    Warning(
-                        scope="_system",
-                        invalidates=obs.id,
-                        topic="envelope-restriction",
-                        reason=(
-                            f"Agent '{agent.name}' flagged by statistical "
-                            f"envelope in scope '{scope}'"
-                        ),
-                        severity=Severity.CAUTION,
-                    ),
-                )
-        except Exception:
-            logger.debug("Failed to write invalidation warnings", exc_info=True)
-
-        # Write audit Need
-        try:
-            self.space.write(
-                self._system_agent,
-                Need(
-                    scope="_system",
-                    question=(
-                        f"Agent '{agent.name}' restricted: "
-                        f"observation/action revoked in '{scope}'"
-                    ),
-                    context={
-                        "agent_id": str(agent.id),
-                        "trigger": "envelope",
-                        "scope": scope,
-                        "flag_count": flag_count,
-                    },
-                    priority=0.9,
-                    blocking=False,
-                ),
-            )
-        except Exception:
-            logger.debug("Failed to write audit Need", exc_info=True)
 
     def pre_action(
         self,
@@ -1721,19 +1582,9 @@ class Guard:
                 reason=barrier_msg,
             )
 
-        # Envelope check
-        envelope_msg = self._check_envelope(agent, scope)
-        if envelope_msg is not None:
-            return GuardDecision(
-                verdict=GuardVerdict.DENIED,
-                reason=envelope_msg,
-            )
-
         # Rate limit check (P64, P65)
         rate_limit_msg = self._check_rate_limit(agent, scope)
         if rate_limit_msg is not None:
-            if self.envelope is not None:
-                self.envelope.record_attempt(agent.id, MarkType.INTENT)
             return GuardDecision(
                 verdict=GuardVerdict.DENIED,
                 reason=rate_limit_msg,
@@ -1753,14 +1604,6 @@ class Guard:
         ]
         blocking_actions = [a for a in successful_actions if a.agent_id != agent.id]
         if blocking_actions:
-            # Record the attempt so conflict-spam is visible to the envelope.
-            # This return path produces 0 marks (the Intent write is below,
-            # at line ~489). Without record_attempt, an adversary can spam
-            # already-taken resources indefinitely with no signal reaching
-            # the detector. Any guard early-return before a mark write is
-            # a potential detection blind spot - audit accordingly.
-            if self.envelope is not None:
-                self.envelope.record_attempt(agent.id, MarkType.INTENT)
             # Name the claimant only if this agent may see its mark (P22).
             claimant = blocking_actions[0]
             claimed_by = (

@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Statistical Envelope - Behavioral anomaly detection for agents.
+Statistical Envelope - Behavioral anomaly detection for agents, as a
+monitor.
 
 Each agent gets its own AnomalyDetector instance that learns the agent's
 individual baseline. The envelope orchestrates windowing, per-agent
 detector lifecycle, cross-agent concentration checks, and the monotonic
-RESTRICTED state machine (P40, P41).
+RESTRICTED state machine (P40, P41). It is a monitor: nothing in the library
+acts on its verdicts, and it sees only what its caller feeds it (a write hook
+for stored marks, record_attempt() for refused attempts).
 
 Detection algorithms are pluggable via the AnomalyDetector protocol.
 The default WelfordDetector uses streaming mean/variance (Welford's
@@ -31,7 +34,7 @@ from markspace.core import AnyMark, MarkType, Observation, Warning
 class EnvelopeVerdict(str, Enum):
     NORMAL = "normal"
     FLAGGED = "flagged"  # suspicious, not blocked
-    RESTRICTED = "restricted"  # triggers barrier narrowing
+    RESTRICTED = "restricted"  # individual anomaly, until a reset (P40)
 
 
 # -----------------------------------------------------------------------
@@ -43,8 +46,8 @@ class AnomalyDetector(ABC):
     """Per-agent anomaly detector. One instance per tracked agent.
 
     The envelope feeds completed window counts via observe(), then asks
-    is_anomalous() with the current window to decide whether to
-    restrict the agent. Each detector maintains its own baseline -
+    is_anomalous() with the current window to decide whether its verdict
+    for the agent is RESTRICTED. Each detector maintains its own baseline -
     no assumption that agents share the same activity pattern.
     """
 
@@ -388,7 +391,6 @@ class EnvelopeConfig:
         {MarkType.OBSERVATION, MarkType.WARNING}
     )
     concentration_threshold: int = 3  # agents on same scope+topic = FLAGGED
-    global_escalation_threshold: int = 3  # flags before global restriction
     exempt_agents: set[uuid.UUID] = field(default_factory=set)
 
 
@@ -433,8 +435,8 @@ class StatisticalEnvelope:
     ) -> None:
         self._config = config or EnvelopeConfig()
         self._clock = clock or time.time
-        # Only this token resets a restricted agent (P40). Without one, the
-        # envelope takes the token of the guard it is given to.
+        # Only this token resets a restricted agent (P40). Without one, a
+        # RESTRICTED verdict stays for good.
         self._principal_token: uuid.UUID | None = principal_token
         self._lock = threading.RLock()
         self._agents: dict[uuid.UUID, _AgentState] = {}
@@ -463,11 +465,6 @@ class StatisticalEnvelope:
             stats.welford_m2 = diag["m2"]
             stats.completed_windows = diag["completed_windows"]
         return stats
-
-    @property
-    def global_escalation_threshold(self) -> int:
-        """Number of flags before global restriction is applied."""
-        return self._config.global_escalation_threshold
 
     def add_exempt_agent(self, agent_id: uuid.UUID) -> None:
         """Add an agent ID to the exempt set. record() ignores exempt agents."""
@@ -531,13 +528,12 @@ class StatisticalEnvelope:
                 self._recent_writers.setdefault(key, set()).add(agent_id)
 
     def record_attempt(self, agent_id: uuid.UUID, mark_type: MarkType) -> None:
-        """Record a rejected action attempt (e.g., conflict) in the envelope.
+        """Record a refused attempt (e.g., a conflict) in the envelope.
 
-        When guard._pre_action_inner() rejects an action due to resource
-        conflict, the agent produced no marks - making repeated conflict
-        attempts invisible to anomaly detection. This method makes those
-        attempts visible by incrementing the window count and tracking the
-        target, without writing an actual mark to the space.
+        A refused attempt stores no mark, so a write hook does not see it.
+        The caller reports it here, for example after a guard call that
+        returns CONFLICT with no intent id: the window count grows, and no
+        mark is written to the space.
         """
         if agent_id in self._config.exempt_agents:
             return
@@ -596,22 +592,6 @@ class StatisticalEnvelope:
             if state is None:
                 return None
             return self._make_agent_stats(state)
-
-    def accepts_principal(self, principal_token: uuid.UUID) -> bool:
-        """Whether bind_principal(principal_token) would succeed."""
-        with self._lock:
-            return self._principal_token in (None, principal_token)
-
-    def bind_principal(self, principal_token: uuid.UUID) -> None:
-        """
-        Take the principal token of the guard. An envelope created with
-        another token raises ValueError: one stack has one principal token.
-        """
-        with self._lock:
-            if self._principal_token is None:
-                self._principal_token = principal_token
-            elif self._principal_token != principal_token:
-                raise ValueError("the statistical envelope has another principal token")
 
     def reset(self, agent_id: uuid.UUID, principal_token: uuid.UUID) -> bool:
         """

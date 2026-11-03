@@ -33,7 +33,6 @@ class TestAgentBarrier:
         assert barrier.is_allowed("email", "observation") is True
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "observation") is True
-        assert barrier.flag_count == 0
         assert barrier.needs_required("calendar") is False
 
     def test_narrow_blocks(self) -> None:
@@ -64,8 +63,6 @@ class TestAgentBarrier:
         # Other mutations don't affect existing revocations
         barrier.narrow("email", "observation")
         assert barrier.is_allowed_checked("calendar", "intent") is False
-        barrier.increment_flags()
-        assert barrier.is_allowed_checked("calendar", "intent") is False
         barrier.require_need("calendar")
         assert barrier.is_allowed_checked("calendar", "intent") is False
 
@@ -92,25 +89,21 @@ class TestAgentBarrier:
         assert barrier.is_allowed_checked("calendar", "intent") is True
 
     def test_restore_all(self) -> None:
-        """restore_all() clears all revocations, need requirements, and flags."""
+        """restore_all() clears all revocations and need requirements."""
         barrier, _, token = _make_barrier()
 
         barrier.narrow("calendar", "intent")
         barrier.narrow("email", "observation")
         barrier.require_need("calendar")
-        barrier.increment_flags()
-        barrier.increment_flags()
 
         assert barrier.is_allowed_checked("calendar", "intent") is False
         assert barrier.needs_required("calendar") is True
-        assert barrier.flag_count == 2
 
         result = barrier.restore_all(token)
         assert result is True
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "observation") is True
         assert barrier.needs_required("calendar") is False
-        assert barrier.flag_count == 0
 
     def test_restore_all_wrong_token(self) -> None:
         """restore_all() with wrong token fails and changes nothing."""
@@ -118,12 +111,12 @@ class TestAgentBarrier:
         wrong_token = uuid.uuid4()
 
         barrier.narrow("calendar", "intent")
-        barrier.increment_flags()
+        barrier.require_need("calendar")
 
         result = barrier.restore_all(wrong_token)
         assert result is False
         assert barrier.is_allowed_checked("calendar", "intent") is False
-        assert barrier.flag_count == 1
+        assert barrier.needs_required("calendar") is True
 
     def test_require_need(self) -> None:
         """needs_required() returns True after require_need() for that scope."""
@@ -165,16 +158,6 @@ class TestAgentBarrier:
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "intent") is True
 
-    def test_escalation_counter(self) -> None:
-        """increment_flags() increments and returns the running count."""
-        barrier, _, _ = _make_barrier()
-
-        assert barrier.flag_count == 0
-        assert barrier.increment_flags() == 1
-        assert barrier.increment_flags() == 2
-        assert barrier.increment_flags() == 3
-        assert barrier.flag_count == 3
-
     def test_isolation_between_agents(self) -> None:
         """Different barriers (different agents) do not interfere."""
         barrier_a, _, token_a = _make_barrier()
@@ -182,7 +165,7 @@ class TestAgentBarrier:
 
         barrier_a.narrow("calendar", "intent")
         barrier_b.narrow("email", "observation")
-        barrier_a.increment_flags()
+        barrier_a.require_need("calendar")
 
         # A's revocation does not affect B
         assert barrier_a.is_allowed_checked("calendar", "intent") is False
@@ -192,9 +175,9 @@ class TestAgentBarrier:
         assert barrier_b.is_allowed_checked("email", "observation") is False
         assert barrier_a.is_allowed_checked("email", "observation") is True
 
-        # Flag counts are independent
-        assert barrier_a.flag_count == 1
-        assert barrier_b.flag_count == 0
+        # Need requirements are independent
+        assert barrier_a.needs_required("calendar") is True
+        assert barrier_b.needs_required("calendar") is False
 
         # Tokens are not interchangeable
         assert barrier_a.restore("calendar", "intent", token_b) is False

@@ -18,9 +18,7 @@ import pytest
 from markspace import (
     Agent,
     DecayConfig,
-    Guard,
     Intent,
-    MarkSpace,
     MarkType,
     Need,
     Observation,
@@ -288,50 +286,12 @@ class TestStatisticalEnvelope:
         fresh.load_state(saved)
         assert fresh.check(agent_id) == EnvelopeVerdict.RESTRICTED
 
-    def test_guard_envelope_cannot_be_replaced(self) -> None:
-        guard = Guard(MarkSpace(), envelope=StatisticalEnvelope())
-        with pytest.raises(AttributeError):
-            setattr(guard, "envelope", None)
-
-    def test_guard_gives_the_envelope_its_token(self) -> None:
+    def test_an_envelope_without_a_token_stays_restricted(self) -> None:
+        """An envelope built without a principal token has no token to
+        reset with: a RESTRICTED verdict stays (P40)."""
         env, agent_id, _, _ = self._restricted(None)
         assert env.reset(agent_id, uuid.uuid4()) is False
-        token = uuid.uuid4()
-        Guard(MarkSpace(), envelope=env, principal_token=token)
-        assert env.reset(agent_id, token) is True
-
-    def test_refused_space_leaves_the_envelope_unbound(self) -> None:
-        env = StatisticalEnvelope()
-        with pytest.raises(ValueError):
-            Guard(MarkSpace(scopes=[Scope(name="_system")]), envelope=env)
-        token = uuid.uuid4()
-        Guard(MarkSpace(), envelope=env, principal_token=token)
-
-    def test_space_with_a_guard_leaves_the_envelope_unbound(self) -> None:
-        space = MarkSpace()
-        Guard(space)
-        env = StatisticalEnvelope()
-        with pytest.raises(ValueError):
-            Guard(space, envelope=env)
-        Guard(MarkSpace(), envelope=env, principal_token=uuid.uuid4())
-
-    def test_envelope_with_another_token_leaves_the_space_free(self) -> None:
-        token = uuid.uuid4()
-        env = StatisticalEnvelope(principal_token=token)
-        space = MarkSpace()
-        with pytest.raises(ValueError):
-            Guard(space, envelope=env, principal_token=uuid.uuid4())
-        Guard(space, envelope=env, principal_token=token)
-
-    def test_bind_refuses_another_token(self) -> None:
-        env = StatisticalEnvelope(principal_token=uuid.uuid4())
-        with pytest.raises(ValueError):
-            env.bind_principal(uuid.uuid4())
-
-    def test_envelope_with_another_token_is_refused(self) -> None:
-        env = StatisticalEnvelope(principal_token=uuid.uuid4())
-        with pytest.raises(ValueError):
-            Guard(MarkSpace(), envelope=env, principal_token=uuid.uuid4())
+        assert env.check(agent_id) == EnvelopeVerdict.RESTRICTED
 
     def test_concentration_flagged(self) -> None:
         """3+ agents writing to the same (scope, topic) in one window => FLAGGED."""

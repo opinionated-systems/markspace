@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Measure today's detector (D0), or the write budgets (Section 9.14) with the
+Measure the envelope's default detector (D0), or the write budgets (Section 9.14) with the
 default tiers, on the simulator's profiles; D0 also on the replays.
 
     python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results

@@ -80,7 +80,6 @@ class TelemetryEvent:
     verdict: str = ""  # "accepted", "rejected", "conflict", "denied", "allowed"
     conflict_check: bool = False
     conflict_found: bool = False
-    envelope_status: str = ""
     barrier_restricted: bool = False
     input_tokens_this_round: int = 0
     output_tokens_this_round: int = 0

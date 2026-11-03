@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 
-from unittest.mock import MagicMock
 
 from markspace import (
     Action,
@@ -49,7 +48,8 @@ from markspace import (
 )
 from markspace.barrier import AgentBarrier, BarrierSnapshot
 from markspace.guard import ClaimState
-from markspace.space import ScopeError
+from markspace.rate_limit import ScopeRateLimit
+from markspace.space import ScopeError, ValidationError
 from markspace.write_budget import WriteBudget
 from markspace.core import AnyMark, resolve_conflict, scope_contains
 
@@ -1284,20 +1284,62 @@ class TestContentPolicies:
         )
         assert recorder.seen[0].content == {"key": "value"}
 
-    def test_flag_does_not_feed_envelope(self, notes_space, writer):
-        """FLAG verdict does NOT call envelope.record_attempt (P70)."""
-        envelope = MagicMock()
-        from markspace.envelope import EnvelopeVerdict
+    def test_a_reject_leaves_the_barrier_alone(self, notes_space, writer):
+        """A REJECT refuses the write and narrows no barrier (P70)."""
+        guard = Guard(notes_space, content_policies=[_RejectPolicy("no")])
+        with pytest.raises(ContentPolicyError):
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        assert guard.get_barrier(writer.id) is None
 
-        envelope.check.return_value = EnvelopeVerdict.NORMAL
+    def test_flag_warnings_stay_under_the_mark_limit(self, notes_scope, writer):
+        """The guard's content-policy warnings count against its mark limit;
+        only its need marks are exempt."""
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=2)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        previous = None
+        for k in range(5):
+            previous = guard.write_mark(
+                writer,
+                Observation(
+                    scope="notes", topic="t", content=f"x{k}", supersedes=previous
+                ),
+            )
+        flags = space.read(scope="_system", mark_type=MarkType.WARNING)
+        assert len(flags) == 2
 
-        guard = Guard(
-            notes_space,
-            envelope=envelope,
-            content_policies=[_FlagPolicy("sus")],
-        )
+    def test_guard_needs_leave_room_for_its_flag_warnings(self, notes_scope, writer):
+        """The guard's need marks do not count against its mark limit, so
+        they do not crowd out its content-policy warnings."""
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=2)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        for k in range(2):
+            claimer = Agent(name=f"c{k}", scopes={"notes": ["action"]})
+            guard.get_or_create_barrier(claimer.id).narrow("notes", "action")
+            guard.post_action(claimer, "notes", f"r{k}", "noted", result=None)
+        assert len(space.read(scope="_system", mark_type=MarkType.NEED)) == 2
         guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
-        envelope.record_attempt.assert_not_called()
+        assert len(space.read(scope="_system", mark_type=MarkType.WARNING)) == 1
+
+    def test_a_refused_flag_warning_is_logged(
+        self, notes_scope, writer, caplog: pytest.LogCaptureFixture
+    ):
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=1)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        first = guard.write_mark(
+            writer, Observation(scope="notes", topic="t", content="a")
+        )
+        with caplog.at_level("WARNING", logger="markspace.guard"):
+            guard.write_mark(
+                writer,
+                Observation(scope="notes", topic="t", content="b", supersedes=first),
+            )
+        assert any(
+            r.levelname == "WARNING" and "content-policy-flag" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_policies_skip_warning_marks(self, notes_space, writer):
         """Content policies are NOT evaluated for Warning marks (P69)."""
@@ -1820,8 +1862,6 @@ class TestSetBarrierNeedsThePrincipal:
         barrier = guard.get_or_create_barrier(agent.id)
         barrier.narrow("s", "observation")
         barrier.require_need("s")
-        barrier.increment_flags()
-        barrier.flagged_scopes.add("s")
         saved = guard.get_barrier(agent.id)
         assert saved is not None
         return saved
@@ -1871,6 +1911,67 @@ class TestSetBarrierNeedsThePrincipal:
         foreign = AgentBarrier(agent_id=agent.id, _principal_token=uuid.uuid4())
         with pytest.raises(ValueError):
             guard.set_barrier(agent.id, foreign, token)
+
+
+class TestGuardConstruction:
+    def test_parameters_after_space_are_keyword_only(self) -> None:
+        """A positional second argument raises, so no caller passes an old
+        envelope argument as the principal token by mistake."""
+        positional: list[Any] = [MarkSpace(), uuid.uuid4()]
+        with pytest.raises(TypeError):
+            Guard(*positional)
+
+
+class TestP42WriteMarkAtomicity:
+    """A write_mark() refusal stores nothing, whichever check refuses it."""
+
+    @staticmethod
+    def _refused(kind: str) -> tuple[MarkSpace, Guard, Agent, Observation]:
+        rate_limit = ScopeRateLimit(max_writes_per_agent_per_window=1)
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name="notes",
+                    rate_limit=rate_limit if kind == "rate limit" else None,
+                )
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        writer = Agent(
+            name="w",
+            scopes={"notes": ["observation"] if kind != "authorization" else []},
+        )
+        guard = Guard(
+            space,
+            content_policies=(
+                [_RejectPolicy("no")] if kind == "content policy" else None
+            ),
+            write_budgets=(
+                {writer.id: WriteBudget(per_hour={})}
+                if kind == "write budget"
+                else None
+            ),
+        )
+        if kind == "barrier":
+            guard.get_or_create_barrier(writer.id).narrow("notes", "observation")
+        if kind == "rate limit":
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="a"))
+        return space, guard, writer, Observation(scope="notes", topic="t", content="x")
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["authorization", "barrier", "write budget", "rate limit", "content policy"],
+    )
+    def test_a_refused_write_stores_nothing(self, kind: str) -> None:
+        space, guard, writer, mark = self._refused(kind)
+
+        def written() -> int:
+            return sum(1 for m in space._marks.values() if m.agent_id == writer.id)
+
+        before = written()
+        with pytest.raises(ScopeError):
+            guard.write_mark(writer, mark)
+        assert written() == before
 
 
 class TestBarrierRevokesActions:
@@ -2050,6 +2151,15 @@ class TestBarrierRevokesActions:
             agent, "desk", "r3", "booked", {}, intent_id=lease.intent_id, failed=True
         )
         assert guard.claim_state(lease.intent_id) == ClaimState.GRANTED
+
+    def test_breach_needs_are_not_lost_to_the_mark_quota(self) -> None:
+        """The per-agent quota does not apply to the guard's own agent."""
+        space, guard, _, _ = self._setup(max_marks_per_agent=2)
+        for k in range(3):
+            agent = Agent(name=f"a{k}", scopes={"desk": ["intent", "action"]})
+            guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+            guard.post_action(agent, "desk", f"r{k}", "booked", result=None)
+        assert len(self._system_needs(space)) == 3
 
 
 class TestRestrictedCompetitorsTakeNoPart:
@@ -2289,9 +2399,10 @@ class TestRestrictedAgentAsksThePrincipal:
         guard.write_mark(agent, Need(scope="rooms/shared", question="q"))
         guard.write_mark(agent, Warning(scope="rooms", topic="t", reason="r"))
 
-    def test_the_mark_limit_refuses_the_need_with_an_error(self) -> None:
-        """The guard's agent is under the space's mark limit; the agent's own
-        need then fails loudly, not as a false open need."""
+    def test_the_mark_limit_does_not_refuse_the_need(self) -> None:
+        """The space's mark limit does not refuse the guard's need marks for
+        the principal, also when its agent holds as many marks as the
+        limit."""
         space = MarkSpace(scopes=[Scope(name="lunch")], max_marks_per_agent=1)
         space.set_clock(1000000.0)
         guard = Guard(space)
@@ -2300,8 +2411,26 @@ class TestRestrictedAgentAsksThePrincipal:
         guard.post_action(other, "lunch", "r1", "ordered", result=None)
         agent = Agent(name="a", scopes={"lunch": ["need", "action"]})
         guard.get_or_create_barrier(agent.id).narrow("lunch", "action")
-        with pytest.raises(QuotaExceededError):
-            guard.write_mark(agent, Need(scope="lunch", question="q"))
+        need_id = guard.write_mark(agent, Need(scope="lunch", question="q"))
+        need = space.get_mark(need_id)
+        assert isinstance(need, Need) and need.scope == "_system"
+
+    def test_a_failed_write_of_the_need_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the space refuses the need for the principal, write_mark
+        raises that error; it does not report a false open need."""
+        space, guard, agent, _ = self._setup()
+        write = space.write
+
+        def refuse_system(writer: Agent, mark: AnyMark) -> uuid.UUID:
+            if mark.scope == "_system":
+                raise ValidationError("refused")
+            return write(writer, mark)
+
+        monkeypatch.setattr(space, "write", refuse_system)
+        with pytest.raises(ValidationError, match="refused"):
+            self._ask(guard, agent)
 
     def test_an_unrestricted_scope_keeps_its_needs(self) -> None:
         space = MarkSpace(scopes=[Scope(name="lunch")])

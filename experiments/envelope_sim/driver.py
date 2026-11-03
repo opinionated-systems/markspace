@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Runs a stream through today's envelope (D0) as the guard calls it, and
-configuration T's normal agents, resampled from the stored trials.
+Runs a stream through the envelope's detector (D0), checked before each
+write as the guard checked it while it used the envelope, and configuration
+T's normal agents, resampled from the stored trials. The envelope is now a
+monitor (spec 9.7); D0's verdicts restrict nothing.
 
 The driver reads the envelope's per-agent state (_agents) to know when a
 window starts and whether the detector is ready; the envelope has no public
@@ -39,7 +41,7 @@ class RunResult:
 
 
 class Run:
-    """One agent in today's envelope, with the window bookkeeping."""
+    """One agent in the envelope, with the window bookkeeping."""
 
     def __init__(self, config: SimConfig) -> None:
         self.clock = [0.0]
@@ -60,7 +62,7 @@ class Run:
             self.window += 1
 
     def check(self, t: float) -> bool:
-        """The guard's check before a write; True when the envelope refuses."""
+        """The check before a write; True when the envelope says RESTRICTED."""
         self.clock[0] = t
         if self.first_event is None:
             self.first_event = t

@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 705 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
+pytest  # 711 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -44,7 +44,7 @@ No arguments. Results print to stdout. Analysis in [composition_stress/analysis.
 
 ### Envelope Simulator
 
-False and missed restrictions of the statistical envelope (spec 9.7) on synthetic workloads, and a replay of the stored defense trials. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
+False and missed RESTRICTED verdicts of the statistical envelope (spec 9.7, a monitor) on synthetic workloads, and a replay of the stored defense trials. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
 
 ```bash
 python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results
@@ -52,7 +52,7 @@ python -m experiments.envelope_sim.measure --out experiments/envelope_sim/result
 python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --detector write_budget
 ```
 
-Writes `d0.json` (today's detector) or `write_budget.json` (the write budgets of spec 9.14, with the settings it measured); `--quick` writes `*_quick.json`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md experiments/envelope_sim/results/write_budget.json` writes the analysis from them: [envelope_sim/analysis.md](envelope_sim/analysis.md).
+Writes `d0.json` (the envelope's default detector) or `write_budget.json` (the write budgets of spec 9.14, with the settings it measured); `--quick` writes `*_quick.json`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md experiments/envelope_sim/results/write_budget.json` writes the analysis from them: [envelope_sim/analysis.md](envelope_sim/analysis.md).
 
 ## LLM Experiments
 
@@ -74,7 +74,7 @@ python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
 python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
     --adversarial 5 --adversarial-mode confidence
 
-# With defense stack (envelope, barrier, probe)
+# With the defenses (bot write budgets, barrier, probe) and the envelope as a monitor
 python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
     --adversarial 5 --adversarial-mode rate_spike --defense --probe-interval 5
 
@@ -114,7 +114,7 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--adversarial` | 0 | Number of adversarial agents |
 | `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift` |
 | `--scale-resources` | false | Scale resources proportionally with agents |
-| `--defense` | false | Enable defense stack (envelope, barrier, probe) |
+| `--defense` | false | Enable the defenses (bot write budgets, barrier, probe) and the envelope as a monitor |
 | `--probe-interval` | 5 | Run diagnostic probe every N rounds (requires `--defense`) |
 | `--resume` | false | Resume from existing output |
 
@@ -139,7 +139,7 @@ python experiments/trials/orchestrate.py --experiment scaling
 # Scaling with proportional resources
 python experiments/trials/orchestrate.py --experiment scaling_proportional
 
-# Defense stack (envelope, barrier, probe scenarios)
+# Defenses (write budgets for the bots, barrier, probe; the envelope as a monitor)
 python experiments/trials/orchestrate.py --experiment defense --models gpt-oss-120b
 
 # All experiments

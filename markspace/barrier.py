@@ -50,8 +50,6 @@ class BarrierSnapshot:
     """
 
     agent_id: uuid.UUID
-    flag_count: int
-    flagged_scopes: frozenset[str]
     revoked: frozenset[tuple[str, str]]
     require_need_scopes: frozenset[str]
 
@@ -77,8 +75,6 @@ class AgentBarrier:
     _principal_token: uuid.UUID
     _revoked: set[tuple[str, str]] = field(default_factory=set)
     _require_need_scopes: set[str] = field(default_factory=set)
-    _flag_count: int = 0  # escalation counter
-    flagged_scopes: set[str] = field(default_factory=set)  # scopes that triggered flags
 
     def is_allowed(self, scope: str, mark_type_value: str) -> bool:
         """Check if (scope, mark_type) has NOT been revoked."""
@@ -111,15 +107,6 @@ class AgentBarrier:
         """
         return need_required(self._require_need_scopes, scope)
 
-    def increment_flags(self) -> int:
-        """Increment and return the flag count for escalation."""
-        self._flag_count += 1
-        return self._flag_count
-
-    @property
-    def flag_count(self) -> int:
-        return self._flag_count
-
     def restore(
         self, scope: str, mark_type_value: str, principal_token: uuid.UUID
     ) -> bool:
@@ -135,7 +122,6 @@ class AgentBarrier:
             return False
         self._revoked.clear()
         self._require_need_scopes.clear()
-        self._flag_count = 0
         return True
 
     def is_allowed_checked(self, scope: str, mark_type_value: str) -> bool:
@@ -150,8 +136,6 @@ class AgentBarrier:
         """Return a frozen snapshot for external inspection."""
         return BarrierSnapshot(
             agent_id=self.agent_id,
-            flag_count=self._flag_count,
-            flagged_scopes=frozenset(self.flagged_scopes),
             revoked=frozenset(self._revoked),
             require_need_scopes=frozenset(self._require_need_scopes),
         )

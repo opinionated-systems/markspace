@@ -30,8 +30,8 @@ The burn rate is the speed at which the budget is spent, relative to the
 period: a tier that spends `budget_fraction` of the budget in its long window
 has burn rate budget_fraction x period / long window.
 
-Write budgets operate independently of the token budgets, the scope rate
-limits and the statistical envelope.
+Write budgets operate independently of the token budgets and the scope rate
+limits.
 
 Spec Section 9.14.
 """

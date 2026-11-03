@@ -4,7 +4,7 @@ Tests for scope-level rate limits.
 
 P64: Rate Limit Enforcement - per-agent write cap
 P65: Rate Limit Fleet Cap - fleet-wide write cap
-P66: Rate Limit Independence - independent of envelope and budget
+P66: Rate Limit Independence - independent of token and write budgets
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from markspace import (
     hours,
     minutes,
 )
-from markspace.envelope import EnvelopeConfig, StatisticalEnvelope
 from markspace.rate_limit import RateLimitTracker, ScopeRateLimit
 from markspace.space import ScopeError
 
@@ -166,32 +165,6 @@ class TestP64RateLimitEnforcement:
             guard.write_mark(agent, Observation(scope="test", topic=f"t{i}"))
         with pytest.raises(ScopeError, match="Rate limit exceeded"):
             guard.write_mark(agent, Observation(scope="test", topic="t4"))
-
-    def test_rejection_visible_to_envelope(
-        self, space: MarkSpace, agent: Agent
-    ) -> None:
-        envelope = StatisticalEnvelope(
-            config=EnvelopeConfig(window_seconds=60),
-            clock=space.now,
-        )
-        guard = Guard(space, envelope=envelope)
-        for i in range(3):
-            guard.write_mark(agent, Observation(scope="test", topic=f"t{i}"))
-        # 4th write rejected by rate limit
-        with pytest.raises(ScopeError):
-            guard.write_mark(agent, Observation(scope="test", topic="t4"))
-        # Envelope should have seen the attempt
-        stats = envelope.get_stats(agent.id)
-        assert stats is not None
-
-
-# ---------------------------------------------------------------------------
-# P65: Fleet Cap (guard integration)
-# ---------------------------------------------------------------------------
-
-
-class TestP64RateLimitOnExecute:
-    """Rate limits also apply to contested writes (intents via execute)."""
 
     def test_execute_rejected_above_limit(self, space: MarkSpace, agent: Agent) -> None:
         guard = Guard(space)
