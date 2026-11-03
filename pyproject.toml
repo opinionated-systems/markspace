@@ -49,10 +49,10 @@ build-backend = "hatchling.build"
 packages = ["markspace"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "experiments/stress_test"]
+testpaths = ["tests", "experiments/stress_test", "experiments/envelope_sim"]
 
 [tool.pyright]
-include = ["markspace", "tests"]
+include = ["markspace", "tests", "experiments/envelope_sim"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 

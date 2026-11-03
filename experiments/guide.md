@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 589 tests (tests/ and experiments/stress_test/)
+pytest  # 616 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -41,6 +41,17 @@ python -m experiments.composition_stress.run
 ```
 
 No arguments. Results print to stdout. Analysis in [composition_stress/analysis.md](composition_stress/analysis.md).
+
+### Envelope Simulator
+
+False and missed restrictions of the statistical envelope (spec 9.7) on synthetic workloads, and a replay of the stored defense trials. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
+
+```bash
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --quick
+```
+
+Writes `d0.json`, or `d0_quick.json` with `--quick`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md` writes the analysis from it: [envelope_sim/analysis.md](envelope_sim/analysis.md).
 
 ## LLM Experiments
 

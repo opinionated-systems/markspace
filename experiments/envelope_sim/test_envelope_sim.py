@@ -1,0 +1,263 @@
+# -*- coding: utf-8 -*-
+"""
+The envelope simulator: the replay reproduces the stored defense trials, the
+driver calls the envelope as the guard does, the streams have the rates and
+the timing they name, and the summaries count what they say.
+"""
+
+from __future__ import annotations
+
+import random
+import statistics
+from typing import Any
+
+import pytest
+
+from markspace import Agent, Guard, MarkSpace, Observation, Scope, Warning
+from markspace.core import DecayConfig, minutes
+from markspace.guard import ScopeError
+
+from .driver import resampled_rounds, run_stream
+from .measure import binomial_interval, summarize_attack, summarize_normal
+from .replay import TRIALS, load_trial, replay_d0, step_events
+from .streams import (
+    CHECK,
+    L,
+    PROFILES,
+    A,
+    Event,
+    I,
+    N,
+    O,
+    W,
+    Stream,
+    window_starts,
+)
+
+
+@pytest.mark.parametrize("name", TRIALS)
+def test_replay_reproduces_the_stored_first_restrictions(name: str) -> None:
+    trial = load_trial(name)
+    first = replay_d0(trial)
+    for agent, mode in trial.adversarial.items():
+        if name == "slow_drift" and mode is not None:
+            continue  # their rounds before the restriction are lost (ERROR steps)
+        assert first.get(agent) == trial.stored_first.get(agent), agent
+
+
+def test_step_events_follow_the_tool_rules() -> None:
+    assert step_events("claim_task", "Successfully claimed design/8.") == [CHECK, I, A]
+    assert step_events(
+        "book_boardroom", "BLOCKED: Boardroom requests are mediated"
+    ) == [
+        CHECK,
+        I,
+    ]
+    assert step_events(
+        "claim_task", "denied: Agent 'x' restricted by statistical envelope"
+    ) == [CHECK]
+    assert (
+        step_events(
+            "claim_task", "denied: Agent 'x' blocked by barrier: action revoked"
+        )
+        == []
+    )
+    assert step_events("order_lunch", "FULL: no seats") == [CHECK, N]
+    assert step_events("issue_warning", "Warning issued") == [CHECK, W]
+    assert step_events("view_rooms", "...") == []
+
+
+def _guard_refusal_time(stream: Stream) -> float | None:
+    """The time of the first write that Guard.write_mark refuses."""
+    clock = [0.0]
+    space = MarkSpace(
+        scopes=[
+            Scope(
+                name="s",
+                decay=DecayConfig(
+                    observation_half_life=minutes(60),
+                    warning_half_life=minutes(60),
+                    intent_ttl=minutes(30),
+                ),
+            )
+        ]
+    )
+    guard = Guard(space, envelope=L.envelope(lambda: clock[0]))
+    agent = Agent(name="a", scopes={"s": ["observation", "warning"]})
+    for t, event, _ in stream:
+        if event == CHECK:
+            continue  # write_mark checks the envelope itself
+        clock[0] = t
+        space.set_clock(t)
+        mark = (
+            Observation(scope="s", topic="t", content="c")
+            if event == O
+            else Warning(scope="s", topic="t", reason="r")
+        )
+        try:
+            guard.write_mark(agent, mark)
+        except ScopeError:
+            return t
+    return None
+
+
+@pytest.mark.parametrize("seed", range(1, 7))
+def test_run_stream_refuses_the_write_that_the_guard_refuses(seed: int) -> None:
+    """Generated streams with observations and warnings, through run_stream and
+    through Guard.write_mark: the first refused write is the same one."""
+    stream = PROFILES["steady_5"].generate(random.Random(seed), 600)
+    result = run_stream(stream, L)
+    assert result.restricted_at is not None
+    assert result.restricted_at == _guard_refusal_time(stream)
+
+
+def test_judged_windows_skip_cold_start_and_count_the_restriction_window() -> None:
+    """15 windows of 5 observations at fixed times, so each nominal window is
+    one envelope window: the detector is ready once 10 windows have completed,
+    so windows 11 to 15 and the next one's check are judged. A flood in window
+    16 restricts there, and that window is judged too."""
+    ws = L.window_seconds
+    calm: Stream = []
+    for i in range(15):
+        for k in range(5):
+            t = i * ws + 1.0 + k
+            calm += [(t, CHECK, False), (t, O, False)]
+    result = run_stream(calm + [(15 * ws + 1.0, CHECK, False)], L)
+    assert result.restricted_at is None
+    assert result.judged_windows == 6
+    flood: Stream = []
+    for k in range(40):
+        t = 15 * ws + 1.0 + k
+        flood += [(t, CHECK, False), (t, O, True)]
+    result = run_stream(calm + flood, L)
+    assert result.restricted_window == 16
+    assert result.judged_windows == 6
+
+
+def test_summaries_count_what_they_say() -> None:
+    day = 86_400.0
+    runs: list[dict[str, Any]] = [
+        {"start": 0.0, "restricted_at": 0.5 * day},
+        {"start": 0.0, "restricted_at": 3 * day},
+        {"start": 0.0, "restricted_at": None},
+        {"start": 100.0, "restricted_at": day + 100.0},
+    ]
+    s = summarize_normal(runs, [day, 7 * day])
+    assert s["restricted_within_1_days"]["agents"] == 2
+    assert s["restricted_within_7_days"]["agents"] == 3
+    assert s["restricted_by_the_end"] == 3
+    attack = {"attack_first": 1000.0, "attack_last": 1010.0, "attack_writes_before": 3}
+    a = summarize_attack(
+        [
+            {**attack, "restricted_at": 500.0},  # before
+            {**attack, "restricted_at": 1005.0},  # detected
+            {**attack, "restricted_at": 1010.0 + 300.0},  # detected, one window after
+            {**attack, "restricted_at": 1010.0 + 301.0},  # later
+            {**attack, "restricted_at": None},  # never
+        ],
+        300.0,
+    )
+    counts = (
+        a["restricted_before_the_attack"],
+        a["detected"],
+        a["restricted_later"],
+        a["never_restricted"],
+    )
+    assert counts == (1, 2, 1, 1)
+
+
+def test_resampled_rounds_draw_from_one_agents_rounds() -> None:
+    x_rounds: list[list[Event]] = [[CHECK, I] * k for k in range(1, 6)]
+    y_rounds: list[list[Event]] = [[CHECK, A] * 9]
+    pool = {"x": x_rounds, "y": y_rounds}
+    rounds = resampled_rounds(pool, random.Random(3), 50)
+    assert len(rounds) == 50
+    agent = "x" if rounds[0][1] == I else "y"
+    assert all(r in pool[agent] for r in rounds)
+    if agent == "x":
+        assert len({len(r) for r in rounds}) > 1
+
+
+def _window_of(starts: list[float], t: float) -> int:
+    return max(i for i, s in enumerate(starts) if s <= t)
+
+
+@pytest.mark.parametrize("seed", range(1, 6))
+def test_first_use_burst_lands_in_one_window_at_its_time(seed: int) -> None:
+    stream = PROFILES["first_use_100_burst_12"].generate(random.Random(seed), 300)
+    times = [t for t, e, _ in stream if e == W]
+    assert len(times) == 12
+    # 1 s after the start of the first envelope window that ends after nominal
+    # window 100 begins (the window that holds it, or the next if it is idle)
+    ws, nominal = L.window_seconds, 100 * L.window_seconds
+    starts = window_starts(stream, ws)
+    i = min(range(len(starts)), key=lambda j: abs(starts[j] - (times[0] - 1.0)))
+    assert abs(starts[i] - (times[0] - 1.0)) < 1e-6
+    assert starts[i] + ws > nominal
+    assert i == 0 or starts[i - 1] + ws <= nominal
+    assert len({_window_of(starts, t) for t in times}) == 1
+
+
+def test_floods_stay_in_one_envelope_window_and_the_boundary_burst_crosses() -> None:
+    for seed in range(1, 6):
+        stream = PROFILES["flood_10_over_1_at15"].generate(random.Random(seed), 60)
+        attack = [t for t, _, a in stream if a]
+        starts = window_starts(stream, L.window_seconds)
+        assert len(attack) == 10
+        assert (
+            min(abs(s - (attack[0] - 1.0)) for s in starts) < 1e-6
+        )  # 1 s after a start
+        assert len({_window_of(starts, t) for t in attack}) == 1
+        stream = PROFILES["boundary_burst_10_at15"].generate(random.Random(seed), 60)
+        attack = [t for t, _, a in stream if a]
+        starts = window_starts(stream, L.window_seconds)
+        assert len({_window_of(starts, t) for t in attack}) == 2
+
+
+def test_ramp_and_daily_peak_have_their_shape() -> None:
+    stream = PROFILES["ramp_10pct_at15"].generate(random.Random(4), 60)
+    per_nominal = [0] * 60
+    for t, _, a in stream:
+        if a:
+            per_nominal[int(t // L.window_seconds)] += 1
+    assert sum(per_nominal[:15]) == 0
+    assert statistics.mean(per_nominal[50:60]) > 30  # 1.1**40 is about 45
+    stream = PROFILES["ramp_10pct_at15"].generate(random.Random(4), 120)
+    last_attack = max(t for t, _, a in stream if a)
+    assert int(last_attack // L.window_seconds) == 15 + 81  # step 82 is the last
+    stream = PROFILES["daily_start_in_peak"].generate(random.Random(4), 288)
+    obs = [0] * 288
+    for t, e, _ in stream:
+        if e == O:
+            obs[int(t // L.window_seconds)] += 1
+    assert statistics.mean(obs[:48]) > 2.5 * statistics.mean(obs[48:])
+
+
+@pytest.mark.parametrize("name", ["steady_5", "steady_20"])
+def test_steady_profiles_have_their_rates(name: str) -> None:
+    rate = {"steady_5": 5.0, "steady_20": 20.0}[name]
+    stream = PROFILES[name].generate(random.Random(1), 2000)
+    counts = [0] * 2000
+    for t, event, _ in stream:
+        if event == O:
+            counts[int(t // L.window_seconds)] += 1
+    assert abs(statistics.mean(counts) - rate) < 4 * (rate / 2000) ** 0.5
+    assert abs(statistics.variance(counts) - rate) < 0.15 * rate
+
+
+def test_attack_writes_are_counted_until_the_restriction() -> None:
+    stream = PROFILES["new_type_burst_20_at15"].generate(random.Random(3), 400)
+    result = run_stream(stream, L)
+    assert result.attack_first is not None and result.restricted_at is not None
+    assert 0 < result.attack_writes_before < 20
+
+
+def test_binomial_interval() -> None:
+    lo, hi = binomial_interval(0, 400)
+    assert lo == 0.0
+    assert hi == pytest.approx(1 - 0.025 ** (1 / 400), rel=1e-6)
+    lo, hi = binomial_interval(400, 400)
+    assert hi == 1.0
+    assert lo == pytest.approx(0.025 ** (1 / 400), rel=1e-6)
+    lo, hi = binomial_interval(200, 400)
+    assert lo < 0.5 < hi
