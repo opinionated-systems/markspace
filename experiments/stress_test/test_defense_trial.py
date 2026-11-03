@@ -160,3 +160,13 @@ def test_execute_feeds_the_monitor_and_keeps_the_confidence() -> None:
         if m.mark_type == MarkType.INTENT and m.agent_id == agent.id
     ]
     assert [getattr(m, "confidence") for m in intents] == [0.9]
+
+
+def test_report_observation_denies_an_unknown_scope() -> None:
+    """An observation in a scope the agent may write but the space does not
+    register (the stored slow_drift adversaries wrote to 'rooms') is a
+    refusal the agent sees; it does not end the agent's round."""
+    env = run.OfficeEnv(defense_enabled=True)
+    agent = Agent(name="drift", scopes={"rooms": ["observation"]})
+    ok, msg = env.report_observation(agent, "rooms", "room empty")
+    assert not ok and msg.startswith("DENIED")

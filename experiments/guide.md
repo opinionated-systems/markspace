@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 720 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
+pytest  # 721 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.

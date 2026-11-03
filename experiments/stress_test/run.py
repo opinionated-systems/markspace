@@ -53,6 +53,7 @@ from markspace import (
     Scope,
     ScopeError,
     ScopeVisibility,
+    ValidationError,
     Warning,
     WriteBudget,
     effective_strength_with_warnings,
@@ -822,7 +823,9 @@ class OfficeEnv:
                 ),
             )
             return True, f"Observation recorded: {description}"
-        except (ScopeError, ValueError) as e:
+        except (ScopeError, ValidationError, ValueError) as e:
+            # ValidationError: an unknown scope or a topic the scope does not
+            # allow; uncaught, it ended the agent's round.
             return False, f"DENIED: {e}"
 
     # ------------------------------------------------------------------
