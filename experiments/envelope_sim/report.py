@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Write analysis.md from a measurement file; every number in it comes from the
-file.
+Write analysis.md from the measurement files; every number in it comes from
+them.
 
     python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json \\
-        experiments/envelope_sim/analysis.md
+        experiments/envelope_sim/analysis.md [experiments/envelope_sim/results/write_budget.json]
 """
 
 from __future__ import annotations
@@ -41,6 +41,27 @@ def days(key: str) -> str:
     """'restricted_within_7_days' -> '7 days'; '1 day' for one."""
     n = key.split("_")[2]
     return f"{n} day" if n == "1" else f"{n} days"
+
+
+def duration(seconds: float) -> str:
+    """3600 -> '1 h', 259200 -> '3 days', 300 -> '5 min'."""
+    if seconds % 86_400 == 0:
+        n = seconds / 86_400
+        return f"{n:g} day" if n == 1 else f"{n:g} days"
+    if seconds % 3600 == 0:
+        return f"{seconds / 3600:g} h"
+    return f"{seconds / 60:g} min"
+
+
+def tier_text(tiers: list[dict[str, Any]]) -> str:
+    """The tiers as Google's Site Reliability Workbook states them: share of
+    the budget in the long window (short window), page or ticket."""
+    parts = [
+        f"{100 * t['budget_fraction']:g} % of the budget in {duration(t['long_window_seconds'])} "
+        f"(short window {duration(t['short_window_seconds'])}): {t['level']}"
+        for t in tiers
+    ]
+    return "; ".join(parts)
 
 
 def horizon_keys(entry: dict[str, Any]) -> list[str]:
@@ -152,9 +173,83 @@ def render(results: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_write_budget(results: dict[str, Any]) -> str:
+    """The write-budget section (Section 9.14): each profile's budget twice
+    its own measured rate, the default period and tiers."""
+    profiles: dict[str, Any] = results["profiles"]
+    cfg = results["config"]
+    budget_cfg = cfg["write_budget"]
+    period_days = budget_cfg["period_seconds"] / 86_400
+    headroom = budget_cfg["expected_activity_headroom"]
+    normal = {k: v for k, v in profiles.items() if v["kind"] == "normal"}
+    attacks = {k: v for k, v in profiles.items() if v["kind"] == "attack"}
+
+    def last_key(entry: dict[str, Any], event: str) -> str:
+        return [k for k in entry[event] if k.startswith(f"{event}_within_")][-1]
+
+    def horizon_of(entry: dict[str, Any], event: str) -> str:
+        return days(last_key(entry, event).replace(event, "restricted"))
+
+    def cell(entry: dict[str, Any], event: str) -> str:
+        """Agents with the event within the profile's last horizon; the
+        horizon is named when it is not the table's."""
+        key = last_key(entry, event)
+        own = horizon_of(entry, event)
+        named = "" if own == horizon else f" within {own}"
+        return f"{entry[event][key]['agents']} of {entry[event]['agents']}{named}"
+
+    with_refusal = [
+        k for k, v in normal.items() if v["refused"][last_key(v, "refused")]["agents"]
+    ]
+    with_page = [
+        k for k, v in normal.items() if v["paged"][last_key(v, "paged")]["agents"]
+    ]
+    paged_attacks = [k for k, v in attacks.items() if v["paged"]["detected"]]
+    refused_attacks = [
+        f"{k} ({pct((v['refused']['detected'] + v['refused']['restricted_later']) / v['refused']['agents'])})"
+        for k, v in attacks.items()
+        if v["refused"]["detected"] or v["refused"]["restricted_later"]
+    ]
+    horizon = horizon_of(next(iter(normal.values())), "refused")
+    lines = [
+        "## Write budgets",
+        "",
+        f"Measured with `--detector write_budget` ({cfg['seeds']} seeds of {cfg['windows']:,} windows per profile; [`results/write_budget.json`](results/write_budget.json), which also records the budget settings). Each profile's expected activity is its own measured rate (the writes per hour of each type outside attacks, on a reference stream of the profile; configuration T: on the agent's own stream), and its budget is {headroom:g} times that over {period_days:g} days, as the guard takes it from a manifest; a type the profile never writes outside an attack has a budget of 0. Burn-rate tiers, the starting values of Google's Site Reliability Workbook: {tier_text(budget_cfg['tiers'])}. A page or a ticket is a need mark; only a spent budget refuses writes. The simulator meters each write of the stream through the guard's meter; where the guard's `pre_action` would refuse an intent because the action budget is spent, the simulator refuses the action write instead, which matters for configuration T only.",
+        "",
+        f"**Result.** Normal profiles with a refused write within {horizon}: {', '.join(with_refusal) or 'none'}. Normal profiles with a page: {', '.join(with_page) or 'none'}. Attacks that paged while they ran: {', '.join(paged_attacks) or 'none'}. Attacks with a refused write, and the share of their agents refused: {', '.join(refused_attacks) or 'none'}.",
+        "",
+        f"| Profile | Refused within {horizon} | Type of the first refused write | Paged within {horizon} | Ticketed within {horizon} |",
+        "|---|---|---|---|---|",
+    ]
+    for name, v in normal.items():
+        types = ", ".join(
+            f"{t} {n}" for t, n in v["refused"]["first_refused_type"].items()
+        )
+        lines.append(
+            f"| {name} ({v['config']}) | {cell(v, 'refused')} | {types or '-'} | {cell(v, 'paged')} | {cell(v, 'ticketed')} |"
+        )
+    lines += [
+        "",
+        "| Attack | Start | Agents | Paged during the attack | Median attack writes before the page | Ticketed (during, later) | Refused (during, later) | Median attack writes before the refusal |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for name, v in attacks.items():
+        base, at = name.rsplit("_at", 1)
+        p, tk, r = v["paged"], v["ticketed"], v["refused"]
+        lines.append(
+            f"| {base} | {at} | {p['agents']} | {p['detected']} | "
+            f"{p['median_attack_writes_before_detection']} | {tk['detected']}, {tk['restricted_later']} | "
+            f"{r['detected']}, {r['restricted_later']} | {r['median_attack_writes_before_detection']} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     results = json.loads(Path(sys.argv[1]).read_text())
-    Path(sys.argv[2]).write_text(render(results))
+    text = render(results)
+    if len(sys.argv) > 3:
+        text += "\n" + render_write_budget(json.loads(Path(sys.argv[3]).read_text()))
+    Path(sys.argv[2]).write_text(text)
 
 
 if __name__ == "__main__":

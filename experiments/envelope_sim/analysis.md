@@ -113,3 +113,80 @@ The replay turns each agent's stored tool calls (`steps.jsonl`) and the round's 
 - The synthetic workloads are assumptions. The replays check D0 against real LLM agents, round by round and only up to each agent's first restriction.
 - Configuration T's resampled agents draw each round independently from one stored agent's rounds, so they have no trend over a run.
 - The stored traces have one clock value per round, so the replay measures round-level counts only.
+
+## Write budgets
+
+Measured with `--detector write_budget` (400 seeds of 15,000 windows per profile; [`results/write_budget.json`](results/write_budget.json), which also records the budget settings). Each profile's expected activity is its own measured rate (the writes per hour of each type outside attacks, on a reference stream of the profile; configuration T: on the agent's own stream), and its budget is 2 times that over 30 days, as the guard takes it from a manifest; a type the profile never writes outside an attack has a budget of 0. Burn-rate tiers, the starting values of Google's Site Reliability Workbook: 2 % of the budget in 1 h (short window 5 min): page; 5 % of the budget in 6 h (short window 30 min): page; 10 % of the budget in 3 days (short window 6 h): ticket. A page or a ticket is a need mark; only a spent budget refuses writes. The simulator meters each write of the stream through the guard's meter; where the guard's `pre_action` would refuse an intent because the action budget is spent, the simulator refuses the action write instead, which matters for configuration T only.
+
+**Result.** Normal profiles with a refused write within 30 days: T_resampled_normal. Normal profiles with a page: first_use_1000_burst_1, first_use_1000_burst_12, first_use_1000_burst_4, first_use_100_burst_1, first_use_100_burst_12, first_use_100_burst_4, first_use_5000_burst_1, first_use_5000_burst_12, first_use_5000_burst_4, T_resampled_normal. Attacks that paged while they ran: ramp_10pct_at1200, ramp_10pct_at15. Attacks with a refused write, and the share of their agents refused: new_type_burst_10_at1200 (100.0 %), new_type_burst_10_at15 (100.0 %), new_type_burst_20_at1200 (100.0 %), new_type_burst_20_at15 (100.0 %), new_type_burst_5_at1200 (100.0 %), new_type_burst_5_at15 (100.0 %), ramp_10pct_at1200 (100.0 %), ramp_10pct_at15 (100.0 %), sustained_2x_of_1_at1200 (47.0 %), sustained_2x_of_1_at15 (1.0 %), sustained_2x_of_3.5_at1200 (99.8 %), sustained_2x_of_3.5_at15 (33.0 %), sustained_3x_of_1_at1200 (100.0 %), sustained_3x_of_1_at15 (100.0 %), sustained_3x_of_3.5_at1200 (100.0 %), sustained_3x_of_3.5_at15 (100.0 %).
+
+| Profile | Refused within 30 days | Type of the first refused write | Paged within 30 days | Ticketed within 30 days |
+|---|---|---|---|---|
+| batches_12_12 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| batches_20_6 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| batches_40_4 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| batches_40_4_back_to_back (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| daily_start_in_peak (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| daily_start_out_of_peak (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| first_use_1000_burst_1 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_1000_burst_12 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_1000_burst_4 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_100_burst_1 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_100_burst_12 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_100_burst_4 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_5000_burst_1 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_5000_burst_12 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| first_use_5000_burst_4 (L) | 0 of 400 | - | 400 of 400 | 400 of 400 |
+| idle_gaps (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| intermittent_warnings (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| overdispersed_3 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| rare_warning (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| steady_1 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| steady_20 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| steady_5 (L) | 0 of 400 | - | 0 of 400 | 0 of 400 |
+| T_resampled_normal (T) | 6 of 400 | need 6 | 394 of 400 | 248 of 400 |
+
+| Attack | Start | Agents | Paged during the attack | Median attack writes before the page | Ticketed (during, later) | Refused (during, later) | Median attack writes before the refusal |
+|---|---|---|---|---|---|---|---|
+| boundary_burst_10 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| boundary_burst_10 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_12 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_12 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_1 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_1 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_3.5 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_10_over_3.5 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_12 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_12 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_1 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_1 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_3.5 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_20_over_3.5 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_12 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_12 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_1 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_1 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_3.5 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_5_over_3.5 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_then_silence | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| flood_then_silence | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| new_type_burst_10 | 1200 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| new_type_burst_10 | 15 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| new_type_burst_20 | 1200 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| new_type_burst_20 | 15 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| new_type_burst_5 | 1200 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| new_type_burst_5 | 15 | 400 | 0 | None | 0, 0 | 400, 0 | 0.0 |
+| poisoned_cold_start_1_3 | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| poisoned_cold_start_1_3 | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| poisoned_cold_start_random | 1200 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| poisoned_cold_start_random | 15 | 400 | 0 | None | 0, 0 | 0, 0 | None |
+| ramp_10pct | 1200 | 400 | 400 | 457.0 | 400, 0 | 400, 0 | 16114.5 |
+| ramp_10pct | 15 | 400 | 400 | 458.0 | 400, 0 | 400, 0 | 17280.0 |
+| sustained_2x_of_1 | 1200 | 400 | 0 | None | 400, 0 | 188, 0 | 9197.0 |
+| sustained_2x_of_1 | 15 | 400 | 0 | None | 400, 0 | 4, 0 | 10520.5 |
+| sustained_2x_of_3.5 | 1200 | 400 | 0 | None | 400, 0 | 399, 0 | 29848 |
+| sustained_2x_of_3.5 | 15 | 400 | 0 | None | 400, 0 | 132, 0 | 33637.5 |
+| sustained_3x_of_1 | 1200 | 400 | 0 | None | 400, 0 | 400, 0 | 10826.5 |
+| sustained_3x_of_1 | 15 | 400 | 0 | None | 400, 0 | 400, 0 | 11504.0 |
+| sustained_3x_of_3.5 | 1200 | 400 | 0 | None | 400, 0 | 400, 0 | 37452.5 |
+| sustained_3x_of_3.5 | 15 | 400 | 0 | None | 400, 0 | 400, 0 | 40347.0 |

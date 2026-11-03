@@ -15,10 +15,16 @@ import pytest
 
 from markspace import Agent, Guard, MarkSpace, Observation, Scope, Warning
 from markspace.core import DecayConfig, minutes
+from markspace.write_budget import BurnTier, WriteBudget
 from markspace.guard import ScopeError
 
-from .driver import resampled_rounds, run_stream
-from .measure import binomial_interval, summarize_attack, summarize_normal
+from .driver import declared_rates, resampled_rounds, run_stream, run_write_budget
+from .measure import (
+    binomial_interval,
+    refused_types,
+    summarize_attack,
+    summarize_normal,
+)
 from .replay import TRIALS, load_trial, replay_d0, step_events
 from .streams import (
     CHECK,
@@ -31,6 +37,7 @@ from .streams import (
     O,
     W,
     Stream,
+    burst,
     window_starts,
 )
 
@@ -261,3 +268,47 @@ def test_binomial_interval() -> None:
     assert lo == pytest.approx(0.025 ** (1 / 400), rel=1e-6)
     lo, hi = binomial_interval(200, 400)
     assert lo < 0.5 < hi
+
+
+def test_declared_rates_leave_out_attack_writes() -> None:
+    stream: Stream = [
+        (0.0, CHECK, False),
+        (0.0, O, False),
+        (3600.0, CHECK, False),
+        (3600.0, W, True),
+        (7200.0, CHECK, False),
+        (7200.0, O, False),
+    ]
+    assert declared_rates(stream) == {O: 1.0}  # 2 observations over 2 hours
+
+
+def test_run_write_budget_records_the_first_page_and_refusal() -> None:
+    """12 warnings an hour over a day (budget 288), a page tier at burn rate 1
+    (thresholds 12 per hour, 1 per 300 s): steady writes raise nothing; a
+    flood pages at its 13th write and is refused from its 289th, and the
+    refused writes do not count as attack writes."""
+    page = BurnTier(
+        level="page",
+        long_window_seconds=3600,
+        short_window_seconds=300,
+        budget_fraction=1 / 24,
+    )
+    budget = WriteBudget(per_hour={W: 12.0}, period_seconds=86_400.0, tiers=(page,))
+    steady = burst(0.0, W, 48, False, gap=300.0)
+    result = run_write_budget(steady, budget)
+    assert (result["refused_at"], result["paged_at"]) == (None, None)
+    flood = burst(0.0, W, 300, True, gap=1.0)
+    result = run_write_budget(flood, budget)
+    assert result["paged_at"] == 12.0 and result["attack_writes_before_page"] == 12
+    assert result["refused_at"] == 288.0 and result["refused_type"] == "warning"
+    assert result["attack_writes_before_refusal"] == 288
+
+
+def test_refused_types_counts_first_refusals_within_the_horizon() -> None:
+    runs: list[dict[str, Any]] = [
+        {"start": 0.0, "refused_at": 10.0, "refused_type": "need"},
+        {"start": 0.0, "refused_at": 50.0, "refused_type": "intent"},
+        {"start": 0.0, "refused_at": None, "refused_type": None},
+        {"start": 5.0, "refused_at": 35.0, "refused_type": "need"},
+    ]
+    assert refused_types(runs, 30.0) == {"need": 2}

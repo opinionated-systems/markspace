@@ -81,6 +81,7 @@ from markspace.telemetry import (
     TelemetryEvent,
     TelemetrySink,
 )
+from markspace.write_budget import Burn, WriteBudget, WriteBudgetMeter
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +270,17 @@ def _update_best_decision(
         results[agent_id] = decision
 
 
+@dataclass(frozen=True)
+class _WriteReservation:
+    """A write reserved against an agent's write budget (Section 9.14)."""
+
+    agent: Agent
+    scope: str
+    mark_type: MarkType
+    budget: WriteBudget
+    at: float
+
+
 class Guard:
     """
     Deterministic enforcement layer for mark-based coordination.
@@ -302,6 +314,7 @@ class Guard:
         telemetry: TelemetrySink | None = None,
         content_policies: list[ContentPolicy] | None = None,
         epoch: int | None = None,
+        write_budgets: dict[uuid.UUID, WriteBudget] | None = None,
     ) -> None:
         self.space = space
         self._envelope = envelope
@@ -321,6 +334,18 @@ class Guard:
         # Rate limit tracker: shared across all scopes, protected by its own lock
         self._rate_limit_tracker = RateLimitTracker()
         self._rate_limit_lock = threading.Lock()
+        # Write budgets (Section 9.14): the principal's table, the meter and
+        # the restricted scopes, under one lock. Never held while taking the
+        # space lock.
+        self._write_budgets: dict[uuid.UUID, WriteBudget] = dict(write_budgets or {})
+        self._write_budget_meter = WriteBudgetMeter()
+        self._write_budget_lock = threading.Lock()
+        # (agent, mark type, kind) -> the last need mark written for it; a new
+        # one is written only when that one is no longer open. The notify lock
+        # is held across the check and the write; never taken under the space
+        # lock.
+        self._write_budget_needs: dict[tuple[uuid.UUID, MarkType, str], uuid.UUID] = {}
+        self._write_budget_notify_lock = threading.Lock()
         # System agent for guard-originated warnings/needs.
         # Exempt from envelope monitoring to prevent feedback loops.
         self._system_agent = Agent(
@@ -1062,9 +1087,31 @@ class Guard:
                 )
                 raise ContentPolicyError(rejection)
 
+        # Write budget (Section 9.14), last before the write: the write is
+        # reserved here and released if the space refuses it.
+        write_budget_result, reservation = (
+            self._reserve_write(agent, mark.scope, mark.mark_type)
+            if agent.can_write(mark.scope, mark.mark_type)
+            else (None, None)
+        )
+        if write_budget_result is not None:
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "rejected",
+                reason=write_budget_result,
+            )
+            raise ScopeError(write_budget_result)
+
         try:
             mark_id = self.space.write(agent, mark)
-        except (ScopeError, ValidationError, QuotaExceededError) as exc:
+        except BaseException as exc:
+            self._release_write(reservation)
+            if not isinstance(exc, (ScopeError, ValidationError, QuotaExceededError)):
+                raise
             self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "denied")
             self._emit_telemetry(
                 agent,
@@ -1075,6 +1122,8 @@ class Guard:
                 reason=str(exc),
             )
             raise
+
+        self._confirm_write(reservation)
 
         # Telemetry: successful write (P58)
         self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "accepted")
@@ -1087,6 +1136,193 @@ class Guard:
         )
 
         return mark_id
+
+    # ------------------------------------------------------------------
+    # Write budgets (Section 9.14)
+    # ------------------------------------------------------------------
+
+    def set_write_budget(
+        self,
+        agent_id: uuid.UUID,
+        budget: WriteBudget | None,
+        principal_token: uuid.UUID,
+    ) -> bool:
+        """Set or remove (None) an agent's write budget (principal action). It
+        takes precedence over the manifest's expected_activity, and it starts
+        a new count: the agent's counted writes are cleared. Returns False for
+        a wrong token."""
+        if principal_token != self._principal_token:
+            return False
+        with self._write_budget_lock:
+            if budget is None:
+                self._write_budgets.pop(agent_id, None)
+            else:
+                self._write_budgets[agent_id] = budget
+            self._write_budget_meter.forget(agent_id)
+        with self._write_budget_notify_lock:
+            for key in [k for k in self._write_budget_needs if k[0] == agent_id]:
+                del self._write_budget_needs[key]
+        return True
+
+    def _write_budget_for(self, agent: Agent) -> WriteBudget | None:
+        """The principal's write budget for the agent, else one from its
+        manifest's expected_activity (WriteBudget.from_expected_activity),
+        else None (not metered)."""
+        with self._write_budget_lock:
+            budget = self._write_budgets.get(agent.id)
+        if budget is not None:
+            return budget
+        if agent.manifest is not None and agent.manifest.expected_activity:
+            return WriteBudget.from_expected_activity(
+                {
+                    MarkType(name): rate
+                    for name, rate in agent.manifest.expected_activity.items()
+                }
+            )
+        return None
+
+    def _reserve_write(
+        self,
+        agent: Agent,
+        scope: str,
+        mark_type: MarkType,
+        force: bool = False,
+        also_spent: MarkType | None = None,
+    ) -> tuple[str | None, _WriteReservation | None]:
+        """Reserve one write against the agent's write budget (Section 9.14).
+        Returns the refusal reason when the budget of the type (or of
+        `also_spent`, which is checked but not counted) is spent, else the
+        reservation to confirm once the write is made or release if it is not.
+        `force` counts a write that has already happened also over the budget.
+        The first refusal of an exhaustion writes a need mark."""
+        budget = self._write_budget_for(agent)
+        if budget is None:
+            return None, None
+        meter = self._write_budget_meter
+        with self._write_budget_lock:
+            now = self.space.now()
+            if also_spent is not None and meter.spent(
+                agent.id, budget, also_spent, now
+            ):
+                spent_type: MarkType = also_spent
+                started = meter.note_refusal(agent.id, also_spent)
+                reservation = None
+            else:
+                spent_type = mark_type
+                reservation = meter.reserve(
+                    agent.id, budget, mark_type, now, force=force
+                )
+                started = reservation.exhaustion_started
+        # Actions are recorded also over the budget; only intents are refused.
+        refused_writes = (
+            "intents" if spent_type == MarkType.ACTION else "writes of this type"
+        )
+        if started:
+            self._notify_write_budget(
+                agent,
+                spent_type,
+                "exhausted",
+                question=(
+                    f"Agent '{agent.name}' has spent its write budget for "
+                    f"{spent_type.value}; its further {refused_writes} are refused"
+                ),
+                context={
+                    "scope": scope,
+                    "budget": budget.budget(spent_type),
+                    "period_seconds": budget.period_seconds,
+                },
+                priority=0.9,
+            )
+        if reservation is None or reservation.refused:
+            return (
+                f"Agent '{agent.name}' has spent its write budget for "
+                f"{spent_type.value} over {budget.period_seconds / 86_400:g} days; "
+                f"its further {refused_writes} are refused until it is back within "
+                f"the budget"
+            ), None
+        assert reservation.at is not None  # noqa: S101
+        return None, _WriteReservation(agent, scope, mark_type, budget, reservation.at)
+
+    def _confirm_write(self, reservation: _WriteReservation | None) -> None:
+        """The reserved write was made: tiers that start firing on it write
+        need marks for the principal."""
+        if reservation is None:
+            return
+        r = reservation
+        with self._write_budget_lock:
+            burns = self._write_budget_meter.confirm(
+                r.agent.id, r.budget, r.mark_type, r.at
+            )
+        for burn in burns:
+            self._notify_write_budget(
+                r.agent,
+                r.mark_type,
+                burn.tier.level,
+                question=(
+                    f"Agent '{r.agent.name}' spends its write budget for "
+                    f"{r.mark_type.value} fast ({burn.tier.level}): {burn.long_count} "
+                    f"in {burn.tier.long_window_seconds:g} s"
+                ),
+                context={
+                    "scope": r.scope,
+                    "budget_fraction": burn.tier.budget_fraction,
+                    "long_window_seconds": burn.tier.long_window_seconds,
+                    "long_count": burn.long_count,
+                    "long_threshold": burn.long_threshold,
+                    "short_window_seconds": burn.tier.short_window_seconds,
+                    "short_count": burn.short_count,
+                    "short_threshold": burn.short_threshold,
+                },
+                priority=0.9 if burn.tier.level == "page" else 0.5,
+            )
+
+    def _release_write(self, reservation: _WriteReservation | None) -> None:
+        """The reserved write was not made: it no longer counts."""
+        if reservation is None:
+            return
+        with self._write_budget_lock:
+            self._write_budget_meter.release(
+                reservation.agent.id, reservation.mark_type, reservation.at
+            )
+
+    def _notify_write_budget(
+        self,
+        agent: Agent,
+        mark_type: MarkType,
+        kind: str,
+        question: str,
+        context: dict[str, Any],
+        priority: float,
+    ) -> None:
+        """A need mark in _system for the principal, unless the last one of the
+        same kind for this agent and type is still open (not resolved). The
+        write hooks fire after the lock is released (Section 8.6)."""
+        key = (agent.id, mark_type, kind)
+        with self.space.hooks_deferred(), self._write_budget_notify_lock:
+            previous = self._write_budget_needs.get(key)
+            if previous is not None and self.space.is_current(previous):
+                return
+            try:
+                need_id = self.space.write(
+                    self._system_agent,
+                    Need(
+                        scope="_system",
+                        question=question,
+                        context={
+                            "agent_id": str(agent.id),
+                            "trigger": "write_budget",
+                            "level": kind,
+                            "mark_type": mark_type.value,
+                            **context,
+                        },
+                        priority=priority,
+                        blocking=False,
+                    ),
+                )
+            except Exception:
+                logger.warning("Failed to write a write-budget need", exc_info=True)
+                return
+            self._write_budget_needs[key] = need_id
 
     # ------------------------------------------------------------------
     # Barrier management
@@ -1437,31 +1673,46 @@ class Guard:
         # the hold ends.
         scope_def = self.space.get_scope(scope)
         need = False
-        with self.space.locked():
-            intent_id = self.space.write(
-                agent,
-                Intent(
-                    scope=scope,
-                    resource=resource,
-                    action=action,
-                    confidence=confidence,
-                ),
-            )
-            if scope_def.deferred:
-                # Deferred resolution (Spec Section 6.2): BLOCKED until
-                # resolve_deferred() is called.
-                return GuardDecision(
-                    verdict=GuardVerdict.BLOCKED,
-                    intent_id=intent_id,
-                    reason="Deferred resolution - pending resolution boundary",
+        # Write budget (Section 9.14): the intent is reserved after every
+        # check that refuses it, and released if the space refuses its write.
+        write_budget_msg, reservation = self._reserve_write(
+            agent, scope, MarkType.INTENT, also_spent=MarkType.ACTION
+        )
+        if write_budget_msg is not None:
+            return GuardDecision(verdict=GuardVerdict.DENIED, reason=write_budget_msg)
+        stored = False
+        try:
+            with self.space.locked():
+                intent_id = self.space.write(
+                    agent,
+                    Intent(
+                        scope=scope,
+                        resource=resource,
+                        action=action,
+                        confidence=confidence,
+                    ),
                 )
-            # Immediate mode (Section 6.5, G3), with one time for marks and
-            # one for leases.
-            now = self.space.now()
-            with self._claim_lock:
-                decision, need = self._decide_immediate(
-                    agent, scope, resource, intent_id, now
-                )
+                stored = True
+                if scope_def.deferred:
+                    # Deferred resolution (Spec Section 6.2): BLOCKED until
+                    # resolve_deferred() is called.
+                    return GuardDecision(
+                        verdict=GuardVerdict.BLOCKED,
+                        intent_id=intent_id,
+                        reason="Deferred resolution - pending resolution boundary",
+                    )
+                # Immediate mode (Section 6.5, G3), with one time for marks and
+                # one for leases.
+                now = self.space.now()
+                with self._claim_lock:
+                    decision, need = self._decide_immediate(
+                        agent, scope, resource, intent_id, now
+                    )
+        finally:
+            if stored:
+                self._confirm_write(reservation)
+            else:
+                self._release_write(reservation)
         if need and agent.can_write(scope, MarkType.NEED):
             # The Need is informational for the principal; BLOCKED holds
             # without it.
@@ -2120,10 +2371,40 @@ class Guard:
 
         Otherwise raises NotGrantedError and writes nothing.
 
+        Each action it records counts against the agent's write budget
+        (Section 9.14); it records an action also over the budget, because
+        its tool has run.
+
         The agent does NOT call this - the harness does, automatically,
         after every tool call. execute() calls it with failed=True when the
         tool throws.
         """
+        reservation = None
+        if agent.can_write(scope, MarkType.ACTION):
+            _, reservation = self._reserve_write(
+                agent, scope, MarkType.ACTION, force=True
+            )
+        try:
+            action_id = self._record_action(
+                agent, scope, resource, action, result, intent_id, failed
+            )
+        except BaseException:
+            self._release_write(reservation)
+            raise
+        self._confirm_write(reservation)
+        return action_id
+
+    def _record_action(
+        self,
+        agent: Agent,
+        scope: str,
+        resource: str,
+        action: str,
+        result: Any,
+        intent_id: uuid.UUID | None,
+        failed: bool,
+    ) -> uuid.UUID:
+        """post_action without the write budget (Section 9.14)."""
         try:
             with self._resource_lock(scope, resource):
                 with self.space.locked():
@@ -2328,7 +2609,9 @@ class Guard:
             self.post_action(agent, scope, resource, result_action, result, intent_id)
         except NotGrantedError as exc:
             # The lease was lost while the tool ran: a failed action is the
-            # trace for readers and the principal, and the agent yields.
+            # trace for readers and the principal, and the agent yields. The
+            # refused post_action released its count, so this one counts the
+            # tool run.
             self.post_action(
                 agent,
                 scope,

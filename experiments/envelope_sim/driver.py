@@ -13,9 +13,11 @@ from __future__ import annotations
 import random
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from markspace.core import MarkType
 from markspace.envelope import EnvelopeVerdict, StatisticalEnvelope
+from markspace.write_budget import WriteBudget, WriteBudgetMeter
 
 from .streams import CHECK, Event, SimConfig, Stream, T
 
@@ -139,3 +141,74 @@ def run_resampled_agent(
             else:
                 run.write(t, event, False)
     return run.result()
+
+
+def declared_rates(stream: Stream) -> dict[MarkType, float]:
+    """The writes per hour of each type outside attacks, over the stream's
+    span: what a principal who measured the agent would declare."""
+    times = [t for t, event, _ in stream if event != CHECK]
+    hours = max((max(times) - min(times)) / 3600.0, 1.0) if times else 1.0
+    counts: dict[MarkType, int] = {}
+    for _, event, is_attack in stream:
+        if event != CHECK and not is_attack:
+            assert isinstance(event, MarkType)  # noqa: S101
+            counts[event] = counts.get(event, 0) + 1
+    return {mark_type: n / hours for mark_type, n in counts.items()}
+
+
+def run_write_budget(stream: Stream, budget: WriteBudget) -> dict[str, Any]:
+    """One agent's writes through the write-budget meter (Section 9.14), as
+    the guard meters them: a write over the spent budget is refused and not
+    counted, and the agent goes on. Returns the times of the first refused
+    write, the first page and the first ticket, and the attack writes
+    counted before each, and the type of the first refused write."""
+    meter = WriteBudgetMeter()
+    agent = uuid.uuid4()
+    attack_times = [t for t, _, is_attack in stream if is_attack]
+    out: dict[str, Any] = {
+        "start": None,
+        "refused_at": None,
+        "refused_type": None,
+        "paged_at": None,
+        "ticketed_at": None,
+        "attack_first": min(attack_times) if attack_times else None,
+        "attack_last": max(attack_times) if attack_times else None,
+        "attack_writes_before_refusal": 0,
+        "attack_writes_before_page": 0,
+        "attack_writes_before_ticket": 0,
+    }
+    attack_writes = 0
+    for t, event, is_attack in stream:
+        if event == CHECK:
+            continue
+        assert isinstance(event, MarkType)  # noqa: S101
+        if out["start"] is None:
+            out["start"] = t
+        reservation = meter.reserve(agent, budget, event, t)
+        if reservation.refused:
+            if out["refused_at"] is None:
+                out["refused_at"] = t
+                out["refused_type"] = event.value
+                out["attack_writes_before_refusal"] = attack_writes
+            continue
+        for burn in meter.confirm(agent, budget, event, t):
+            level = burn.tier.level  # "page" or "ticket"
+            at_key = "paged_at" if level == "page" else "ticketed_at"
+            if out[at_key] is None:
+                out[at_key] = t
+                out[f"attack_writes_before_{level}"] = attack_writes
+        if is_attack:
+            attack_writes += 1
+    return out
+
+
+def resampled_stream(
+    pool: dict[str, list[list[Event]]], rng: random.Random, n_rounds: int
+) -> Stream:
+    """Configuration T's resampled agent as a stream (one clock value per round)."""
+    out: Stream = []
+    for r, events in enumerate(resampled_rounds(pool, rng, n_rounds)):
+        t = round_time(r)
+        for event in events:
+            out.append((t, event, False))
+    return out

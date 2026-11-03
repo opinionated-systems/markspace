@@ -13,13 +13,14 @@ Functions: compute_strength, trust_weight, effective_strength,
 
 from __future__ import annotations
 
+import math
 import uuid
 from enum import Enum
 from types import MappingProxyType
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from markspace.budget import TokenBudget
 from markspace.rate_limit import ScopeRateLimit
@@ -290,6 +291,16 @@ class AgentManifest(BaseModel):
         None  # MarkType.value -> expected marks per hour
     )
     budget: TokenBudget | None = None  # optional token budget (Section 9.10)
+
+    @model_validator(mode="after")
+    def _check_expected_activity(self) -> AgentManifest:
+        """Keys are mark type values; rates are finite and >= 0 (the guard
+        builds a write budget from them, Section 9.14)."""
+        for name, rate in (self.expected_activity or {}).items():
+            MarkType(name)  # raises ValueError for an unknown type
+            if not math.isfinite(rate) or rate < 0:
+                raise ValueError(f"expected_activity[{name!r}] must be finite and >= 0")
+        return self
 
     def produces(self, scope: str, mark_type: MarkType) -> bool:
         """Check if this manifest declares production of a mark type in a scope."""

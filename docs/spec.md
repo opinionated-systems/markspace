@@ -61,6 +61,7 @@ This document is the formal specification for the markspace protocol. For the id
   - [9.11 Telemetry](#911-telemetry)
   - [9.12 Scope Rate Limits](#912-scope-rate-limits)
   - [9.13 Content Policies](#913-content-policies)
+  - [9.14 Write Budgets](#914-write-budgets)
 - [10. Generalized Supersession](#10-generalized-supersession)
   - [10.1 Formal Properties](#101-formal-properties)
 - [11. Agent](#11-agent)
@@ -1415,6 +1416,43 @@ A FLAG gives no input to the statistical envelope. The envelope already sees the
 
 Ref: [`markspace/guard.py::ContentPolicy`](../markspace/guard.py), [`markspace/guard.py::_check_content_policies`](../markspace/guard.py), [`tests/test_guard.py::TestContentPolicies`](../tests/test_guard.py)
 
+### 9.14 Write Budgets
+
+A write budget is a per-agent, per-mark-type allowance of writes over a trailing period, stated as a rate per hour. The principal sets it with `Guard.set_write_budget(agent_id, budget, principal_token)`; a new budget starts a new count, and `None` removes the principal's budget. Otherwise the guard takes it from the `expected_activity` of the agent's manifest (Section 13.2): twice the expected rate of each type, with the default period and tiers. A type that the budget does not list has a budget of 0, so an agent's manifest lists every type the agent writes, intents and actions included. An agent with neither a budget from the principal nor `expected_activity` has no write budget, and the guard does not meter its writes. Write budgets are separate from the token budgets (Section 9.10), which count LLM tokens. The reasons for these rules are in [framework.md, Write Budgets](framework.md#write-budgets).
+
+```protobuf
+message BurnTier {
+  string level = 1;                        // "page" or "ticket"
+  double long_window_seconds = 2;          // MUST be finite, > 0 and <= the period
+  double short_window_seconds = 3;         // MUST be > 0 and < long_window_seconds
+  double budget_fraction = 4;              // share of the period's budget, in (0, 1]
+}
+
+message WriteBudget {
+  map<string, double> per_hour = 1;        // mark type -> budgeted writes per hour, finite, >= 0
+  double period_seconds = 2;               // default 30 days, MUST be finite and > 0
+  repeated BurnTier tiers = 3;             // default: the three tiers below
+}
+```
+
+The budget of a type is `per_hour x period / 3600` writes over the trailing period.
+
+**Counting.** The guard counts a write when it is made. It reserves the write after the checks that can refuse it outright and releases the reservation when the write is not made: in `write_mark`, after the barrier, the envelope, the scope rate limit and the content policies, for a write that the agent's permissions allow, released when the space refuses the write; in `pre_action`, after the authorization, barrier, envelope, rate-limit and held-resource checks, released when the space refuses the intent; in `post_action`, for an action that the agent's permissions allow, released when no action is recorded. A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
+
+**Exhaustion.** A write that would bring the agent's count of its type over the trailing period above the budget is refused and not counted, and so is every further write of that type until the count over the trailing period is below the budget again. When the agent's action budget is spent, `pre_action` also refuses its intents, without counting them. `pre_action` checks the action budget against the agent's counted actions; it does not count the agent's leases that have no action yet. `post_action` counts each action that it records, and it records an action also over the budget, because its tool has run. So the agent's actions can exceed the action budget by its leases that had no action yet when the budget was spent, by leases that a resolution boundary or the principal's `grant()` gives later, and by its direct claims. An exhaustion of a type starts at the first write of that type that is refused or recorded over the budget, and at the first intent refused because the action budget is spent (an exhaustion of actions), each after the agent's last counted write of that type within the budget. Exhaustion is the only refusal of a write budget; a write budget restricts no scope.
+
+**Burn-rate alerts.** The burn rate is the speed at which the agent spends its budget, relative to the period: a burn rate of 1 spends exactly the budget over the period. A tier that spends `budget_fraction` of the budget in its long window has the burn rate `budget_fraction x period / long_window_seconds`; its threshold for a window is `burn rate x per_hour x window / 3600` writes. A tier fires on a counted write when the agent's counted writes of the type exceed its threshold over both its long and its short window; both windows are half-open, `(now - window, now]`. A tier stops at a counted write that does not exceed both thresholds. A tier refuses nothing. The default tiers are the starting values of [Google's Site Reliability Workbook, chapter 5](https://sre.google/workbook/alerting-on-slos/) (Table 5-8), with burn rates 14.4, 6 and 1 over the default period: 2 % of the budget in 1 h (short window 5 min) and 5 % in 6 h (30 min) page; 10 % in 3 days (6 h) opens a ticket.
+
+**Need marks.** The guard writes a need mark in `_system` for the principal when a tier starts firing (priority 0.9 for a page, 0.5 for a ticket) and when an exhaustion starts (priority 0.9), with the agent, the mark type and the kind (`page`, `ticket` or `exhausted`) in its context. It writes none while the last one of the same kind for that agent and type is still open, that is, not resolved (Section 8.3). The space's limit on marks per agent (`MarkSpace(max_marks_per_agent=...)`) applies to the guard's system agent too: a need mark that the limit refuses is not written, and the guard logs it. The guard records which need marks are open. `set_write_budget` forgets the agent's counted writes, its alert state and this record, so a new budget is a fresh start: the guard can write a need mark of a kind while an earlier one of that kind is still open.
+
+**P77: Write Budget Exhaustion**: When a write would bring an agent's count of a mark type over the trailing period above its budget, the guard MUST refuse it in `write_mark` and `pre_action`, MUST NOT count it, and MUST refuse further writes of that type until the count over the trailing period is below the budget. `pre_action` MUST refuse an intent while the agent's action budget is spent. A write that another check refuses MUST NOT be counted.
+
+**P78: Write Budget Room**: The write budget MUST NOT refuse a write that keeps the agent's count of its type over the trailing period within the budget, except an intent that P77 refuses because the action budget is spent. A burn-rate tier MUST NOT refuse any write.
+
+**P79: Write Budget Alerts**: When a burn-rate tier starts firing, or an exhaustion starts, for an agent and a mark type, the guard MUST write a need mark in `_system` naming the agent, the type and the kind, unless the last one of the same kind for that agent and type is still open by the guard's record or the space's limit on marks per agent refuses the write. Only the principal token changes the guard's table of write budgets.
+
+Ref: [`markspace/write_budget.py`](../markspace/write_budget.py), [`markspace/guard.py::_reserve_write`](../markspace/guard.py), [`tests/test_write_budget.py`](../tests/test_write_budget.py)
+
 ## 10. Generalized Supersession
 
 All mark types MAY carry a `supersedes` field. An observation can supersede an earlier observation on the same topic. An intent can supersede an earlier intent of the same agent on the same resource. Supersession gives explicit versions of a mark, in addition to continuous decay.
@@ -1458,9 +1496,9 @@ message Agent {
 
 `read_scopes` controls content access for PROTECTED and CLASSIFIED scopes ([Section 7.4](#74-scope-visibility)). For OPEN scopes, `read_scopes` has no effect. `permissions` and `read_scopes` both support hierarchical matching.
 
-The harness assigns the `id` of an agent. The agent does not choose it. The mark space and the guard identify an agent only by its `id`. They keep state by the `id`, for example: the barrier restrictions ([Section 9.8](#98-absorbing-barrier)), the detector state of the statistical envelope ([Section 9.7](#97-statistical-envelope)), the leases ([Section 6.5](#65-grants)), the token budgets ([Section 9.10](#910-token-budgets)), the scope rate limits ([Section 9.12](#912-scope-rate-limits)), the subscriptions ([Section 13.3](#133-subscription)) and the right to supersede the agent's own marks ([Section 10](#10-generalized-supersession)). An agent with a new `id` has none of that state. A harness that gives a restricted agent a new `id` lifts the restriction without the principal (compare P44).
+The harness assigns the `id` of an agent. The agent does not choose it. The mark space and the guard identify an agent only by its `id`. They keep state by the `id`, for example: the barrier restrictions ([Section 9.8](#98-absorbing-barrier)), the detector state of the statistical envelope ([Section 9.7](#97-statistical-envelope)), the leases ([Section 6.5](#65-grants)), the token budgets ([Section 9.10](#910-token-budgets)), the scope rate limits ([Section 9.12](#912-scope-rate-limits)), the write budgets, their counted writes, their alert state and the record of open need marks ([Section 9.14](#914-write-budgets)), the subscriptions ([Section 13.3](#133-subscription)) and the right to supersede the agent's own marks ([Section 10](#10-generalized-supersession)). An agent with a new `id` has none of that state. A harness that gives a restricted agent a new `id` lifts the restriction without the principal (compare P44).
 
-The reference implementation keeps this state in memory, so a restart loses it, also when the `id` stays the same. The right to supersede is the exception: it comes from the `agent_id` of the stored marks. A deployment that keeps marks across a restart gives each agent its old `id` again. It also saves the barrier snapshots from `Guard.get_barrier` and loads them with `Guard.set_barrier` and the principal token. It saves and loads the detector state of the statistical envelope with `StatisticalEnvelope.save_state` and `StatisticalEnvelope.load_state`. The reference implementation has no save or load methods for the leases, the token budgets, the scope rate limits, the subscriptions and their queues, and the per-agent mark counts.
+The reference implementation keeps this state in memory, so a restart loses it, also when the `id` stays the same. The right to supersede is the exception: it comes from the `agent_id` of the stored marks. A deployment that keeps marks across a restart gives each agent its old `id` again. It also saves the barrier snapshots from `Guard.get_barrier` and loads them with `Guard.set_barrier` and the principal token. It saves and loads the detector state of the statistical envelope with `StatisticalEnvelope.save_state` and `StatisticalEnvelope.load_state`. The reference implementation has no save or load methods for the leases, the token budgets, the scope rate limits, the guard's table of write budgets, the counted writes, the alert state and the record of open need marks, the subscriptions and their queues, and the per-agent mark counts.
 
 `max_source` is the highest source level ([Section 4.1](#41-source-levels)) that the agent can give an observation. The harness MUST set `max_source` for each agent that writes observations and reads content from outside the fleet, directly or through observations below `FLEET`. The value MUST be no higher than the lowest source level of what the agent reads: `EXTERNAL_VERIFIED` for content from a provider that the principal accepts, with its authorship proven; `EXTERNAL_UNVERIFIED` for any other content from outside the fleet; and the source level of each observation that the agent reads. The mark space does not lower `max_source` by itself. In the reference implementation the default is `FLEET`, so an agent whose `max_source` the harness does not set can write at the highest level. The mark space refuses an observation whose source is higher than the `max_source` of its agent ([Section 8.1](#81-write)).
 
@@ -1631,7 +1669,7 @@ message AgentManifest {
   repeated WatchPattern  inputs            = 1;  // marks this agent reads (triggers)
   repeated ManifestOutput outputs          = 2;  // marks this agent writes
   optional double        schedule_interval = 3;  // seconds between activations ([Section 14](#14-scheduling))
-  map<string, double>    expected_activity = 4;  // MarkType.value -> expected marks per hour ([Section 9.7](#97-statistical-envelope))
+  map<string, double>    expected_activity = 4;  // MarkType.value -> expected marks per hour ([Section 9.7](#97-statistical-envelope)); also sets the write budget ([Section 9.14](#914-write-budgets))
   optional TokenBudget   budget            = 5;  // token budget ([Section 9.10](#910-token-budgets))
 }
 ```
@@ -1773,6 +1811,7 @@ This section collects all normative properties. A conforming implementation MUST
 - P59-P63 (token budgets)
 - P64-P66 (scope rate limits)
 - P67-P70 (content policies)
+- P77-P79 (write budgets)
 
 Each of these properties is required only if the implementation supports its feature. The test suite of the reference implementation verifies each property.
 
@@ -1874,6 +1913,9 @@ Property numbers are stable identifiers. The table gives the section of each pro
 | P74 | Lease End | 6.5.1 |
 | P75 | Action Exclusion | 6.5.1 |
 | P76 | No Starvation | 6.5.1 |
+| P77 | Write Budget Exhaustion | 9.14 |
+| P78 | Write Budget Room | 9.14 |
+| P79 | Write Budget Alerts | 9.14 |
 
 ## 16. Conformance
 
@@ -1907,6 +1949,8 @@ An implementation MAY also support token budgets ([Section 9.10](#910-token-budg
 An implementation MAY also support scope rate limits ([Section 9.12](#912-scope-rate-limits)). If it supports them, it MUST satisfy P64-P66. Rate limit support is OPTIONAL for conformance.
 
 An implementation MAY also support content policies ([Section 9.13](#913-content-policies)). If it supports them, it MUST satisfy P67-P70. Content policy support is OPTIONAL for conformance.
+
+An implementation MAY also support write budgets ([Section 9.14](#914-write-budgets)). If it supports them, it MUST satisfy P77-P79. Write budget support is OPTIONAL for conformance.
 
 An implementation MAY also support agent composition ([Section 13](#13-agent-composition)). If it supports composition, it MUST satisfy P48-P55. Composition support is OPTIONAL for conformance.
 

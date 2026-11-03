@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 616 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
+pytest  # 669 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -49,9 +49,10 @@ False and missed restrictions of the statistical envelope (spec 9.7) on syntheti
 ```bash
 python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results
 python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --quick
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --detector write_budget
 ```
 
-Writes `d0.json`, or `d0_quick.json` with `--quick`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md` writes the analysis from it: [envelope_sim/analysis.md](envelope_sim/analysis.md).
+Writes `d0.json` (today's detector) or `write_budget.json` (the write budgets of spec 9.14, with the settings it measured); `--quick` writes `*_quick.json`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md experiments/envelope_sim/results/write_budget.json` writes the analysis from them: [envelope_sim/analysis.md](envelope_sim/analysis.md).
 
 ## LLM Experiments
 

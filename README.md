@@ -95,7 +95,7 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (616):**
+**Unit tests (669):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
@@ -104,7 +104,7 @@ The reference implementation and experiments verify that the protocol's properti
 - **Composition** - agent manifest properties, scheduling
 - **Robustness** - garbage collection, thread safety under concurrent access
 - **Property-based ([Hypothesis](https://hypothesis.readthedocs.io/))** - randomized inputs, stateful scheduler fuzzing (register/unregister/update/tick sequences)
-- **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps
+- **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps, write budgets (a spent budget refuses further writes of its type; burn-rate tiers page or ticket the principal with need marks)
 - **LLM client and stress-test pacing** - Retry-After handling, cached and reasoning token accounting, arrival-ordered pacing under rate limits (real threads)
 - **Stress-test safety metrics** - double bookings counted from the guard's decisions, recovered bookings apart, scope violations checked on every mark the harness hands an agent
 - **Envelope simulator** - the simulator drives the envelope as the guard does; the replay of the stored defense trials reproduces the stored first restriction of every agent it can compare (all but the 5 slow_drift adversaries, whose writes were not stored)
@@ -150,7 +150,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 616 tests, no API key needed
+pytest            # 669 tests, no API key needed
 ```
 
 ### Use the protocol
@@ -254,7 +254,7 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 |------------------------------|------|
 | [`core.py`](markspace/core.py) | Mark types, enums, decay, trust, reinforcement, watch patterns, manifests. Stateless. |
 | [`space.py`](markspace/space.py) | Thread-safe mark space. Read, write, query, watch/subscribe. |
-| [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks. |
+| [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks and per-agent write budgets for each mark type. |
 | [`envelope.py`](markspace/envelope.py) | Optional. Pluggable per-agent anomaly detection (default: Welford's online algorithm). Manifest-declared baselines. |
 | [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching. |
 | [`probe.py`](markspace/probe.py) | Optional. Diagnostic canary injection. Verifies agent health through the mark space. |
@@ -270,7 +270,7 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 
 This is research code - the protocol design is stable, but the implementation is not production-hardened.
 
-The reference implementation is in-memory and single-process. It does not include persistence, networking, authentication, or real-time performance guarantees. The guard enforces structural invariants (scope, identity, conflicts). Content policies provide pluggable semantic inspection of Observation content (pattern matching, LLM-based sanitization), but cannot detect well-formed lies that don't match any policy pattern. The optional layers (envelope, probe, content policies, token budgets, rate limits, telemetry) require per-deployment configuration and are not a substitute for the static enforcement layer. See the [framework doc](docs/framework.md) for a full threat model analysis.
+The reference implementation is in-memory and single-process. It does not include persistence, networking, authentication, or real-time performance guarantees. The guard enforces structural invariants (scope, identity, conflicts). Content policies provide pluggable semantic inspection of Observation content (pattern matching, LLM-based sanitization), but cannot detect well-formed lies that don't match any policy pattern. The optional layers (envelope, probe, content policies, write budgets, token budgets, rate limits, telemetry) require per-deployment configuration and are not a substitute for the static enforcement layer. See the [framework doc](docs/framework.md) for a full threat model analysis.
 
 ## License
 

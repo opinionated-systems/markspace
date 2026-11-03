@@ -82,6 +82,7 @@ from markspace.llm import LLMClient, LLMConfig
 from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeResult, ProbeVerdict
 from markspace.rate_limit import RateLimitTracker, ScopeRateLimit
 from markspace.schedule import Scheduler
+from markspace.write_budget import WriteBudget, WriteBudgetMeter
 from markspace.models import DEFAULT_MODELS, FIREWORKS_MODELS, resolve_model_id
 from markspace.telemetry import (
     FailingSink,
@@ -184,6 +185,9 @@ __all__ = [
     # Rate limit
     "RateLimitTracker",
     "ScopeRateLimit",
+    # Write budgets
+    "WriteBudget",
+    "WriteBudgetMeter",
     # Telemetry
     "FailingSink",
     "InMemorySink",

@@ -1,0 +1,3635 @@
+{
+  "config": {
+    "seeds": 400,
+    "windows": 15000,
+    "quick": false,
+    "detector": "write_budget",
+    "write_budget": {
+      "expected_activity_headroom": 2.0,
+      "period_seconds": 2592000.0,
+      "tiers": [
+        {
+          "level": "page",
+          "long_window_seconds": 3600.0,
+          "short_window_seconds": 300.0,
+          "budget_fraction": 0.02
+        },
+        {
+          "level": "page",
+          "long_window_seconds": 21600.0,
+          "short_window_seconds": 1800.0,
+          "budget_fraction": 0.05
+        },
+        {
+          "level": "ticket",
+          "long_window_seconds": 259200.0,
+          "short_window_seconds": 21600.0,
+          "budget_fraction": 0.1
+        }
+      ]
+    }
+  },
+  "profiles": {
+    "batches_12_12": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 48.16091911627675,
+        "warning": 48.16091911627675
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "batches_20_6": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 77.97472578044204,
+        "warning": 23.392417734132614
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "batches_40_4": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 157.30243513303262,
+        "warning": 15.730243513303261
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "batches_40_4_back_to_back": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 413.333241971529,
+        "warning": 41.3333241971529
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "boundary_burst_10_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 11.892097838420508,
+        "observation": 59.93569310169028
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "boundary_burst_10_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.16118708023788,
+        "warning": 12.077677708412805
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "daily_start_in_peak": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 80.17644293588744,
+        "warning": 15.89768782700015
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "daily_start_out_of_peak": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 79.73961723059097,
+        "warning": 15.943603336829273
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "first_use_1000_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.72272370063591,
+        "warning": 0.000800047203587937
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_1000_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.951359125739074,
+        "warning": 0.009600409809822633
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_1000_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.05067793994914,
+        "warning": 0.003200014811022695
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_100_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.11334841083255,
+        "warning": 0.000800007298423398
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_100_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.037303548006534,
+        "warning": 0.009600208442615476
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_100_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.20741742007102,
+        "warning": 0.003200054076381037
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_5000_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.83477042477565,
+        "warning": 0.0008000156490637454
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_5000_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.61475153048637,
+        "warning": 0.009600571951121085
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "first_use_5000_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.164170215066605,
+        "warning": 0.0032000090533909503
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "paged_by_the_end": 400
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 400,
+          "share": 1.0,
+          "interval95": [
+            0.9908,
+            1.0
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    },
+    "flood_10_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 144.43803888401254,
+        "observation": 60.41971823621771
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_10_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 144.016367437538,
+        "observation": 60.12095339017008
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_10_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.934575147002654,
+        "warning": 12.026595675012224
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_10_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.49425750973807,
+        "warning": 11.988930307218412
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_10_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 42.00408107792213,
+        "observation": 60.02685912385063
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_10_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.19119530855349,
+        "warning": 42.32295921487022
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.83380908950835,
+        "warning": 144.7253057432158
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 144.00156293924718,
+        "observation": 60.41859141605134
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.19787799406342,
+        "warning": 12.285820008436753
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.06431115348546,
+        "warning": 12.113662752877955
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.766041718457664,
+        "warning": 42.13471140894064
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_20_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.98712412908402,
+        "warning": 42.22850975759439
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 143.59547806924934,
+        "observation": 59.96411611909359
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 143.91493064821427,
+        "observation": 59.95495434799281
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.271160167734855,
+        "warning": 12.078233291993005
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.326759979744985,
+        "warning": 11.953988377812768
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 42.05718793511018,
+        "observation": 59.83255189490195
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_5_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.76049802449953,
+        "warning": 42.10995093059681
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_then_silence_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.30568276740408,
+        "warning": 11.88801631587945
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "flood_then_silence_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 12.032997360880152,
+        "observation": 59.64177822292243
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "idle_gaps": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "warning": 7.978575399152603,
+        "observation": 40.024079880096814
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "intermittent_warnings": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 120.06711909028019,
+        "warning": 29.054574009853187
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "new_type_burst_10_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.99041816584706
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "new_type_burst_10_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.04878630871864
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "new_type_burst_20_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.093645649293855
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "new_type_burst_20_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.980227807946854
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "new_type_burst_5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.860772676492
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "new_type_burst_5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.98718430382718
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 0.0,
+        "median_attack_writes_before_detection": 0.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "overdispersed_3": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.85817768580774,
+        "warning": 12.102516800284668
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "poisoned_cold_start_1_3_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.780419405360114,
+        "warning": 11.95544386801699
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "poisoned_cold_start_1_3_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.06392206252907,
+        "warning": 12.045744808741462
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "poisoned_cold_start_random_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.36448465983778,
+        "warning": 11.856895197713282
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "poisoned_cold_start_random_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.456154512335004,
+        "warning": 12.033630755253977
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      }
+    },
+    "ramp_10pct_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.09643183619586,
+        "warning": 12.077208325557294
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 74.6,
+        "median_attack_writes_before_detection": 16114.5
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 37.04,
+        "median_attack_writes_before_detection": 457.0
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 43.42,
+        "median_attack_writes_before_detection": 874.0
+      }
+    },
+    "ramp_10pct_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.6887270865276,
+        "warning": 12.065908696256608
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 75.71,
+        "median_attack_writes_before_detection": 17280.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 37.05,
+        "median_attack_writes_before_detection": 458.0
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 49.91,
+        "median_attack_writes_before_detection": 1669.0
+      }
+    },
+    "rare_warning": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 60.28958251616025,
+        "warning": 2.4000311507076706
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "steady_1": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 12.061395651890775,
+        "warning": 2.34987190909474
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "steady_20": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 239.79409114296368,
+        "warning": 47.911298131262726
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "steady_5": {
+      "config": "L",
+      "kind": "normal",
+      "expected_per_hour": {
+        "observation": 59.93831667591235,
+        "warning": 11.909419266643058
+      },
+      "refused": {
+        "agents": 400,
+        "refused_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "refused_by_the_end": 0,
+        "first_refused_type": {}
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "paged_by_the_end": 0
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_1_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_7_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 0,
+          "share": 0.0,
+          "interval95": [
+            0.0,
+            0.0092
+          ]
+        },
+        "ticketed_by_the_end": 0
+      }
+    },
+    "sustained_2x_of_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.861439640646466,
+        "warning": 12.076929046256636
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 188,
+        "restricted_later": 0,
+        "never_restricted": 212,
+        "median_windows_to_detection": 9112.69,
+        "median_attack_writes_before_detection": 9197.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 964.73,
+        "median_attack_writes_before_detection": 971.5
+      }
+    },
+    "sustained_2x_of_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.39426978474062,
+        "warning": 12.278698820471302
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 4,
+        "restricted_later": 0,
+        "never_restricted": 396,
+        "median_windows_to_detection": 10345.66,
+        "median_attack_writes_before_detection": 10520.5
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 1592.28,
+        "median_attack_writes_before_detection": 1596.0
+      }
+    },
+    "sustained_2x_of_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 41.724657247027224,
+        "observation": 59.87054308111928
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 399,
+        "restricted_later": 0,
+        "never_restricted": 1,
+        "median_windows_to_detection": 8529.71,
+        "median_attack_writes_before_detection": 29848
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 856.96,
+        "median_attack_writes_before_detection": 3013.5
+      }
+    },
+    "sustained_2x_of_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 60.07038494564027,
+        "warning": 42.22775179419442
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 132,
+        "restricted_later": 0,
+        "never_restricted": 268,
+        "median_windows_to_detection": 9518.63,
+        "median_attack_writes_before_detection": 33637.5
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 993.78,
+        "median_attack_writes_before_detection": 3512.5
+      }
+    },
+    "sustained_3x_of_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.8246285382353,
+        "warning": 12.102050815719668
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 5411.71,
+        "median_attack_writes_before_detection": 10826.5
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 439.46,
+        "median_attack_writes_before_detection": 880.5
+      }
+    },
+    "sustained_3x_of_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.93864010597107,
+        "warning": 11.983248003247876
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 5749.12,
+        "median_attack_writes_before_detection": 11504.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 569.44,
+        "median_attack_writes_before_detection": 1139.0
+      }
+    },
+    "sustained_3x_of_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "warning": 41.92980496782762,
+        "observation": 60.12989393634778
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 5349.44,
+        "median_attack_writes_before_detection": 37452.5
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 430.43,
+        "median_attack_writes_before_detection": 3015.0
+      }
+    },
+    "sustained_3x_of_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "expected_per_hour": {
+        "observation": 59.87409283216497,
+        "warning": 42.07154629687506
+      },
+      "refused": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 5764.42,
+        "median_attack_writes_before_detection": 40347.0
+      },
+      "paged": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 0,
+        "restricted_later": 0,
+        "never_restricted": 400,
+        "median_windows_to_detection": null,
+        "median_attack_writes_before_detection": null
+      },
+      "ticketed": {
+        "agents": 400,
+        "restricted_before_the_attack": 0,
+        "detected": 400,
+        "restricted_later": 0,
+        "never_restricted": 0,
+        "median_windows_to_detection": 571.61,
+        "median_attack_writes_before_detection": 4002.0
+      }
+    },
+    "T_resampled_normal": {
+      "config": "T",
+      "kind": "normal",
+      "refused": {
+        "agents": 400,
+        "refused_within_10_days": {
+          "agents": 1,
+          "share": 0.0025,
+          "interval95": [
+            0.0001,
+            0.0138
+          ]
+        },
+        "refused_within_20_days": {
+          "agents": 2,
+          "share": 0.005,
+          "interval95": [
+            0.0006,
+            0.0179
+          ]
+        },
+        "refused_within_30_days": {
+          "agents": 6,
+          "share": 0.015,
+          "interval95": [
+            0.0055,
+            0.0324
+          ]
+        },
+        "refused_by_the_end": 71,
+        "first_refused_type": {
+          "need": 6
+        }
+      },
+      "paged": {
+        "agents": 400,
+        "paged_within_10_days": {
+          "agents": 376,
+          "share": 0.94,
+          "interval95": [
+            0.912,
+            0.9612
+          ]
+        },
+        "paged_within_20_days": {
+          "agents": 391,
+          "share": 0.9775,
+          "interval95": [
+            0.9577,
+            0.9897
+          ]
+        },
+        "paged_within_30_days": {
+          "agents": 394,
+          "share": 0.985,
+          "interval95": [
+            0.9676,
+            0.9945
+          ]
+        },
+        "paged_by_the_end": 397
+      },
+      "ticketed": {
+        "agents": 400,
+        "ticketed_within_10_days": {
+          "agents": 125,
+          "share": 0.3125,
+          "interval95": [
+            0.2674,
+            0.3604
+          ]
+        },
+        "ticketed_within_20_days": {
+          "agents": 201,
+          "share": 0.5025,
+          "interval95": [
+            0.4524,
+            0.5526
+          ]
+        },
+        "ticketed_within_30_days": {
+          "agents": 248,
+          "share": 0.62,
+          "interval95": [
+            0.5704,
+            0.6678
+          ]
+        },
+        "ticketed_by_the_end": 400
+      }
+    }
+  }
+}

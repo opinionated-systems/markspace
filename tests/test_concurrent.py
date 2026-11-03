@@ -303,3 +303,59 @@ class TestConcurrentReadsDuringWrites:
         # Final read should see all marks
         final = space.read(scope="calendar", mark_type=MarkType.ACTION)
         assert len(final) == n_writers
+
+
+class TestLockOrder:
+    """Every path takes the space lock before the guard's lease-table lock. A
+    path that takes them in the other order deadlocks against one that reads
+    claim state or supersedes a mark. The threads are joined with a timeout,
+    so a deadlock fails the test instead of hanging the suite."""
+
+    @pytest.mark.parametrize("other", ["claim_state", "supersede"])
+    def test_bookings_run_beside_claim_reads_and_supersessions(
+        self, space: MarkSpace, guard: Guard, other: str
+    ) -> None:
+        booker, writer = make_agent("booker"), make_agent("writer")
+        probe = guard.pre_action(booker, "calendar", "slot-probe", "book")
+        assert probe.intent_id is not None
+        probe_id = probe.intent_id
+        stop = threading.Event()
+
+        def book() -> None:
+            i = 0
+            while not stop.is_set():
+                i += 1
+                slot = f"slot-{i}"
+                d = guard.pre_action(booker, "calendar", slot, "book")
+                if d.verdict == GuardVerdict.ALLOW:
+                    guard.post_action(
+                        booker, "calendar", slot, "booked", "ok", d.intent_id
+                    )
+
+        def read_or_supersede() -> None:
+            last = None
+            while not stop.is_set():
+                if other == "claim_state":
+                    guard.claim_state(probe_id)
+                else:
+                    last = space.write(
+                        writer,
+                        Observation(
+                            scope="calendar",
+                            topic="status",
+                            content="c",
+                            supersedes=last,
+                        ),
+                    )
+
+        threads = [
+            threading.Thread(target=book, daemon=True),
+            threading.Thread(target=read_or_supersede, daemon=True),
+        ]
+        for th in threads:
+            th.start()
+        stop.wait(timeout=1.0)
+        stop.set()
+        for th in threads:
+            th.join(timeout=5)
+        assert not any(th.is_alive() for th in threads)

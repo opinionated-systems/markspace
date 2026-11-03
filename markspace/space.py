@@ -750,6 +750,12 @@ class MarkSpace:
             return project_mark(mark)
         return None  # CLASSIFIED: not even projected (P22, P25)
 
+    def is_current(self, mark_id: uuid.UUID) -> bool:
+        """Whether the mark is stored and not superseded (a resolved need is
+        superseded by its resolved copy, Section 8.3)."""
+        with self._lock:
+            return mark_id in self._marks and mark_id not in self._superseded
+
     def get_mark(self, mark_id: uuid.UUID) -> AnyMark | None:
         """Retrieve a mark by id. Returns None if not found."""
         with self._lock:
