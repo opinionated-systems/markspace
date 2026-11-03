@@ -334,18 +334,17 @@ class Guard:
         # Rate limit tracker: shared across all scopes, protected by its own lock
         self._rate_limit_tracker = RateLimitTracker()
         self._rate_limit_lock = threading.Lock()
-        # Write budgets (Section 9.14): the principal's table, the meter and
-        # the restricted scopes, under one lock. Never held while taking the
-        # space lock.
+        # Write budgets (Section 9.14): the principal's table and the meter,
+        # under one lock. Never held while taking the space lock.
         self._write_budgets: dict[uuid.UUID, WriteBudget] = dict(write_budgets or {})
         self._write_budget_meter = WriteBudgetMeter()
         self._write_budget_lock = threading.Lock()
-        # (agent, mark type, kind) -> the last need mark written for it; a new
-        # one is written only when that one is no longer open. The notify lock
-        # is held across the check and the write; never taken under the space
-        # lock.
-        self._write_budget_needs: dict[tuple[uuid.UUID, MarkType, str], uuid.UUID] = {}
-        self._write_budget_notify_lock = threading.Lock()
+        # Need marks the guard writes in _system for the principal: (trigger,
+        # agent, ...) -> the last one written for that key; a new one is
+        # written only when that one is no longer open. The need lock is held
+        # across the check and the write; never taken under the space lock.
+        self._open_needs: dict[tuple[Any, ...], uuid.UUID] = {}
+        self._need_lock = threading.Lock()
         # System agent for guard-originated warnings/needs.
         # Exempt from envelope monitoring to prevent feedback loops.
         self._system_agent = Agent(
@@ -992,7 +991,10 @@ class Guard:
 
         No conflict resolution. No resource locking. But does run:
         - Type validation (rejects intents/actions)
-        - Barrier check (is this agent restricted?)
+        - Barrier check (is this agent restricted?). A need mark of an agent
+          restricted in the mark's scope goes to the principal: the guard
+          writes it in _system, one open per agent, and returns its id
+          (Section 9.8).
         - Envelope check (is this agent anomalous?)
         - Rate limit check (is this scope rate-limited?)
         - Content policy check (Observation marks only, P67-P70)
@@ -1020,7 +1022,13 @@ class Guard:
             and mark.invalidates is not None
         ):
             target = self.space.get_mark(mark.invalidates)
-            if isinstance(target, Action) and target.scope != mark.scope:
+            if target is not None and target.scope == "_system":
+                # The guard's marks for the principal: no agent hides them
+                # (Section 9.8).
+                barrier_result = (
+                    f"Agent '{agent.name}' may not warn on a mark in '_system'"
+                )
+            elif isinstance(target, Action) and target.scope != mark.scope:
                 barrier_result = self._check_barrier(
                     agent, target.scope, MarkType.WARNING
                 )
@@ -1107,7 +1115,12 @@ class Guard:
             raise ScopeError(write_budget_result)
 
         try:
-            mark_id = self.space.write(agent, mark)
+            if isinstance(mark, Need) and self._revoked_to_act(
+                self.get_barrier(agent.id), mark.scope
+            ):
+                mark_id = self._ask_principal(agent, mark)
+            else:
+                mark_id = self.space.write(agent, mark)
         except BaseException as exc:
             self._release_write(reservation)
             if not isinstance(exc, (ScopeError, ValidationError, QuotaExceededError)):
@@ -1159,9 +1172,13 @@ class Guard:
             else:
                 self._write_budgets[agent_id] = budget
             self._write_budget_meter.forget(agent_id)
-        with self._write_budget_notify_lock:
-            for key in [k for k in self._write_budget_needs if k[0] == agent_id]:
-                del self._write_budget_needs[key]
+        with self._need_lock:
+            for key in [
+                k
+                for k in self._open_needs
+                if k[0] == "write_budget" and k[1] == agent_id
+            ]:
+                del self._open_needs[key]
         return True
 
     def _write_budget_for(self, agent: Agent) -> WriteBudget | None:
@@ -1294,35 +1311,113 @@ class Guard:
         context: dict[str, Any],
         priority: float,
     ) -> None:
-        """A need mark in _system for the principal, unless the last one of the
-        same kind for this agent and type is still open (not resolved). The
-        write hooks fire after the lock is released (Section 8.6)."""
-        key = (agent.id, mark_type, kind)
-        with self.space.hooks_deferred(), self._write_budget_notify_lock:
-            previous = self._write_budget_needs.get(key)
+        """A write-budget need mark for the principal (Section 9.14), one open
+        per agent, mark type and kind."""
+        self._write_principal_need(
+            ("write_budget", agent.id, mark_type, kind),
+            question,
+            {
+                "agent_id": str(agent.id),
+                "trigger": "write_budget",
+                "level": kind,
+                "mark_type": mark_type.value,
+                **context,
+            },
+            priority,
+        )
+
+    def _write_principal_need(
+        self,
+        key: tuple[Any, ...],
+        question: str,
+        context: dict[str, Any],
+        priority: float,
+        blocking: bool = False,
+        raise_errors: bool = False,
+    ) -> uuid.UUID | None:
+        """
+        A need mark in _system for the principal, written by the guard's
+        system agent, unless the last one written for *key* is still open
+        (current: not resolved, Section 8.3). Returns the id of the new need
+        mark, or None when an open one exists. A write that the space refuses
+        is logged and returns None, or raises when *raise_errors*. The write
+        hooks fire after the lock is released (Section 8.6).
+        """
+        with self.space.hooks_deferred(), self._need_lock:
+            previous = self._open_needs.get(key)
             if previous is not None and self.space.is_current(previous):
-                return
+                return None
             try:
                 need_id = self.space.write(
                     self._system_agent,
                     Need(
                         scope="_system",
                         question=question,
-                        context={
-                            "agent_id": str(agent.id),
-                            "trigger": "write_budget",
-                            "level": kind,
-                            "mark_type": mark_type.value,
-                            **context,
-                        },
+                        context=context,
                         priority=priority,
-                        blocking=False,
+                        blocking=blocking,
                     ),
                 )
             except Exception:
-                logger.warning("Failed to write a write-budget need", exc_info=True)
-                return
-            self._write_budget_needs[key] = need_id
+                if raise_errors:
+                    raise
+                logger.warning(
+                    "Failed to write a need mark for the principal (%s)",
+                    context.get("trigger"),
+                    exc_info=True,
+                )
+                return None
+            self._open_needs[key] = need_id
+            return need_id
+
+    def _ask_principal(self, agent: Agent, need: Need) -> uuid.UUID:
+        """
+        The need mark of an agent restricted in its scope goes to the
+        principal: the guard writes it in _system, with the agent's id, the
+        scope and the agent's question and context, one open per agent
+        (Section 9.8). No other agent reads it. Raises ScopeError while the
+        agent's last one is open.
+        """
+        self.space.get_scope(need.scope)  # raises for an unknown scope
+        if not agent.can_write(need.scope, MarkType.NEED):
+            raise ScopeError(
+                f"Agent '{agent.name}' is not authorized to write need in scope "
+                f"'{need.scope}'"
+            )
+        need_id = self._write_principal_need(
+            ("restricted_agent", agent.id),
+            need.question,
+            {
+                "agent_id": str(agent.id),
+                "trigger": "restricted_agent",
+                "scope": need.scope,
+                "agent_context": need.context,
+            },
+            priority=need.priority,
+            blocking=need.blocking,
+            raise_errors=True,
+        )
+        if need_id is None:
+            raise ScopeError(
+                f"Agent '{agent.name}' is restricted in scope '{need.scope}' and "
+                f"has an open need mark for the principal; the principal resolves "
+                f"it first"
+            )
+        return need_id
+
+    def _asked_principal(self, agent: Agent, scope: str) -> bool:
+        """Whether the agent holds an open need mark for the principal that it
+        wrote while restricted in *scope* or a scope inside it
+        (_ask_principal): the one the guard's record names, while current,
+        as the one-open rule reads it. A dict read: no lock, because a
+        boundary calls this under the space lock."""
+        need_id = self._open_needs.get(("restricted_agent", agent.id))
+        if need_id is None or not self.space.is_current(need_id):
+            return False
+        need = self.space.get_mark(need_id)
+        return isinstance(need, Need) and scope_contains(
+            scope, str(need.context.get("scope"))
+        )
 
     # ------------------------------------------------------------------
     # Barrier management
@@ -1428,11 +1523,15 @@ class Guard:
                 f"{mark_type.value} revoked in scope '{scope}'"
             )
         if barrier.needs_required(scope) and mark_type != MarkType.NEED:
-            # Check for unresolved Need in this scope
+            # Check for unresolved Need in this scope; while the agent is
+            # restricted there, its need for the principal counts too.
             needs = self.space.read(scope=scope, mark_type=MarkType.NEED, now=now)
             has_unresolved = any(
                 isinstance(n, Need) and n.agent_id == agent.id and n.resolved_by is None
                 for n in needs
+            ) or (
+                self._revoked_to_act(barrier, scope) is not None
+                and self._asked_principal(agent, scope)
             )
             if not has_unresolved:
                 return (
@@ -1605,8 +1704,17 @@ class Guard:
                 reason=f"Agent '{agent.name}' not authorized for action in scope '{scope}'",
             )
 
-        # Barrier check
-        barrier_msg = self._check_barrier(agent, scope, MarkType.INTENT)
+        # Barrier check: an intent exists to act, so a barrier that revokes
+        # intents or actions refuses it (Section 9.8). The revocations come
+        # first: a need cannot lift them, so the reason must not ask for one.
+        barrier = self.get_barrier(agent.id)
+        revoked = self._revoked_to_act(barrier, scope)
+        barrier_msg = (
+            f"Agent '{agent.name}' blocked by barrier: {revoked.value} revoked "
+            f"in scope '{scope}'"
+            if revoked is not None
+            else self._barrier_refusal(agent, scope, MarkType.INTENT, barrier)
+        )
         if barrier_msg is not None:
             return GuardDecision(
                 verdict=GuardVerdict.DENIED,
@@ -1680,6 +1788,13 @@ class Guard:
         )
         if write_budget_msg is not None:
             return GuardDecision(verdict=GuardVerdict.DENIED, reason=write_budget_msg)
+        # Every barrier, before the space hold: a competitor restricted in its
+        # intent's scope does not beat or block this intent (Section 9.8),
+        # and no barrier lock is taken under the space lock.
+        # shortcut: one snapshot of every barrier per call (about 1.4 ms at
+        # 1,000 barriers); read only the competitors' barriers when a
+        # deployment holds many barriers.
+        barriers = self._all_barriers()
         stored = False
         try:
             with self.space.locked():
@@ -1706,7 +1821,7 @@ class Guard:
                 now = self.space.now()
                 with self._claim_lock:
                     decision, need = self._decide_immediate(
-                        agent, scope, resource, intent_id, now
+                        agent, scope, resource, intent_id, now, barriers
                     )
         finally:
             if stored:
@@ -1740,12 +1855,14 @@ class Guard:
         resource: str,
         intent_id: uuid.UUID,
         now: float,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
     ) -> tuple[GuardDecision, bool]:
         """
         G3 rules 4 to 7 for the intent just written: a competitor that beats
-        it, a YIELD_ALL pair, another agent's lease, else a grant. Returns the
-        decision and whether a Need mark is due. Caller MUST hold the
-        resource lock, the space lock and _claim_lock.
+        it, a YIELD_ALL pair, another agent's lease, else a grant. A pending
+        intent of an agent restricted in its scope takes no part (Section
+        9.8). Returns the decision and whether a Need mark is due. Caller
+        MUST hold the resource lock, the space lock and _claim_lock.
         """
         lease_now = self._tick()
         all_intents = self.space.get_intents(scope, resource, now=now)
@@ -1765,7 +1882,10 @@ class Guard:
         pending_others = [
             o
             for o in all_intents
-            if o.agent_id != agent.id and o.id != intent_id and self._is_pending(o)
+            if o.agent_id != agent.id
+            and o.id != intent_id
+            and self._is_pending(o)
+            and self._revoked_to_act(barriers.get(o.agent_id), o.scope) is None
         ]
         competed = bool(leases or pending_others)
 
@@ -1889,6 +2009,22 @@ class Guard:
             conflict_found=True,
         )
 
+    def _all_barriers(self) -> dict[uuid.UUID, BarrierSnapshot | None]:
+        """Snapshots of every barrier, by agent id."""
+        with self._barrier_lock:
+            return {a: b.snapshot() for a, b in self._barriers.items()}
+
+    @staticmethod
+    def _revoked_to_act(barrier: BarrierSnapshot | None, scope: str) -> MarkType | None:
+        """The type, intent or action, that *barrier* revokes in *scope*, or
+        None: either one stops an agent from acting there (Section 9.8)."""
+        if barrier is None:
+            return None
+        for mark_type in (MarkType.INTENT, MarkType.ACTION):
+            if not barrier.is_allowed_checked(scope, mark_type.value):
+                return mark_type
+        return None
+
     def _deferred_refusal(
         self,
         intent: Intent,
@@ -1898,10 +2034,20 @@ class Guard:
     ) -> str | None:
         """
         Why a deferred intent may not take part at a resolution boundary, or
-        None. Checked only when the caller passes the agents mapping: the
-        agent must be known, still authorized for the intent's own scope, and
-        not blocked by the barrier there.
+        None. The agent must not be restricted in the intent's scope (its
+        barrier, read by agent id, revokes intents or actions there). With
+        the agents mapping, also: the agent must be known, still authorized
+        for the intent's own scope, and hold a need mark that its barrier
+        requires there.
         """
+        revoked = self._revoked_to_act(barriers.get(intent.agent_id), intent.scope)
+        if revoked is not None:
+            known = agents.get(intent.agent_id) if agents is not None else None
+            name = f"'{known.name}'" if known is not None else str(intent.agent_id)
+            return (
+                f"Agent {name} blocked by barrier at resolution time: "
+                f"{revoked.value} revoked in scope '{intent.scope}'"
+            )
         if agents is None:
             return None
         agent = agents.get(intent.agent_id)
@@ -1911,9 +2057,11 @@ class Guard:
             intent.scope, MarkType.ACTION
         ):
             return f"Agent '{agent.name}' authorization revoked since pre_action"
-        barrier = barriers.get(agent.id)
-        if self._barrier_refusal(agent, intent.scope, MarkType.INTENT, barrier, now):
-            return f"Agent '{agent.name}' blocked by barrier at resolution time"
+        refusal = self._barrier_refusal(
+            agent, intent.scope, MarkType.INTENT, barriers.get(agent.id), now
+        )
+        if refusal is not None:
+            return f"{refusal} (at resolution time)"
         return None
 
     def _visible_to(self, mark: AnyMark, agent: Agent | None) -> bool:
@@ -1946,7 +2094,9 @@ class Guard:
             DENIED and be excluded from conflict resolution. An agent missing
             from the mapping also receives DENIED, but its intents stay pending
             and still count against the intents they beat: it cannot be
-            checked.
+            checked. With or without the mapping, the boundary reads each
+            agent's barrier by its id: an intent whose agent is restricted in
+            its scope (Section 9.8) receives DENIED and is lost.
 
         Spec Section 6.2 (Phase 3: Batch resolution).
 
@@ -1964,11 +2114,12 @@ class Guard:
         # once, inside the resource lock, so a restriction applied while the
         # boundary waits for that lock counts, and before the space is held:
         # the barrier lock is never held while the space is held (Section
-        # 6.2.3).
+        # 6.2.3). Every barrier is read: an agent missing from the mapping
+        # can still be restricted.
         if agents is not None:
             agents = dict(agents)
         with self._resource_lock(scope, resource):
-            barriers = {a: self.get_barrier(a) for a in agents} if agents else {}
+            barriers = self._all_barriers()
             with self.space.locked():
                 results = self._resolve_locked(scope, resource, agents, barriers)
         self._emit_lease_events()
@@ -2027,15 +2178,15 @@ class Guard:
                 refusals[o.id] = self._deferred_refusal(o, agents, barriers, now)
             return refusals[o.id]
 
-        # An intent whose agent is in the mapping and fails a check takes
-        # no part in any comparison (P14), also outside this boundary's
-        # set. An agent missing from the mapping cannot be checked, so its
-        # intents still count, and stay pending.
+        # An intent whose agent fails a check takes no part in any
+        # comparison (P14), also outside this boundary's set. An agent
+        # missing from the mapping cannot be checked, so its intents still
+        # count, and stay pending, unless its barrier restricts it there.
         def is_refused(o: Intent) -> bool:
-            return (
-                agents is not None
-                and o.agent_id in agents
-                and refusal_of(o) is not None
+            return refusal_of(o) is not None and (
+                agents is None
+                or o.agent_id in agents
+                or self._revoked_to_act(barriers.get(o.agent_id), o.scope) is not None
             )
 
         candidates: list[Intent] = []
@@ -2241,7 +2392,9 @@ class Guard:
         The principal grants a pending intent whose mark is live, if no other
         agent holds the resource in a competing scope (G1): ALLOW with the
         token and expiry, or CONFLICT naming the holder. A wrong principal
-        token gets DENIED; an intent that is not pending gets CONFLICT.
+        token gets DENIED, and so does an intent of an agent restricted in
+        its scope (Section 9.8: the principal restores the barrier first);
+        an intent that is not pending gets CONFLICT.
         """
         if principal_token != self._principal_token:
             return GuardDecision(
@@ -2255,6 +2408,16 @@ class Guard:
                 reason="No live intent with this id",
             )
         with self._resource_lock(mark.scope, mark.resource):
+            # A lease needs the barrier's leave to act (Section 9.8); read
+            # before the space lock, as pre_action reads it.
+            revoked = self._revoked_to_act(self.get_barrier(mark.agent_id), mark.scope)
+            if revoked is not None:
+                return GuardDecision(
+                    verdict=GuardVerdict.DENIED,
+                    intent_id=intent_id,
+                    reason=f"Barrier revokes {revoked.value} in scope "
+                    f"'{mark.scope}'; restore it first",
+                )
             with self.space.locked():
                 now = self.space.now()
                 live = any(
@@ -2358,7 +2521,8 @@ class Guard:
         the intent, only under a live grant (Section 6.5, G6):
 
         - failed=True: writes the failed action, which holds nothing, and
-          ends the lease if it is live: intent_id's, or without intent_id
+          ends the lease if it is live: intent_id's, when that intent is
+          this agent's own on this scope and resource, or without intent_id
           this agent's live lease on this scope and resource. It never
           raises for a lease.
         - With intent_id: only if that intent holds a live lease of this
@@ -2367,7 +2531,10 @@ class Guard:
         - Without intent_id: under this agent's live lease on this scope and
           resource if it has one; else a direct claim, only in an immediate
           scope that is not YIELD_ALL, when no other agent holds the
-          resource and no other agent's pending intent competes.
+          resource and no pending intent of another agent that may act
+          competes. A direct claim that the agent's barrier refuses is
+          recorded, with a need mark for the principal, one open per agent
+          and registered scope (Section 9.8).
 
         Otherwise raises NotGrantedError and writes nothing.
 
@@ -2407,21 +2574,52 @@ class Guard:
         """post_action without the write budget (Section 9.14)."""
         try:
             with self._resource_lock(scope, resource):
+                # A direct claim that the barrier refuses is still recorded,
+                # because its tool has run, and the principal gets a need
+                # mark (Section 9.8). Read before the space lock, as
+                # pre_action reads it.
+                breach = (
+                    None
+                    if failed or intent_id is not None
+                    else self._direct_claim_refusal(agent, scope)
+                )
+                # A competitor restricted in its intent's scope does not
+                # block a direct claim (Section 9.8).
+                barriers = (
+                    self._all_barriers() if intent_id is None and not failed else {}
+                )
                 with self.space.locked():
                     now = self.space.now()
                     with self._claim_lock:
                         lease_now = self._tick()
                         if not failed:
                             supersedes = self._covering_intent(
-                                agent, scope, resource, intent_id, now, lease_now
+                                agent,
+                                scope,
+                                resource,
+                                intent_id,
+                                now,
+                                lease_now,
+                                barriers,
                             )
                         elif intent_id is not None:
-                            supersedes = intent_id
+                            # Only this agent's intent on this scope and
+                            # resource: a failed action must not hide another
+                            # mark of the agent.
+                            target = self.space.get_mark(intent_id)
+                            supersedes = (
+                                intent_id
+                                if isinstance(target, Intent)
+                                and target.agent_id == agent.id
+                                and target.scope == scope
+                                and target.resource == resource
+                                else None
+                            )
                         else:
                             supersedes = self._own_lease(
                                 agent, scope, resource, lease_now
                             )
-                    return self.space.write(
+                    action_id = self.space.write(
                         agent,
                         Action(
                             scope=scope,
@@ -2432,9 +2630,54 @@ class Guard:
                             supersedes=supersedes,
                         ),
                     )
+            if breach is not None and supersedes is None:
+                self._report_breach(agent, scope, resource, action_id, breach)
+            return action_id
         finally:
             # Also when it raises: an expiry it recorded is reported.
             self._emit_lease_events()
+
+    def _direct_claim_refusal(self, agent: Agent, scope: str) -> str | None:
+        """Why the agent's barrier refuses a direct claim in *scope*: the
+        agent is restricted there (Section 9.8), or it lacks a need mark
+        that the barrier requires; None if the barrier allows it."""
+        barrier = self.get_barrier(agent.id)
+        revoked = self._revoked_to_act(barrier, scope)
+        if revoked is not None:
+            return (
+                f"Agent '{agent.name}' blocked by barrier: {revoked.value} revoked "
+                f"in scope '{scope}'"
+            )
+        return self._barrier_refusal(agent, scope, MarkType.ACTION, barrier)
+
+    def _report_breach(
+        self,
+        agent: Agent,
+        scope: str,
+        resource: str,
+        action_id: uuid.UUID,
+        reason: str,
+    ) -> None:
+        """A need mark for the principal: a direct claim went against the
+        agent's barrier (Section 9.8). One open per agent and registered
+        scope (a scope counts as the nearest registered scope that contains
+        it); the actions of
+        later breaches are recorded and the open need covers them."""
+        self._write_principal_need(
+            ("barrier_breach", agent.id, self.space.get_scope(scope).name),
+            (
+                f"Agent '{agent.name}' acted on '{resource}' in '{scope}' "
+                f"against its barrier: {reason}"
+            ),
+            {
+                "agent_id": str(agent.id),
+                "trigger": "barrier_breach",
+                "action_id": str(action_id),
+                "scope": scope,
+                "resource": resource,
+            },
+            priority=0.9,
+        )
 
     def _own_lease(
         self, agent: Agent, scope: str, resource: str, lease_now: float
@@ -2458,11 +2701,14 @@ class Guard:
         intent_id: uuid.UUID | None,
         now: float,
         lease_now: float,
+        barriers: dict[uuid.UUID, BarrierSnapshot | None],
     ) -> uuid.UUID | None:
         """
         The intent whose lease covers this action, None for an allowed direct
-        claim; raises NotGrantedError otherwise. Caller MUST hold the
-        resource lock, the space lock and _claim_lock.
+        claim; raises NotGrantedError otherwise. A pending intent of an agent
+        restricted in its scope does not compete with a direct claim (Section
+        9.8). Caller MUST hold the resource lock, the space lock and
+        _claim_lock.
         """
         if intent_id is None:
             intent_id = self._own_lease(agent, scope, resource, lease_now)
@@ -2501,7 +2747,9 @@ class Guard:
                 f"Another agent holds '{resource}' in a competing scope"
             )
         if any(
-            o.agent_id != agent.id and self._is_pending(o)
+            o.agent_id != agent.id
+            and self._is_pending(o)
+            and self._revoked_to_act(barriers.get(o.agent_id), o.scope) is None
             for o in self.space.get_intents(scope, resource, now=now)
         ):
             raise NotGrantedError(

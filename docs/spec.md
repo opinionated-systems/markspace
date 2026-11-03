@@ -533,14 +533,14 @@ The deployment defines the delivery mechanism. The harness MAY use callbacks, po
 
 A boundary judges only pending intents (Section 6.5). An intent that `pre_action`, an earlier boundary or the principal granted or closed does not receive a verdict again. The mapping holds one verdict for each agent, for the best of its intents. Each verdict names its `intent_id`. The other pending intents of the agent get their verdicts at a later boundary, or they expire.
 
-**Re-verification.** A boundary MAY check the agent of each compared intent again. This check covers the authorization of the agent for the scope of the intent, and the barrier of the agent. When a boundary does this check, it checks each intent once. The check uses these copies:
+**Re-verification.** A boundary checks the barrier of the agent of each compared intent, by the agent's id. An intent whose agent is restricted in the intent's scope (Section 9.8) fails this check. A boundary MAY also check each agent again against the agent registry of the caller: the authorization of the agent for the scope of the intent, and a need mark that its barrier requires there. A boundary checks each intent once. The checks use these copies:
 
 - One copy of the agent registry of the caller. The boundary takes this copy when it starts.
 - One copy of the barrier of each agent. The boundary takes this copy after it holds its resource lock.
 
-An intent whose agent fails the check receives DENIED. That intent has no part in any comparison.
+An intent whose agent fails a check receives DENIED. That intent has no part in any comparison.
 
-The boundary cannot check an agent that is missing from the agent registry of the caller. This agent also receives DENIED. But the intent of this agent stays pending. Until its TTL ends, that intent still counts against the intents that it beats.
+The boundary cannot check the registry entry of an agent that is missing from the agent registry of the caller. This agent also receives DENIED. But the intent of this agent stays pending, unless the agent is restricted in the intent's scope. Until its TTL ends, a pending intent still counts against the intents that it beats.
 
 **Atomicity.** A boundary holds the mark space for all its reads and judgments. Until the boundary returns, no write, gc or read by another agent runs. Thus every competing set that the boundary reads shows one state, at one time. This state includes the need marks that a barrier check reads, and the lease table of the guard. The guard does these steps in this order:
 
@@ -650,7 +650,7 @@ The guard still reads marks at the time of the mark space. A forward clock step 
 
 **G3 (immediate mode).** In an immediate scope, `pre_action` does these steps in this order:
 
-1. Check the authorization, the barrier, the envelope and the scope rate limit.
+1. Check the authorization, the barrier, the envelope and the scope rate limit. The barrier refuses the intent when the agent is restricted in the scope (Section 9.8), and when it requires a need mark that the agent does not hold there.
 2. If another agent has a held action, return CONFLICT. Do not write an intent.
 3. Write the intent.
 4. If one of these beats the intent, return CONFLICT and close the intent as lost:
@@ -663,21 +663,23 @@ The guard still reads marks at the time of the mark space. A forward clock step 
 6. If another agent has a live lease that the intent would beat, return CONFLICT and close the intent as lost. Nothing pre-empts a lease.
 7. Otherwise, grant the intent. Return ALLOW with the fencing token and the expiry.
 
+In steps 4 and 5, a pending intent of an agent restricted in its scope does not count.
+
 Thus, in an immediate HIGHEST_CONFIDENCE scope, the first granted claim holds the resource. A later intent with higher confidence receives CONFLICT.
 
 **G4 (deferred boundary).** A resolution boundary judges the pending intents in its scope, its ancestors and its descendants. It judges them atomically (Section 6.2.3). It grants only intents in deferred scopes. These rules apply at the boundary:
 
 - An intent pending in an immediate scope went to the principal (G3 step 5). This intent still counts, and only the principal grants it. The intent is lost when its agent fails the checks of the boundary.
-- A refused intent is lost. But if the boundary cannot check the agent of an intent, the boundary denies the intent, and the intent stays pending.
+- A refused intent is lost. But if the boundary cannot check the agent of an intent against the registry, the boundary denies the intent, and the intent stays pending, unless the agent is restricted in the intent's scope.
 - If a held action of another agent blocks an intent, the intent is lost.
 - If a live lease of another agent blocks a winner, the winner waits.
 - At each boundary, the guard grants at most one winner of each agent. It orders the winners of one agent by scope (the outermost first), then by time (the earliest first), then by id. It grants the first winner. The other winners of the agent wait.
 - If a granted intent beats an intent, that intent is lost. If only waiting intents beat an intent, that intent waits.
 - The boundary writes no marks.
 
-**G5 (principal).** The principal grants a pending intent if G1 holds. The principal also releases a lease or a pending intent.
+**G5 (principal).** The principal grants a pending intent if G1 holds and the agent of the intent is not restricted in the intent's scope (Section 9.8). For a restricted agent, `grant()` returns DENIED and names the revoked type; the principal restores the barrier first. A barrier that only requires a need mark does not stop the principal's grant. The principal also releases a lease or a pending intent.
 
-**G6 (fencing at the action).** `post_action` always records a failed action. A failed action holds nothing, and it ends the lease. For any other action, `post_action` does these steps:
+**G6 (fencing at the action).** `post_action` always records a failed action. A failed action holds nothing, and it ends the lease. It supersedes the given intent only when that intent is the agent's own on the same scope and resource; otherwise it supersedes nothing. For any other action, `post_action` does these steps:
 
 1. If the call gives an intent id, record the action only if all these conditions are true:
    - The intent holds a live lease.
@@ -688,8 +690,10 @@ Thus, in an immediate HIGHEST_CONFIDENCE scope, the first granted claim holds th
    - The scope is immediate.
    - The scope is not YIELD_ALL.
    - G1 holds.
-   - No pending intent of another agent competes.
+   - No pending intent of another agent competes. A pending intent of an agent restricted in its scope does not count.
 4. Otherwise, write nothing and raise `NotGrantedError`.
+
+A direct claim that the agent's barrier refuses, because the agent is restricted in the scope (Section 9.8) or lacks a need mark that the barrier requires there, is still recorded under step 3, because its tool has run. The guard then writes a need mark in `_system` for the principal, one open per agent and registered scope (Section 9.8). An action under a lease and a failed action are recorded with no such need mark.
 
 If an agent loses its lease while its tool runs, the agent receives CONFLICT ("lease lost"). In this case, `execute` leaves a failed action as a trace.
 
@@ -745,6 +749,7 @@ An ended lease never becomes live again. This is also true when the clock moves 
 
 - Only live leases block the intent.
 - No pending intent beats the intent.
+- The agent of the intent is not restricted in the intent's scope (Section 9.8).
 
 The guard grants this intent at a boundary after those leases end. It is the first such boundary at which the agent of the intent receives no other grant.
 
@@ -1021,7 +1026,8 @@ The safety properties (P36-P39, P71-P76) hold only when the harness sends all to
 ```
 pre_action(agent, scope, resource, action, confidence) → GuardDecision
 
-  1. Check agent authorization, barrier, envelope and scope rate
+  1. Check agent authorization, barrier (a restricted agent: DENIED naming the revoked
+     type; then a required need mark), envelope and scope rate
   2. Check for held action marks on (scope, resource) from OTHER agents
      - If found: return CONFLICT (the resource is already claimed); no intent is written
   3. Write an intent mark on behalf of the agent
@@ -1041,6 +1047,8 @@ post_action(agent, scope, resource, action, result, intent_id?, failed?) → mar
      scope and resource while G1 holds, or as a direct claim (Section 6.5, G6);
      else raise NotGrantedError and write nothing
   3. The action supersedes the intent
+  4. A direct claim that the barrier refuses is recorded, with a need mark in _system
+     for the principal (Section 9.8)
 
 grant(intent_id, principal_token) → GuardDecision      (Section 6.5, G5)
 release(intent_id, principal_token) → bool
@@ -1109,6 +1117,8 @@ A warning at full strength fully cancels a mark of equal base strength. As the w
 
 A warning that invalidates an action MUST come from an agent that is authorized to write warnings in the action's own scope. Otherwise, an agent could hide a booking from any scope where it is authorized to write warnings. Then it could take the resource (Section 6.5). If a deployment requires that warnings cannot invalidate actions, the guard SHOULD reject warnings where `invalidates` references an action mark.
 
+A warning written through `write_mark` MUST NOT invalidate a mark in `_system`. Those marks are the guard's marks for the principal (Sections 9.8, 9.14), and no agent hides them.
+
 Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestP34InvalidationBound`](../tests/test_properties.py), [`tests/test_properties.py::TestP35InvalidationDecay`](../tests/test_properties.py), [`tests/test_hypothesis.py::TestWarningInvalidationProperties`](../tests/test_hypothesis.py)
 
 ### 9.6 Formal Properties
@@ -1165,9 +1175,9 @@ A deployment measures these cases on its own workload before it gives the guard 
 
 **Escalation policy.** When the guard receives a RESTRICTED verdict, it uses `_apply_restriction()` to narrow the barrier by scope:
 
-1. At the first flag on a scope, the guard revokes observations in that scope and requires a need mark there before a warning or an intent. It also records actions as revoked there, but no check reads that record (Section 9.8).
+1. At the first flag on a scope, the guard revokes observations and actions in that scope and requires a need mark there before a warning or an intent. The agent is then restricted there (Section 9.8).
 2. Each subsequent flag on a different scope narrows one more scope.
-3. After `global_escalation_threshold` flags in total (default 3), the guard revokes observations in every scope, records actions as revoked there, and requires a need mark in each scope before a warning or an intent there.
+3. After `global_escalation_threshold` flags in total (default 3), the guard revokes observations and actions in every scope and requires a need mark in each scope before a warning or an intent there.
 4. Each restriction writes invalidation warnings on the recent observations of the agent in the flagged scope. It also writes an audit need mark for the principal.
 
 **Declared baselines.** An agent can declare its expected activity in its manifest with `expected_activity: dict[str, float]`. This field maps a mark type value to the expected marks per hour. The rate does not depend on the window. The envelope uses `window_seconds` to convert the rate to counts per window. Thus agent creators do not need to know the window size.
@@ -1200,13 +1210,26 @@ The absorbing barrier gives monotonic permission restriction for agents. It is a
 narrow(scope, mark_type)           -- revoke one permission
 narrow_all(mark_type)              -- revoke across all scopes (wildcard "*")
 require_need(scope)                -- require a Need mark in scope before other writes there
-                                      (write_mark, pre_action; post_action does not check it)
+                                      (write_mark, pre_action, a boundary with the agents
+                                      mapping; a direct claim without it is recorded with a
+                                      need mark for the principal)
 require_need_all()                 -- the same in every scope
 restore(scope, mark_type, token)   -- re-grant (principal-only)
 restore_all(token)                 -- clear all restrictions (principal-only)
 ```
 
-Of intents and actions, the guard asks the barrier only about intents: in `pre_action`, and at a resolution boundary that has the agents mapping. The principal's `grant()`, a boundary without the agents mapping and `post_action` read no barrier. So a barrier records actions as revoked, but no check reads that record, and `post_action` does not read the need requirement either. In a scope where its barrier revokes actions, the guard records an agent's action under a lease granted before the barrier, and a direct claim (G6), with or without a need mark. It grants the agent a new lease from `pre_action` or a boundary with the agents mapping when the barrier allows the intent (for a barrier that requires a need mark, once the agent holds one in that scope), and from `grant()` or a boundary without the agents mapping for any pending intent.
+**Restricted.** An agent is restricted in a scope when its barrier revokes intents or actions there. The guard refuses a restricted agent every new lease in that scope:
+
+- `pre_action` returns DENIED and names the revoked type. It checks the revocations before the need requirement, because a need mark cannot lift a revocation.
+- A resolution boundary reads every barrier by agent id, with or without the agents mapping. It refuses the agent's intent, and the intent is lost (Section 6.2.3, G4).
+- The principal's `grant()` returns DENIED (G5).
+- A pending intent of a restricted agent does not beat or block another agent's intent (G3 steps 4 and 5) or direct claim (G6).
+
+What has happened is still recorded: an action under a lease granted before the barrier, a failed action, and a direct claim. A direct claim that the barrier refuses, because the agent is restricted in the scope or lacks a need mark that the barrier requires there, gets a need mark in `_system` for the principal (G6), one open per agent and registered scope (a scope counts as the nearest registered scope that contains it): while it is open, later such claims in that scope are recorded and that need mark covers them. A barrier that revokes only observations or warnings, or only requires a need mark, does not make the agent restricted.
+
+**A restricted agent asks the principal.** A need mark that an agent writes with `write_mark` in a scope where it is restricted goes to the principal. The guard writes it in `_system` as its system agent, at the default strength, with the agent's id, the scope, and the agent's question and context, and `write_mark` returns its id. `_system` is CLASSIFIED, only a mark's author supersedes it, and no agent warns on a mark in `_system` (Section 9.5), so no agent reads, hides or supersedes this need mark. The agent holds at most one such need mark open (current and not resolved, Section 8.3). While it is open, `write_mark` refuses the agent's next need mark in a scope where it is restricted. The open need mark meets the barrier's need requirement in the scope it names and in that scope's ancestors, as a need mark in a scope does, while the agent is restricted there. Need marks in scopes where the agent is not restricted, and need marks written before the barrier, keep the usual rules. The need mark counts against the agent's write budget for `need` (Section 9.14).
+
+The guard's system agent writes these need marks and the breach need marks. The space's limit on marks per agent (`MarkSpace(max_marks_per_agent=...)`) applies to it. A breach need mark that the limit refuses is not written, and the guard logs it; for the agent's own need mark, `write_mark` raises `QuotaExceededError`. The envelope's restriction (Section 9.7) refuses every write of the agent in `write_mark` and `pre_action`, need marks included. The principal's `grant()`, a boundary and a direct claim read only the barrier, so they do not see a restriction that the envelope has latched but not yet turned into barrier revocations.
 
 **Monotonicity.** `narrow()` only adds to the revocation set. There is no `un-narrow()`. Only `restore()` or `Guard.set_barrier()` with the correct principal token can re-grant a revoked permission. This makes barriers safe under concurrent access. Without principal intervention, the set of revocations can only grow and never shrink.
 
@@ -1242,9 +1265,9 @@ The diagnostic probe verifies the health of agents with canary injection and an 
 
 **Envelope exemption.** The probe agent is in the `exempt_agents` set of the envelope. Probe writes can be frequent during health checks. They are not part of the anomaly detection statistics of the envelope.
 
-**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. A harness can then apply a global barrier, which revokes observations in every scope, records actions as revoked, and requires a need mark in a scope before a warning or an intent there. The reference probe writes the need mark; the stress-test harness also applies the barrier. Until the principal restores access, the agent can write no observation. Because no check reads the action revocation (Section 9.8), the agent can still act: under a lease granted before the barrier; by a direct claim; under a new lease from `pre_action` or a boundary with the agents mapping, in a scope where it holds a need mark; and under a new lease from the principal's `grant()` or a boundary without the agents mapping, for an intent that it wrote before the barrier, with no need mark. The stress-test harness books the boardroom with `grant()`. The agent can also write warnings in a scope where it holds a need, and failed actions.
+**Auto-restriction on COMPROMISED.** A COMPROMISED verdict means that the system prompt of the agent was overridden. The agent ignored a trusted-channel instruction. The probe writes a blocking need mark for principal review. A harness can then apply a global barrier, which revokes observations and actions in every scope and requires a need mark in a scope before a warning or an intent there. The reference probe writes the need mark; the stress-test harness also applies the barrier. Until the principal restores access, the agent is restricted in every scope (Section 9.8): it writes no observation and gets no new lease, from `pre_action`, a boundary or the principal's `grant()`. What has already happened is still recorded: actions under leases granted before the barrier, failed actions, and direct claims, each direct claim with a need mark for the principal. The agent can still write need marks, one open at a time (Section 9.8), and warnings in a scope where it holds a need.
 
-One miss restricts the agent at once. There is no grace period, because a compromised agent can cause harm with even one action. The barrier stops its observations, and its warnings and intents in a scope until it writes a need mark there; it does not stop its actions (Section 9.8).
+One miss restricts the agent at once. There is no grace period, because a compromised agent can cause harm with even one action. The barrier stops its observations and its new leases, and its warnings in a scope until it writes a need mark there (Section 9.8).
 
 **P46: Probe Mark Isolation**: Probe-injected marks MUST be writable only to the configured diagnostic scope. The probe agent MUST NOT have write access to production scopes.
 
@@ -1437,9 +1460,9 @@ message WriteBudget {
 
 The budget of a type is `per_hour x period / 3600` writes over the trailing period.
 
-**Counting.** The guard counts a write when it is made. It reserves the write after the checks that can refuse it outright and releases the reservation when the write is not made: in `write_mark`, after the barrier, the envelope, the scope rate limit and the content policies, for a write that the agent's permissions allow, released when the space refuses the write; in `pre_action`, after the authorization, barrier, envelope, rate-limit and held-resource checks, released when the space refuses the intent; in `post_action`, for an action that the agent's permissions allow, released when no action is recorded. A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
+**Counting.** The guard counts a write when it is made. It reserves the write after the checks that can refuse it outright and releases the reservation when the write is not made: in `write_mark`, after the barrier, the envelope, the scope rate limit and the content policies, for a write that the agent's permissions allow, released when the space refuses the write or the guard refuses a restricted agent's need mark (Section 9.8); in `pre_action`, after the authorization, barrier, envelope, rate-limit and held-resource checks, released when the space refuses the intent; in `post_action`, for an action that the agent's permissions allow, released when no action is recorded. A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
 
-**Exhaustion.** A write that would bring the agent's count of its type over the trailing period above the budget is refused and not counted, and so is every further write of that type until the count over the trailing period is below the budget again. When the agent's action budget is spent, `pre_action` also refuses its intents, without counting them. `pre_action` checks the action budget against the agent's counted actions; it does not count the agent's leases that have no action yet. `post_action` counts each action that it records, and it records an action also over the budget, because its tool has run. So the agent's actions can exceed the action budget by its leases that had no action yet when the budget was spent, by leases that a resolution boundary or the principal's `grant()` gives later, and by its direct claims. An exhaustion of a type starts at the first write of that type that is refused or recorded over the budget, and at the first intent refused because the action budget is spent (an exhaustion of actions), each after the agent's last counted write of that type within the budget. Exhaustion is the only refusal of a write budget; a write budget restricts no scope.
+**Exhaustion.** A write that would bring the agent's count of its type over the trailing period above the budget is refused and not counted, and so is every further write of that type until the count over the trailing period is below the budget again. When the agent's action budget is spent, `pre_action` also refuses its intents, without counting them. `pre_action` checks the action budget against the agent's counted actions; it does not count the agent's leases that have no action yet. `post_action` counts each action that it records, and it records an action also over the budget, because its tool has run. So the agent's actions can exceed the action budget by its leases that had no action yet when the budget was spent, by leases that a resolution boundary or the principal's `grant()` gives later, by its failed actions, and by its direct claims. Every lease has an intent that `pre_action` counted, so the intent budget bounds the leases; nothing in the write budget bounds the failed actions and the direct claims. An exhaustion of a type starts at the first write of that type that is refused or recorded over the budget, and at the first intent refused because the action budget is spent (an exhaustion of actions), each after the agent's last counted write of that type within the budget. Exhaustion is the only refusal of a write budget; a write budget restricts no scope.
 
 **Burn-rate alerts.** The burn rate is the speed at which the agent spends its budget, relative to the period: a burn rate of 1 spends exactly the budget over the period. A tier that spends `budget_fraction` of the budget in its long window has the burn rate `budget_fraction x period / long_window_seconds`; its threshold for a window is `burn rate x per_hour x window / 3600` writes. A tier fires on a counted write when the agent's counted writes of the type exceed its threshold over both its long and its short window; both windows are half-open, `(now - window, now]`. A tier stops at a counted write that does not exceed both thresholds. A tier refuses nothing. The default tiers are the starting values of [Google's Site Reliability Workbook, chapter 5](https://sre.google/workbook/alerting-on-slos/) (Table 5-8), with burn rates 14.4, 6 and 1 over the default period: 2 % of the budget in 1 h (short window 5 min) and 5 % in 6 h (30 min) page; 10 % in 3 days (6 h) opens a ticket.
 

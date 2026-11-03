@@ -961,8 +961,11 @@ class OfficeEnv:
         window: str,
         preferred_type: str = "A",
     ) -> tuple[bool, str]:
-        # Try preferred type first
+        # Try preferred type first. A refusal by the guard (DENIED) ends the
+        # order at once; a lost race tries the next free slot. Only when every
+        # slot holds an order is lunch fully booked.
         wday = self._wday(day)
+        raced = False
         for type_label, capacity in [
             (
                 preferred_type,
@@ -995,23 +998,22 @@ class OfficeEnv:
                 and a.resource.startswith(resource_prefix + "/")
             )
 
-            if type_count < capacity:
-                slot_num = type_count + 1
-                resource = f"{resource_prefix}/{slot_num}"
+            def do_order() -> dict[str, str | bool]:
+                return {
+                    "ordered_by": agent.name,
+                    "type": type_label,
+                    "day": day,
+                    "window": window,
+                    "got_preferred": type_label == preferred_type,
+                }
 
-                def do_order() -> dict[str, str | bool]:
-                    return {
-                        "ordered_by": agent.name,
-                        "type": type_label,
-                        "day": day,
-                        "window": window,
-                        "got_preferred": type_label == preferred_type,
-                    }
-
+            # The free slots of this type in order; another agent may hold
+            # one while it orders.
+            for slot_num in range(type_count + 1, capacity + 1):
                 decision, _ = self.guard.execute(
                     agent=agent,
                     scope="lunch",
-                    resource=resource,
+                    resource=f"{resource_prefix}/{slot_num}",
                     intent_action="order",
                     result_action="ordered",
                     tool_fn=do_order,
@@ -1023,8 +1025,16 @@ class OfficeEnv:
                     return True, (
                         f"Lunch ordered: Type {type_label} on {day} at {window} ({got})."
                     )
-                # Race: try next slot
-                continue
+                if decision.verdict == GuardVerdict.DENIED:
+                    return False, f"DENIED: {decision.reason}"
+                raced = True
+
+        if raced:
+            return (
+                False,
+                f"CONFLICT: Other agents are ordering every free slot on {day} at "
+                f"{window}. Try again.",
+            )
 
         # All slots exhausted — write a NEED mark for principal awareness
         from markspace import Need
@@ -1158,10 +1168,12 @@ def resolve_boardroom_conflicts(
 
     With deferred=True and YIELD_ALL, guard.pre_action() writes intents and
     returns BLOCKED without writing need marks. Resolution reads the intents
-    still pending, picks the highest-confidence winner per resource, grants
-    it as the principal, records its action under the lease with
-    guard.post_action(), and releases the other intents (Spec 6.5). If the
-    grant fails, every intent stays pending.
+    still pending and grants them as the principal in order of confidence:
+    the first granted bidder wins, its action is recorded under the lease
+    with guard.post_action(), and the other intents are released (Spec 6.5).
+    A bidder whose barrier stops it from acting gets DENIED; its intent is
+    released and the next bidder is tried. Any other refusal leaves every
+    remaining intent pending.
     """
     log: list[str] = []
 
@@ -1181,24 +1193,34 @@ def resolve_boardroom_conflicts(
         ):
             resource_intents.setdefault(mark.resource, []).append(mark)
 
-    # For each contested resource, pick highest confidence winner
+    agents_by_id = {p.agent.id: p.agent for p in profiles}
+    # For each contested resource, grant the highest-confidence bidder that
+    # may act
     for resource, intents in resource_intents.items():
         if not intents:
             continue
 
-        # Pick highest confidence intent (tie-break: earliest created_at)
-        winner = max(intents, key=lambda i: (i.confidence, -i.created_at))
+        # Highest confidence first (tie-break: earliest created_at).
+        ranked = sorted(intents, key=lambda i: (-i.confidence, i.created_at))
+        winner: Intent | None = None
         winner_agent = None
-        for p in profiles:
-            if p.agent.id == winner.agent_id:
-                winner_agent = p.agent
+        for bid in ranked:
+            bid_agent = agents_by_id.get(bid.agent_id)
+            if bid_agent is None:
                 break
+            granted = env.guard.grant(bid.id, env.principal_token)
+            if granted.verdict == GuardVerdict.ALLOW:
+                winner, winner_agent = bid, bid_agent
+                break
+            log.append(
+                f"Boardroom {resource}: not granted to {bid_agent.name} "
+                f"({granted.reason})"
+            )
+            if granted.verdict != GuardVerdict.DENIED:
+                break
+            env.guard.release(bid.id, env.principal_token)
 
-        if winner_agent:
-            granted = env.guard.grant(winner.id, env.principal_token)
-            if granted.verdict != GuardVerdict.ALLOW:
-                log.append(f"Boardroom {resource}: not granted ({granted.reason})")
-                continue
+        if winner is not None and winner_agent is not None:
             for other in intents:
                 if other.id != winner.id:
                     env.guard.release(other.id, env.principal_token)
@@ -2500,8 +2522,9 @@ def run_trial(
                         ),
                     )
                     # 2. Global barrier: revoke observations and actions,
-                    #    require a Need before warnings and intents (spec 9.8:
-                    #    no check reads the action revocation).
+                    #    require a Need before warnings. The agent is then
+                    #    restricted everywhere (spec 9.8): no new lease, and
+                    #    its need marks go to the principal.
                     barrier = env.guard.get_or_create_barrier(r.agent_id)
                     barrier.narrow_all(MarkType.OBSERVATION.value)
                     barrier.narrow_all(MarkType.ACTION.value)

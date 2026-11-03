@@ -94,7 +94,9 @@ class AgentBarrier:
 
     def require_need(self, scope: str) -> None:
         """Require a Need mark in scope before other writes there (the guard
-        checks it in write_mark and pre_action; post_action does not).
+        checks it in write_mark, pre_action and a boundary with the agents
+        mapping; a direct claim without it is recorded, with a need mark for
+        the principal).
         """
         self._require_need_scopes.add(scope)
 

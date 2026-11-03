@@ -95,11 +95,11 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (669):**
+**Unit tests (705):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
-- **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), source level enforcement (max_source), tool failure handling
+- **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), source level enforcement (max_source), tool failure handling, barrier enforcement (a restricted agent gets no new lease; its need mark goes to the principal, one open at a time)
 - **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, leases and fencing tokens, equal-time intents in write order
 - **Composition** - agent manifest properties, scheduling
 - **Robustness** - garbage collection, thread safety under concurrent access
@@ -150,7 +150,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 669 tests, no API key needed
+pytest            # 705 tests, no API key needed
 ```
 
 ### Use the protocol
@@ -256,7 +256,7 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 | [`space.py`](markspace/space.py) | Thread-safe mark space. Read, write, query, watch/subscribe. |
 | [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks and per-agent write budgets for each mark type. |
 | [`envelope.py`](markspace/envelope.py) | Optional. Pluggable per-agent anomaly detection (default: Welford's online algorithm). Manifest-declared baselines. |
-| [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching. |
+| [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching; the guard enforces it and gives a restricted agent no new lease. |
 | [`probe.py`](markspace/probe.py) | Optional. Diagnostic canary injection. Verifies agent health through the mark space. |
 | [`budget.py`](markspace/budget.py) | Optional. Per-agent token budgets with configurable warning thresholds and hard stops. |
 | [`rate_limit.py`](markspace/rate_limit.py) | Optional. Per-scope write rate limits (per-agent and fleet-wide caps). |

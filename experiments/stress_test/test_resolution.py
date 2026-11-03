@@ -192,6 +192,57 @@ def test_a_boardroom_grant_that_fails_records_nothing() -> None:
     assert not high.manifest[0].completed
 
 
+def test_a_barred_top_bidder_is_released_and_the_next_one_wins() -> None:
+    """A barrier that revokes actions makes grant() DENIED for the top
+    bidder; its intent is released and the next bidder gets the room."""
+    env = run.OfficeEnv()
+    target = {"day": "mon", "block": "AM"}
+    low, high = (profile(n, "rooms/exec", target) for n in ("low", "high"))
+    for p, conf in ((low, 0.3), (high, 0.9)):
+        ok, msg = env.book_boardroom(p.agent, "mon", "AM", conf)
+        assert not ok and msg.startswith("BLOCKED")
+    env.guard.get_or_create_barrier(high.agent.id).narrow("rooms/exec", "action")
+    log = run.resolve_boardroom_conflicts(env, [low, high])
+    assert [a.agent_id for a in actions(env, "rooms/exec")] == [low.agent.id]
+    assert low.manifest[0].completed and not high.manifest[0].completed
+    assert any("not granted to high" in line for line in log)
+    assert_every_intent_closed(env)
+
+
+def test_a_restricted_agent_s_lunch_order_reports_the_refusal() -> None:
+    """The lunch tool returns the guard's DENIED reason and writes no false
+    "fully booked" need."""
+    env = run.OfficeEnv()
+    agent = Agent(name="eng-1", scopes={"lunch": ["intent", "action", "need"]})
+    barrier = env.guard.get_or_create_barrier(agent.id)
+    barrier.narrow_all("action")
+    barrier.require_need_all()
+    ok, msg = env.order_lunch(agent, "mon", "12:00")
+    assert not ok and msg.startswith("DENIED") and "action revoked" in msg
+    needs = [m for m in env.space._marks.values() if m.mark_type.value == "need"]
+    assert needs == []
+
+
+def test_a_lost_lunch_race_writes_no_fully_booked_need(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Other agents hold every free slot: the order fails as a race, and
+    only a lunch with every slot ordered is fully booked."""
+    monkeypatch.setattr(scenario, "LUNCH_TYPE_A_PER_WINDOW", 1)
+    monkeypatch.setattr(scenario, "LUNCH_TYPE_B_PER_WINDOW", 1)
+    env = run.OfficeEnv()
+    wday = env._wday("mon")
+    for label in ("A", "B"):
+        holder = Agent(name=f"h{label}", scopes={"lunch": ["intent", "action"]})
+        held = env.guard.pre_action(holder, "lunch", f"{label}/{wday}/12:00/1", "order")
+        assert held.intent_id is not None
+    agent = Agent(name="eng-1", scopes={"lunch": ["intent", "action", "need"]})
+    ok, msg = env.order_lunch(agent, "mon", "12:00")
+    assert not ok and msg.startswith("CONFLICT")
+    needs = [m for m in env.space._marks.values() if m.mark_type.value == "need"]
+    assert needs == []
+
+
 def test_two_requests_of_one_agent_get_one_spot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
