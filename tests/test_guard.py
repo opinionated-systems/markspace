@@ -1322,6 +1322,26 @@ class TestContentPolicies:
         guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
         assert len(space.read(scope="_system", mark_type=MarkType.WARNING)) == 1
 
+    def test_a_refused_flagged_write_leaves_no_flag_warning(self, notes_space, writer):
+        """The FLAG warning is written only for a stored observation: a write
+        that the write budget refuses after the policies leaves none."""
+        guard = Guard(
+            notes_space,
+            content_policies=[_FlagPolicy("sus")],
+            write_budgets={writer.id: WriteBudget(per_hour={})},
+        )
+        with pytest.raises(ScopeError, match="spent its write budget"):
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        assert notes_space.read(scope="_system", mark_type=MarkType.WARNING) == []
+
+    def test_a_flagged_write_the_space_refuses_leaves_no_flag_warning(self, writer):
+        space = MarkSpace(scopes=[Scope(name="notes", observation_topics=("status",))])
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        with pytest.raises(ValidationError):
+            guard.write_mark(writer, Observation(scope="notes", topic="other"))
+        assert space.read(scope="_system", mark_type=MarkType.WARNING) == []
+
     def test_a_refused_flag_warning_is_logged(
         self, notes_scope, writer, caplog: pytest.LogCaptureFixture
     ):

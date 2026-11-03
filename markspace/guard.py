@@ -693,14 +693,15 @@ class Guard:
 
     def _check_content_policies(
         self, agent: Agent, mark: Observation, scope: Scope
-    ) -> tuple[Observation, str | None]:
+    ) -> tuple[Observation, str | None, list[PolicyResult]]:
         """Run content policies on an Observation mark.
 
-        Returns ``(possibly_rewritten_mark, rejection_reason)``.
+        Returns ``(possibly_rewritten_mark, rejection_reason, flags)``.
 
         Policies compose as a pipeline: a REWRITE from policy A feeds the
-        rewritten mark into policy B.  First REJECT wins.  FLAGS accumulate
-        and emit warnings to ``_system`` scope.
+        rewritten mark into policy B.  First REJECT wins.  FLAGS accumulate;
+        write_mark writes their warning once the mark is stored
+        (_write_flag_warning).
 
         Only called for Observation marks (P69).
         """
@@ -721,7 +722,11 @@ class Guard:
             )
 
             if result.verdict == PolicyVerdict.REJECT:
-                return current_mark, result.reason or f"Rejected by {policy.name}"
+                return (
+                    current_mark,
+                    result.reason or f"Rejected by {policy.name}",
+                    flags,
+                )
 
             elif result.verdict == PolicyVerdict.REWRITE:
                 current_mark = current_mark.model_copy(
@@ -731,28 +736,30 @@ class Guard:
             elif result.verdict == PolicyVerdict.FLAG:
                 flags.append(result)
 
-        if flags:
-            reasons = "; ".join(f.reason for f in flags if f.reason)
-            detail = f": {reasons}" if reasons else ""
-            try:
-                self.space.write(
-                    self._system_agent,
-                    Warning(
-                        scope="_system",
-                        topic="content-policy-flag",
-                        reason=(
-                            f"Content flagged for agent '{agent.name}' "
-                            f"in scope '{scope.name}'{detail}"
-                        ),
-                        severity=Severity.CAUTION,
-                    ),
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to write content-policy-flag warning", exc_info=True
-                )
+        return current_mark, None, flags
 
-        return current_mark, None
+    def _write_flag_warning(
+        self, agent: Agent, scope_name: str, flags: list[PolicyResult]
+    ) -> None:
+        """The warning in _system for content-policy FLAGs, written after the
+        flagged observation is stored (Section 9.13)."""
+        reasons = "; ".join(f.reason for f in flags if f.reason)
+        detail = f": {reasons}" if reasons else ""
+        try:
+            self.space.write(
+                self._system_agent,
+                Warning(
+                    scope="_system",
+                    topic="content-policy-flag",
+                    reason=(
+                        f"Content flagged for agent '{agent.name}' "
+                        f"in scope '{scope_name}'{detail}"
+                    ),
+                    severity=Severity.CAUTION,
+                ),
+            )
+        except Exception:
+            logger.warning("Failed to write content-policy-flag warning", exc_info=True)
 
     # ------------------------------------------------------------------
     # Budget enforcement
@@ -1053,9 +1060,12 @@ class Guard:
             raise ScopeError(rate_limit_result)
 
         # Content policy check (Observation marks only - P69)
+        flags: list[PolicyResult] = []
         if self._content_policies and isinstance(mark, Observation):
             scope_def = self.space.get_scope(mark.scope)
-            mark, rejection = self._check_content_policies(agent, mark, scope_def)
+            mark, rejection, flags = self._check_content_policies(
+                agent, mark, scope_def
+            )
             if rejection:
                 self._emit_write_metric(
                     agent, mark.scope, mark.mark_type.value, "content_rejected"
@@ -1110,6 +1120,8 @@ class Guard:
             raise
 
         self._confirm_write(reservation)
+        if flags:
+            self._write_flag_warning(agent, mark.scope, flags)
 
         # Telemetry: successful write (P58)
         self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "accepted")

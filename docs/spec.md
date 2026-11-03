@@ -1405,12 +1405,12 @@ A `ContentPolicy` is an abstract class with an `evaluate(agent, mark, scope) -> 
 
 - A REWRITE from policy N replaces the `content` field of the mark. The pipeline then gives the rewritten mark to policy N+1.
 - The first REJECT stops the pipeline. The pipeline does not evaluate the subsequent policies.
-- FLAG verdicts accumulate. The guard writes the mark. It also emits a warning to the `_system` scope with the combined flag reasons.
+- FLAG verdicts accumulate. The guard goes on with the write; once the mark is stored, it writes a warning to the `_system` scope with the combined flag reasons.
 - ALLOW lets the mark continue unchanged.
 
 The order is important. Cheap checks (length limits, regex) should come before expensive checks (LLM calls). This minimizes the cost on the common path.
 
-**FLAG behavior.** After a FLAG verdict, the write of the observation mark succeeds. The guard also emits a warning to the `_system` scope. This warning records the flag reason. The guard registers `_system` as a CLASSIFIED scope, because its marks name agents and scopes, and, when it is built, it refuses a `_system` scope that the space already holds with another visibility. An agent sees these marks only with read authorization for `_system`.
+**FLAG behavior.** After a FLAG verdict, the guard goes on with the write. Once the observation mark is stored, the guard writes a warning to the `_system` scope that records the flag reason; a write that a later check refuses leaves no warning. The guard registers `_system` as a CLASSIFIED scope, because its marks name agents and scopes, and, when it is built, it refuses a `_system` scope that the space already holds with another visibility. An agent sees these marks only with read authorization for `_system`.
 
 FLAG is an observability signal, not an enforcement signal. A monitor attached by a write hook (Section 9.7) sees the stored mark once.
 
