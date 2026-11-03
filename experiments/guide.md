@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 721 tests (tests/, experiments/stress_test/ and experiments/envelope_sim/)
+pytest  # 724 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -295,7 +295,7 @@ Model pricing per million tokens (check provider pages for current rates):
 
 | Model | Prompt | Completion | Provider |
 |-------|--------|------------|----------|
-| [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 | $0.60 | [Fireworks](https://fireworks.ai/) |
+| [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 ($0.015 cached) | $0.60 | [Fireworks](https://fireworks.ai/) (model page, read 2026-11-03) |
 | [mercury-2](https://docs.inceptionlabs.ai/) | $0.25 | $0.75 | [Inception AI](https://www.inceptionlabs.ai/) |
 | deepseek-v4p1-flash-1017 | $0.30 ($0.006 cached) | $1.20 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-10-30) |
 

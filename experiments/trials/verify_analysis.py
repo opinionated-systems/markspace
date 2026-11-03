@@ -20,12 +20,12 @@ HERE = Path(__file__).resolve().parent
 # The step-based safety checks (stored_run_safety.py) live with the stress test.
 sys.path.insert(0, str(HERE.parent / "stress_test"))
 from stored_run_safety import check_run, cross_dept_summary  # noqa: E402
+from analyze_trials import token_cost as compute_cost  # noqa: E402
 
 RESULTS_DIR = HERE / "results"
 MODELS = ["gpt-oss-120b", "mercury-2"]
 SEEDS = [42, 43, 44, 45, 46]
 DEPTS = ["eng", "design", "product", "sales", "ops"]
-PRICING = {"gpt-oss-120b": (0.15, 0.60), "mercury-2": (0.25, 0.75)}
 
 
 def load_jsonl(path):
@@ -52,11 +52,6 @@ def load_all_trials(experiment):
             r["_path"] = str(tf)
             records.append(r)
     return records
-
-
-def compute_cost(tokens, model):
-    p_in, p_out = PRICING.get(model, (0.50, 2.00))
-    return tokens["prompt"] / 1e6 * p_in + tokens["completion"] / 1e6 * p_out
 
 
 def avg(v):

@@ -32,6 +32,14 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-oss-120b": (0.15, 0.60),
     "mercury-2": (0.25, 0.75),
+    "glm-5p3-flash": (0.15, 0.50),
+}
+
+# Cached input ($ per million tokens), for models whose provider prices it
+# apart (Fireworks model pages, read 2026-11-03).
+CACHED_INPUT_PRICING: dict[str, float] = {
+    "gpt-oss-120b": 0.015,
+    "glm-5p3-flash": 0.03,
 }
 
 
@@ -94,14 +102,24 @@ def load_trials(experiment: str) -> list[dict]:
     return records
 
 
+def token_cost(tokens: dict, model: str) -> float:
+    """Estimated cost of a run's tokens. Cached prompt tokens are priced at
+    the model's cached-input rate where the run recorded them; a run that
+    did not record them is priced at the full input rate (an upper bound)."""
+    p_in, p_out = MODEL_PRICING.get(model, (0.50, 2.00))
+    prompt = tokens["prompt"]
+    if model in CACHED_INPUT_PRICING:
+        cached, p_cached = tokens.get("cached_prompt", 0), CACHED_INPUT_PRICING[model]
+    else:
+        cached, p_cached = 0, 0.0
+    completion = tokens["completion"]
+    return ((prompt - cached) * p_in + cached * p_cached + completion * p_out) / 1e6
+
+
 def compute_cost(record: dict) -> float:
     """Compute estimated cost from token counts."""
     model = record.get("_model", record.get("model", ""))
-    pricing = MODEL_PRICING.get(model, (0.50, 2.00))
-    tokens = record.get("tokens", {})
-    prompt = tokens.get("prompt", 0)
-    completion = tokens.get("completion", 0)
-    return prompt / 1_000_000 * pricing[0] + completion / 1_000_000 * pricing[1]
+    return token_cost(record["tokens"], model)
 
 
 def rule_of_three(n_trials: int, n_events: int) -> str:

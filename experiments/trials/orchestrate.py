@@ -53,12 +53,14 @@ SCALING_POINTS = [
 MODEL_DEFAULTS: dict[str, dict[str, int | float]] = {
     "gpt-oss-120b": {"rps": 30, "max_concurrent": 20, "max_concurrent_large": 30},
     "mercury-2": {"rps": 8, "max_concurrent": 10, "max_concurrent_large": 15},
+    "glm-5p3-flash": {"rps": 30, "max_concurrent": 20, "max_concurrent_large": 30},
 }
 
 # Pricing ($ per million tokens) for cost estimates
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-oss-120b": (0.15, 0.60),
     "mercury-2": (0.25, 0.75),
+    "glm-5p3-flash": (0.15, 0.50),
 }
 
 
