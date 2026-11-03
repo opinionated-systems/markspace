@@ -1117,7 +1117,7 @@ A warning at full strength fully cancels a mark of equal base strength. As the w
 
 A warning that invalidates an action MUST come from an agent that is authorized to write warnings in the action's own scope. Otherwise, an agent could hide a booking from any scope where it is authorized to write warnings. Then it could take the resource (Section 6.5). If a deployment requires that warnings cannot invalidate actions, the guard SHOULD reject warnings where `invalidates` references an action mark.
 
-A warning written through `write_mark` MUST NOT invalidate a mark in `_system`. Those marks are the guard's marks for the principal (Sections 9.8, 9.14), and no agent hides them.
+A warning MUST NOT invalidate a mark in `_system` unless the guard's own agent writes it. Those marks are the guard's marks for the principal (Sections 9.8, 9.14), and no agent hides them.
 
 Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestP34InvalidationBound`](../tests/test_properties.py), [`tests/test_properties.py::TestP35InvalidationDecay`](../tests/test_properties.py), [`tests/test_hypothesis.py::TestWarningInvalidationProperties`](../tests/test_hypothesis.py)
 
@@ -1142,7 +1142,7 @@ If the winner is hidden, `winning_intent` is null. The reason then says that the
 
 **P39: Action Precedence**: Consider an action mark from agent X on a resource, in the acting scope, an ancestor or a descendant. If such a mark exists, the guard MUST return CONFLICT for the intent of any other agent on that resource. Completed actions take precedence over new intents. Without this rule, conflict resolution that uses only intents would not detect resources that executed actions already claimed.
 
-**`write_mark()` as single enforcement point.** Every agent write of an observation, a warning or a need uses `Guard.write_mark()`. This method checks the barrier, the scope rate limit, the content policies (observation marks only) and the write budget. Then it delegates the write to `space.write()`, which checks the authorization and the schema. `write_mark()` rejects intent and action marks with a ValueError; these marks use `pre_action()`/`post_action()` instead.
+**`write_mark()` as single enforcement point.** Every agent write of an observation, a warning or a need uses `Guard.write_mark()`. This method checks the authorization first (`MarkSpace.authorization_refusal`: the right to write the mark's type in its scope, an observation's source level against the agent's `max_source`, a supersede of another agent's mark, a warning that hides an action where the agent may not warn, and a warning on a mark in `_system`), then the barrier, the scope rate limit, the content policies (observation marks only) and the write budget, so a write that the agent may not make runs no content policy and takes no share of a rate limit. Then it delegates the write to `space.write()`, which checks the schema. `write_mark()` rejects intent and action marks with a ValueError; these marks use `pre_action()`/`post_action()` instead.
 
 **P42: Write-Mark Atomicity**: A `write_mark()` refusal, by the authorization, the barrier, a write budget, a scope rate limit or a content policy, MUST prevent storage of the mark. There are no partial writes.
 
@@ -1374,7 +1374,7 @@ Ref: [`markspace/rate_limit.py`](../markspace/rate_limit.py), [`markspace/guard.
 The enforcement layers that the guard already has operate on structural properties of marks: the author, the scope, the type and the count. None of these layers inspects mark content. Content policies add a pluggable content inspection layer for observation marks. This layer is between the rate limit check and scope validation in the `write_mark()` enforcement stack:
 
 ```
-barrier -> rate limit -> CONTENT POLICY -> write budget -> authorization and scope validation (the space) -> write
+authorization -> barrier -> rate limit -> CONTENT POLICY -> write budget -> scope validation -> write
 ```
 
 Content policies run late in the stack because they can be expensive (LLM calls). Cheap structural checks filter writes first.

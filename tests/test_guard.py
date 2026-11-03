@@ -1922,6 +1922,137 @@ class TestGuardConstruction:
             Guard(*positional)
 
 
+class TestWriteMarkChecksAuthorizationFirst:
+    """A write the agent may not make runs no other check (spec 9.6)."""
+
+    def test_an_outsider_takes_no_share_of_the_rate_limit(self) -> None:
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name="notes",
+                    rate_limit=ScopeRateLimit(max_total_writes_per_window=2),
+                )
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        guard = Guard(space)
+        outsider = Agent(name="o", scopes={})
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="not authorized"):
+                guard.write_mark(outsider, Observation(scope="notes", topic="t"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    @staticmethod
+    def _limited() -> tuple[MarkSpace, Guard]:
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name=n,
+                    rate_limit=ScopeRateLimit(max_total_writes_per_window=2),
+                )
+                for n in ("notes", "desk")
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        return space, Guard(space)
+
+    def test_a_warning_on_an_action_elsewhere_takes_no_share(self) -> None:
+        """A warning that hides an action in a scope where the agent may not
+        warn is refused before the rate limit counts it."""
+        space, guard = self._limited()
+        booker = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        action_id = guard.post_action(booker, "desk", "r1", "booked", result=None)
+        hider = Agent(name="h", scopes={"notes": ["warning"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="may not write warnings"):
+                guard.write_mark(
+                    hider,
+                    Warning(
+                        scope="notes", topic="t", reason="r", invalidates=action_id
+                    ),
+                )
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    def test_superseding_another_agents_mark_takes_no_share(self) -> None:
+        space, guard = self._limited()
+        owner = Agent(name="o", scopes={"notes": ["observation"]})
+        theirs = guard.write_mark(
+            owner, Observation(scope="notes", topic="t", content="x")
+        )
+        other = Agent(name="x", scopes={"notes": ["observation"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="may not supersede"):
+                guard.write_mark(
+                    other,
+                    Observation(
+                        scope="notes", topic="t", content="y", supersedes=theirs
+                    ),
+                )
+        guard.write_mark(owner, Observation(scope="notes", topic="t", content="z"))
+
+    def test_an_observation_above_max_source_takes_no_share(self) -> None:
+        space, guard = self._limited()
+        external = Agent(
+            name="e",
+            scopes={"notes": ["observation"]},
+            max_source=Source.EXTERNAL_UNVERIFIED,
+        )
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="cannot write observations"):
+                guard.write_mark(
+                    external,
+                    Observation(scope="notes", topic="t", source=Source.FLEET),
+                )
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    def test_a_warning_on_a_system_mark_is_refused_before_the_barrier(self) -> None:
+        space, guard = self._limited()
+        claimer = Agent(name="c", scopes={"desk": ["action"]})
+        guard.get_or_create_barrier(claimer.id).narrow("desk", "action")
+        guard.post_action(claimer, "desk", "r1", "booked", result=None)
+        need = space.read(scope="_system", mark_type=MarkType.NEED)[0]
+        hider = Agent(name="h", scopes={"notes": ["warning"]})
+        guard.get_or_create_barrier(hider.id).narrow_all("warning")
+        with pytest.raises(ScopeError, match="may not warn on a mark in '_system'"):
+            guard.write_mark(
+                hider,
+                Warning(scope="notes", topic="t", reason="r", invalidates=need.id),
+            )
+
+    def test_authorization_comes_before_the_barrier(self) -> None:
+        space, guard = self._limited()
+        outsider = Agent(name="o", scopes={})
+        guard.get_or_create_barrier(outsider.id).narrow_all("observation")
+        with pytest.raises(
+            ScopeError, match="not authorized to write observation to scope"
+        ):
+            guard.write_mark(outsider, Observation(scope="notes", topic="t"))
+
+    def test_an_outsider_runs_no_content_policy(self) -> None:
+        class Counting(ContentPolicy):
+            calls = 0
+
+            def evaluate(
+                self, agent: Agent, mark: Observation, scope: Scope
+            ) -> PolicyResult:
+                Counting.calls += 1
+                return PolicyResult(verdict=PolicyVerdict.ALLOW)
+
+        space = MarkSpace(scopes=[Scope(name="notes")])
+        guard = Guard(space, content_policies=[Counting()])
+        with pytest.raises(ScopeError, match="not authorized"):
+            guard.write_mark(
+                Agent(name="o", scopes={}), Observation(scope="notes", topic="t")
+            )
+        assert Counting.calls == 0
+
+
 class TestP42WriteMarkAtomicity:
     """A write_mark() refusal stores nothing, whichever check refuses it."""
 

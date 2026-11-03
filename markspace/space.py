@@ -157,7 +157,7 @@ class MarkSpace:
         # The attached guard's own agent (attach_claim_table): the quota does
         # not refuse its need marks for the principal, each kind of which
         # the guard keeps to one open; its other marks stay under the quota.
-        self._quota_exempt: uuid.UUID | None = None
+        self._guard_agent: uuid.UUID | None = None
         # Per-agent count of current marks (stored and not superseded),
         # maintained on write, resolve and gc.
         self._agent_mark_counts: dict[uuid.UUID, int] = {}
@@ -189,19 +189,20 @@ class MarkSpace:
             self._scopes[scope.name] = scope
 
     def attach_claim_table(
-        self, table: ClaimTable, quota_exempt: uuid.UUID | None = None
+        self, table: ClaimTable, guard_agent: uuid.UUID | None = None
     ) -> None:
         """
         Attach the guard that holds this space's grants (Section 6.5). A
         space has at most one: a second guard would grant the same resource
-        again. quota_exempt: the guard's own agent, whose need marks for the
-        principal the per-agent quota does not refuse.
+        again. guard_agent: the guard's own agent, whose need marks for the
+        principal the per-agent quota does not refuse, and which alone may
+        warn on a mark in _system.
         """
         with self._lock:
             if self._claims is not None:
                 raise ValueError("This MarkSpace already has a guard")
             self._claims = table
-            self._quota_exempt = quota_exempt
+            self._guard_agent = guard_agent
 
     def add_write_hook(self, hook: Callable[[uuid.UUID, AnyMark], None]) -> uuid.UUID:
         """Register a post-write hook. Returns a handle for removal."""
@@ -274,18 +275,6 @@ class MarkSpace:
                     f"Warning topic '{mark.topic}' not allowed in scope '{scope.name}'."
                 )
 
-        # Source level enforcement: reject observations where the claimed
-        # source exceeds the agent's max_source. Prevents external agents
-        # from writing Source.FLEET observations.
-        if isinstance(mark, Observation):
-            mark_level = _SOURCE_ORDER.index(mark.source)
-            agent_level = _SOURCE_ORDER.index(agent.max_source)
-            if mark_level > agent_level:
-                raise ScopeError(
-                    f"Agent '{agent.name}' (max_source={agent.max_source.value}) "
-                    f"cannot write observations with source={mark.source.value}"
-                )
-
         # Spec 2.1: initial_strength is in [0.0, 1.0]. The model checks it on
         # construction; model_copy and model_construct skip that check.
         if not 0.0 <= mark.initial_strength <= 1.0:
@@ -297,7 +286,7 @@ class MarkSpace:
         """Whether a mark counts against its agent's quota: every mark but
         the need marks of the attached guard's own agent, which the guard
         keeps to one open per kind."""
-        return not (agent_id == self._quota_exempt and mark_type == MarkType.NEED)
+        return not (agent_id == self._guard_agent and mark_type == MarkType.NEED)
 
     def _increment_mark_count(self, mark: AnyMark) -> None:
         """One current mark more for its agent. Caller MUST hold self._lock."""
@@ -305,6 +294,58 @@ class MarkSpace:
             self._agent_mark_counts[mark.agent_id] = (
                 self._agent_mark_counts.get(mark.agent_id, 0) + 1
             )
+
+    def authorization_refusal(self, agent: Agent, mark: AnyMark) -> str | None:
+        """
+        Why *agent* may not write *mark*, or None: it may not write the
+        mark's type in its scope; it supersedes another agent's mark (only
+        a mark's author supersedes it, Section 10: another agent could
+        otherwise erase an action, or the warning that hides one, from an
+        unrelated scope); or the mark is a warning that hides an action in a
+        scope where the agent may not warn (Section 9.5: otherwise an agent
+        could hide a booking from any scope it may warn in, and take the
+        resource); the mark is an observation whose claimed source exceeds
+        the agent's max_source (an external agent cannot write
+        Source.FLEET observations); or it is a warning on a mark in _system,
+        the guard's marks for the principal, by an agent other than the
+        guard's own. write() refuses such a mark; the guard asks first.
+        """
+        if not agent.can_write(mark.scope, mark.mark_type):
+            return (
+                f"Agent '{agent.name}' is not authorized to write "
+                f"{mark.mark_type.value} to scope '{mark.scope}'"
+            )
+        if isinstance(mark, Observation) and _SOURCE_ORDER.index(
+            mark.source
+        ) > _SOURCE_ORDER.index(agent.max_source):
+            return (
+                f"Agent '{agent.name}' (max_source={agent.max_source.value}) "
+                f"cannot write observations with source={mark.source.value}"
+            )
+        with self._lock:
+            if mark.supersedes is not None:
+                target = self._marks.get(mark.supersedes)
+                if target is not None and target.agent_id != agent.id:
+                    return (
+                        f"Agent '{agent.name}' may not supersede mark "
+                        f"{mark.supersedes} of another agent"
+                    )
+            if isinstance(mark, Warning) and mark.invalidates is not None:
+                target = self._marks.get(mark.invalidates)
+                if (
+                    target is not None
+                    and target.scope == "_system"
+                    and agent.id != self._guard_agent
+                ):
+                    return f"Agent '{agent.name}' may not warn on a mark in '_system'"
+                if isinstance(target, Action) and not agent.can_write(
+                    target.scope, MarkType.WARNING
+                ):
+                    return (
+                        f"Agent '{agent.name}' may not write warnings in scope "
+                        f"'{target.scope}', where action {target.id} lies"
+                    )
+        return None
 
     def _decrement_mark_count(self, mark: AnyMark) -> None:
         """One current mark fewer for its agent. Caller MUST hold self._lock."""
@@ -391,25 +432,9 @@ class MarkSpace:
             # Only a mark's author may supersede it (Section 10): another
             # agent could otherwise erase an action, or the warning that
             # hides one, from an unrelated scope.
-            if mark.supersedes is not None:
-                target = self._marks.get(mark.supersedes)
-                if target is not None and target.agent_id != agent.id:
-                    raise ScopeError(
-                        f"Agent '{agent.name}' may not supersede mark "
-                        f"{mark.supersedes} of another agent"
-                    )
-            # A warning that hides an action needs warning rights in the
-            # action's own scope (Section 9.5): otherwise an agent could hide
-            # a booking from any scope it may warn in, and take the resource.
-            if isinstance(mark, Warning) and mark.invalidates is not None:
-                target = self._marks.get(mark.invalidates)
-                if isinstance(target, Action) and not agent.can_write(
-                    target.scope, MarkType.WARNING
-                ):
-                    raise ScopeError(
-                        f"Agent '{agent.name}' may not write warnings in scope "
-                        f"'{target.scope}', where action {target.id} lies"
-                    )
+            refusal = self.authorization_refusal(agent, mark)
+            if refusal is not None:
+                raise ScopeError(refusal)
 
             # Create an immutable copy with assigned metadata
             new_id = uuid.uuid4()

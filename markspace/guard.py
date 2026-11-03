@@ -393,7 +393,7 @@ class Guard:
         # Grant telemetry (metric, labels), emitted after the locks are
         # released: a sink is outside code.
         self._lease_events: list[tuple[str, dict[str, str]]] = []
-        space.attach_claim_table(self, quota_exempt=self._system_agent.id)
+        space.attach_claim_table(self, guard_agent=self._system_agent.id)
 
     @contextmanager
     def _resource_lock(self, scope: str, resource: str) -> Iterator[None]:
@@ -973,6 +973,7 @@ class Guard:
 
         No conflict resolution. No resource locking. But does run:
         - Type validation (rejects intents/actions)
+        - Authorization (can this agent write this type in this scope?)
         - Barrier check (is this agent restricted?). A need mark of an agent
           restricted in the mark's scope goes to the principal: the guard
           writes it in _system, one open per agent, and returns its id
@@ -980,8 +981,7 @@ class Guard:
         - Rate limit check (is this scope rate-limited?)
         - Content policy check (Observation marks only, P67-P70)
         - Write budget (Section 9.14)
-        - Authorization and schema/scope validation (delegated to
-          space.write())
+        - Schema/scope validation (delegated to space.write())
 
         For intents and actions on contested resources, use execute()
         or pre_action()/post_action() instead.
@@ -995,6 +995,22 @@ class Guard:
                 f"Use execute() or pre_action()/post_action() for contested writes."
             )
 
+        # Authorization first: a write the agent may not make runs no content
+        # policy and takes no share of a scope's rate limit (Section 9.6).
+        reason = self.space.authorization_refusal(agent, mark)
+        if reason is not None:
+            # "denied", as for the space's own refusal of an unauthorized write.
+            self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "denied")
+            self._emit_telemetry(
+                agent,
+                "write_mark",
+                mark.scope,
+                mark.mark_type.value,
+                "denied",
+                reason=reason,
+            )
+            raise ScopeError(reason)
+
         # Barrier check. A warning that hides an action must also pass the
         # barrier of the action's own scope (Section 9.5): a restricted agent
         # could otherwise hide a booking there from another scope.
@@ -1005,13 +1021,7 @@ class Guard:
             and mark.invalidates is not None
         ):
             target = self.space.get_mark(mark.invalidates)
-            if target is not None and target.scope == "_system":
-                # The guard's marks for the principal: no agent hides them
-                # (Section 9.8).
-                barrier_result = (
-                    f"Agent '{agent.name}' may not warn on a mark in '_system'"
-                )
-            elif isinstance(target, Action) and target.scope != mark.scope:
+            if isinstance(target, Action) and target.scope != mark.scope:
                 barrier_result = self._check_barrier(
                     agent, target.scope, MarkType.WARNING
                 )
@@ -1062,10 +1072,8 @@ class Guard:
 
         # Write budget (Section 9.14), last before the write: the write is
         # reserved here and released if the space refuses it.
-        write_budget_result, reservation = (
-            self._reserve_write(agent, mark.scope, mark.mark_type)
-            if agent.can_write(mark.scope, mark.mark_type)
-            else (None, None)
+        write_budget_result, reservation = self._reserve_write(
+            agent, mark.scope, mark.mark_type
         )
         if write_budget_result is not None:
             self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
