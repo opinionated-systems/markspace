@@ -49,6 +49,11 @@ build-backend = "hatchling.build"
 packages = ["markspace"]
 
 [tool.pytest.ini_options]
+# With pytest 9.0 or later, a test that hangs, for example on a lock-order deadlock
+# between threads, ends the run with the stack of every thread instead of blocking
+# it. An older pytest only prints the stack.
+faulthandler_timeout = 60
+faulthandler_exit_on_timeout = true
 testpaths = ["tests", "experiments/stress_test", "experiments/envelope_sim"]
 
 [tool.pyright]
