@@ -271,32 +271,30 @@ The completion gap (13.3% vs 51.8%) is resource starvation, not protocol failure
 
 ## 5. Defense Stack
 
-Six adversarial scenarios tested the defense stack (envelope + barrier + probe) against 5 adversarial agents embedded in the 105-agent scenario. Model: gpt-oss-120b. Full analysis: [results/defense/analysis.md](results/defense/analysis.md).
+Six adversarial scenarios tested the defense stack (static layer, statistical envelope, barrier, diagnostic probe) against 5 adversarial agents among 100 normal ones. Model: gpt-oss-120b. In these runs the envelope restricted agents through the guard (code at 0bf9a05); the library now uses it as a monitor that restricts nothing (spec 9.7), because of the false restrictions below. Full analysis: [results/defense/analysis.md](results/defense/analysis.md); the numbers come from `results/defense/verify_analysis.py`.
 
-**Adversarial modes:** rate_spike (burst activity), type_shift (change mark type distribution), escalation (gradual increase), probe_evasion (designed to evade detection), slow_drift (very gradual increase over 40 rounds), defense_combined (mixed modes, 30 rounds).
+**Adversarial modes:** rate_spike (burst activity), type_shift (change mark type distribution), escalation (scope hopping after a restriction), probe_evasion (designed to evade detection), slow_drift (subtly false observations at a normal rate and type mix, 40 rounds; see below for what the stored run did), defense_combined (mixed modes, 30 rounds).
 
 ### Safety invariants
 
-No resource allowed twice in one round across all 6 scenarios, 630 agent instances, and 44,282 steps ([section 6](#6-cross-experiment-safety)). The static enforcement layer holds regardless of adversarial strategy.
+No resource allowed twice in one round across all 6 scenarios, 630 agent instances, and 44,282 steps ([section 6](#6-cross-experiment-safety)). The static enforcement layer holds regardless of adversarial strategy. The count does not cover the 116 slow_drift adversary rounds that ended in a harness error (below).
 
-### Adaptive layer detection
+### Envelope restrictions
 
-| Scenario | Rounds | Detected | FP agents | Detection rate |
-|----------|--------|----------|-----------|---------------|
-| rate_spike | 20 | 5/5 | 13 | 100% |
-| type_shift | 20 | 0/5 | 18 | 0% |
-| escalation | 20 | 2/5 | 15 | 40% |
-| probe_evasion | 20 | 0/5 | 12 | 0% |
-| slow_drift | 40 | 5/5 | 24 | 100% |
-| defense_combined | 30 | 3/5 | 21 | 60% |
+| Scenario | Rounds | Adversaries restricted | Normal agents restricted |
+|----------|--------|------------------------|--------------------------|
+| rate_spike | 20 | 0/5 | 19/100 |
+| type_shift | 20 | 2/5 | 9/100 |
+| escalation | 20 | 3/5 | 13/100 |
+| probe_evasion | 20 | 0/5 | 10/100 |
+| slow_drift | 40 | 5/5 | 21/100 |
+| defense_combined | 30 | 4/5 | 26/100 |
 
-The envelope detector catches rate-based anomalies (rate_spike: 5/5, slow_drift: 5/5) but is blind to adversaries whose rates stay within normal bounds (type_shift: 0/5, probe_evasion: 0/5). This is the expected behavior: the Poisson-based detector tracks count anomalies, not type distribution or behavioral patterns.
-
-False positive rates range from 12% to 24%. Longer trials accumulate more FP because legitimate agents have more opportunities for occasional activity spikes. Combined with monotonic restriction (P40), each false positive requires principal intervention - making detector sensitivity a deployment policy choice.
+The first restriction came in round 10 in every scenario. The envelope restricted 9 to 26 of the 100 normal agents in each scenario. Two rows do not measure their attack. In slow_drift, every round of an adversary before its restriction ended in a harness error: its observation tool wrote to a scope the space does not register, and the harness let the error end the round. So no slow_drift adversary stored an observation (all 323 of its observation calls were refused), and the 5 restrictions did not follow the attack. In rate_spike, the adversaries burst from round 0, inside the detector's 8-window cold start (14.4 steps per adversary round against 2.6 for normal agents in rounds 0 to 4), and none was restricted. The probe found no adversary COMPROMISED.
 
 ### Key finding
 
-The static layer (authority + validation + redundancy) provides the safety guarantee: no double booking found regardless of attack mode. The adaptive layer (envelope + barrier + probe) provides optional early warning with variable effectiveness. Deployments that cannot tolerate 12-24% false positive rates can omit the adaptive layer without sacrificing safety invariants.
+The static layer (authority + validation + redundancy) provides the safety guarantee: no double booking found regardless of attack mode. The learned detector's false restrictions are why the library no longer lets it stop agents; the envelope simulator ([analysis](../envelope_sim/analysis.md)) measures the same for synthetic workloads. Automatic stops now come from stated rules: write budgets (spec 9.14), the barrier, which a harness sets after the probe's COMPROMISED verdict and the principal can set (spec 9.8), and scope rate limits (spec 9.12).
 
 ---
 

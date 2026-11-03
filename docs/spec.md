@@ -1,6 +1,6 @@
 # Markspace Coordination Protocol: Specification
 
-**Version**: 2026-11-02-draft
+**Version**: 2026-11-03-draft
 **Status**: Working draft
 
 This document is the formal specification for the markspace protocol. For the ideas and the motivation behind the protocol, read [framework.md](framework.md).

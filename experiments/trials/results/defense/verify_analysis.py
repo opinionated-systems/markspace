@@ -175,7 +175,7 @@ def print_tables(results: list[dict]) -> None:
     # Envelope
     print("\n### Statistical Envelope\n")
     print(
-        "| Scenario | Source | Adv Detected | TP Rate | FP Count | FP Rate | First Restriction |"
+        "| Scenario | Source | Adversaries restricted | Share | Normal agents restricted | Share | First Restriction |"
     )
     print(
         "|----------|--------|-------------|---------|----------|---------|-------------------|"
@@ -215,7 +215,7 @@ def print_tables(results: list[dict]) -> None:
     print(f"| Static | {total_doubles} double bookings found / {total_rounds} rounds |")
     print(f"| Probe | {total_c} compromised / {total_h + total_c} probed |")
     envelope_detected = sum(1 for r in results if r["tp_count"] > 0)
-    print(f"| Envelope | adversaries detected in {envelope_detected}/6 scenarios |")
+    print(f"| Envelope | adversaries restricted in {envelope_detected}/6 scenarios |")
 
 
 def main() -> None:

@@ -131,7 +131,7 @@ Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed an
 - **Scaling** - up to 1,050 agents with proportionally scaled resources: per-agent step count nearly flat (1.2x at 10x scale), no double booking found at any scale point
 - **Resource contention** - 5x more agents competing for the same resources: completion drops to 13.3% from resource scarcity, not protocol failure
 
-**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + statistical envelope + diagnostic probe. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
+**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + statistical envelope + diagnostic probe; in these runs the envelope restricted agents, and it restricted 9 to 26 of 100 normal agents per scenario, so the library now uses it as a monitor only. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
 
 **[Comparison experiment:](experiments/comparison/analysis.md)** Markspace vs a message-passing framework ([Microsoft Agent Framework](https://github.com/microsoft/agent-framework)) on a shared resource booking scenario. 10 agents, 12 slots, 10 seeds per arm.
 
