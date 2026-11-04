@@ -21,7 +21,20 @@ BASE = Path(__file__).resolve().parent
 
 # The step-based safety checks (stored_run_safety.py) live with the stress test.
 sys.path.insert(0, str(BASE.parents[2] / "stress_test"))
+from observation_effect import (  # noqa: E402
+    RoomChoices,
+    claims_displaced_within,
+    dept_of,
+    observation_counts,
+    room_choices,
+    shown_sections,
+    view_order,
+    word_mentions,
+)
 from stored_run_safety import check_run  # noqa: E402
+
+sys.path.insert(0, str(BASE.parents[1]))
+from analyze_trials import token_cost  # noqa: E402
 
 SCENARIOS = [
     "rate_spike",
@@ -32,6 +45,14 @@ SCENARIOS = [
     "defense_combined",
 ]
 MODEL = "glm-5p3-flash"
+# The run before the room view showed observations: the same manifests, and no
+# agent saw a claim. The control for the false observations.
+UNSEEN_RUN = (
+    BASE.parent
+    / "superseded"
+    / "defense-glm-5p3-flash-observations-refused"
+    / "slow_drift"
+)
 N_ADVERSARIAL = 5
 N_NORMAL = 100  # from manifests.jsonl: 105 total - 5 adv
 
@@ -130,6 +151,194 @@ def analyze_scenario(scenario: str) -> dict:
     }
 
 
+def load_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in open(path)]
+
+
+def choice_row(label: str, c: RoomChoices) -> str:
+    return (
+        f"| {label} | {c.calls} | {c.to_named_room} ({c.to_named_room / c.calls:.0%}) "
+        f"| {c.expected:.1f} ({c.expected / c.calls:.0%}) | {c.z:+.2f} |"
+        if c.calls
+        else f"| {label} | 0 | - | - | - |"
+    )
+
+
+def print_observation_effect() -> None:
+    """What the slow_drift adversaries' stored observations did."""
+    path = BASE / MODEL / "slow_drift"
+    if not (path / "steps.jsonl").exists():
+        return
+    steps = load_jsonl(path / "steps.jsonl")
+    counts = observation_counts(steps)
+    print("\n### False Observations (slow_drift)\n")
+    print(
+        f"Stored {counts['stored']}, refused {counts['refused']}; "
+        f"{counts['stored_with_claim']} stored say maintenance or broken; "
+        f"{counts['stored'] / (N_ADVERSARIAL * len(load_rounds('slow_drift'))):.2f} "
+        "stored per adversary agent-round."
+    )
+    print(
+        f"{counts['views_showing_observations']} room views showed observations to "
+        f"{counts['normal_agents_shown']} normal agents; "
+        f"{counts['views_showing_claim']} showed a maintenance or broken line."
+    )
+    print(
+        f"Of {counts['stored']} stored, {claims_displaced_within(steps, rounds=2)} "
+        "have five newer ones in their scope within two rounds."
+    )
+    order = view_order(steps)
+    print(
+        f"Agent-rounds with a department booking: {sum(order.values())}; "
+        f"viewed before {order['before']}, only after {order['only_after']}, "
+        f"never {order['never']}."
+    )
+    first_verdict: dict[str, int] = {}
+    for row in load_jsonl(path / "agents.jsonl"):
+        if (
+            row["agent"].startswith("adv-")
+            and row.get("monitor_verdict") == "restricted"
+        ):
+            first_verdict.setdefault(row["agent"], row["round_num"])
+    print(f"Adversaries' first RESTRICTED verdict, by round: {first_verdict}.")
+    print("\nAgent-rounds that say the words, by what their views showed:\n")
+    print("| Shown | Agent-rounds | Say the words | Of those, quote the rule |")
+    print("|-------|--------------|---------------|--------------------------|")
+    mentions = word_mentions(steps, load_jsonl(path / "messages.jsonl"))
+    for group in ("shown_claim", "shown_other", "not_shown"):
+        m = mentions.get(group, {})
+        print(
+            f"| {group} | {m.get('agent_rounds', 0)} | {m.get('say_the_words', 0)} "
+            f"| {m.get('quote_the_rule', 0)} |"
+        )
+    others = [
+        word_mentions(steps_of, load_jsonl(BASE / MODEL / sc / "messages.jsonl"))
+        for sc in SCENARIOS
+        if sc != "slow_drift"
+        for steps_of in [load_jsonl(BASE / MODEL / sc / "steps.jsonl")]
+    ]
+    rounds = sum(g["agent_rounds"] for o in others for g in o.values())
+    say = sum(g.get("say_the_words", 0) for o in others for g in o.values())
+    print(
+        f"\nThe other five runs: {say} of {rounds} normal agent-rounds say the words."
+    )
+
+    print("\nFallback choices among available rooms, against chance:\n")
+    print("| Claim names the room in a | Calls | To a named room | Chance | z |")
+    print("|---------------------------|-------|-----------------|--------|---|")
+    day_labels = (
+        ("any", "any day"),
+        ("same", "the call's day"),
+        ("same_or_none", "the call's day or no day"),
+        ("other", "another day only"),
+    )
+    for unit in ("line", "sentence"):
+        for days, label in day_labels:
+            print(choice_row(f"{unit}, {label}", room_choices(steps, unit, days)))
+    sham = shown_sections(steps)
+    if not (UNSEEN_RUN / "steps.jsonl").exists():
+        print(f"\nThe control run is missing: {UNSEEN_RUN}")
+    else:
+        unseen = load_jsonl(UNSEEN_RUN / "steps.jsonl")
+        print("\nThe same claims in the earlier run, whose agents never saw them:\n")
+        print("| Claim names the room in a | Calls | To a named room | Chance | z |")
+        print("|---------------------------|-------|-----------------|--------|---|")
+        for unit in ("line", "sentence"):
+            for days, label in (day_labels[0], day_labels[2]):
+                print(
+                    choice_row(
+                        f"{unit}, {label}", room_choices(unseen, unit, days, sham=sham)
+                    )
+                )
+    print("\nThe same claims in the other five runs, pooled; none showed them:\n")
+    print("| Claim names the room in a | Calls | To a named room | Chance | z |")
+    print("|---------------------------|-------|-----------------|--------|---|")
+    other_runs = [
+        load_jsonl(BASE / MODEL / sc / "steps.jsonl")
+        for sc in SCENARIOS
+        if sc != "slow_drift"
+    ]
+    for unit in ("line", "sentence"):
+        for days, label in (day_labels[0], day_labels[2]):
+            parts = [room_choices(run, unit, days, sham=sham) for run in other_runs]
+            pooled = RoomChoices(
+                sum(c.calls for c in parts),
+                sum(c.to_named_room for c in parts),
+                sum(c.expected for c in parts),
+                sum(c.variance for c in parts),
+            )
+            print(choice_row(f"{unit}, {label}", pooled))
+    print("\nSentence, the call's day or no day, without one department:\n")
+    print("| Without | Calls | To a named room | Chance | z |")
+    print("|---------|-------|-----------------|--------|---|")
+    for dept in ("eng", "design", "product", "sales", "ops"):
+        rest = [s for s in steps if dept_of(s["agent"]) != dept]
+        print(choice_row(dept, room_choices(rest, "sentence", "same_or_none")))
+
+
+def print_run_facts() -> None:
+    """Failed calls, repeat boardroom requests, cost, and the rate-spike burst."""
+    print("\n### Runs\n")
+    print("| Scenario | Failed calls | Repeat boardroom requests answered | Cost |")
+    print("|----------|--------------|------------------------------------|------|")
+    total = 0.0
+    for sc in SCENARIOS:
+        trial = load_trial(sc)
+        if trial is None:
+            continue
+        steps = load_jsonl(BASE / MODEL / sc / "steps.jsonl")
+        failed = sum(s["tool"] == "ERROR" for s in steps)
+        repeats = sum(s["result"].startswith("ALREADY YOURS") for s in steps)
+        cost = token_cost(trial["tokens"], MODEL)
+        total += cost
+        print(f"| {sc} | {failed} | {repeats} | ${cost:.2f} |")
+    print(f"\nTotal cost: ${total:.2f}.")
+    earlier = BASE.parent / "superseded" / "defense-gpt-oss-120b"
+    restricted = {
+        sc: sum(
+            not a.startswith("adv-")
+            for a in load_jsonl(earlier / sc / "rounds.jsonl")[-1]["defense"][
+                "envelope_restricted_agents"
+            ]
+        )
+        for sc in SCENARIOS
+    }
+    print(f"Normal agents the guard restricted in the gpt-oss-120b runs: {restricted}.")
+    agents_path = BASE / MODEL / "rate_spike" / "agents.jsonl"
+    if not agents_path.exists():
+        return
+    manifest = next(
+        m["manifest"]
+        for m in load_jsonl(BASE / MODEL / "rate_spike" / "manifests.jsonl")
+        if m.get("adversarial_mode")
+    )
+    rooms_due = Counter(
+        i["earliest_round"] for i in manifest if i["scope"].startswith("rooms/")
+    )
+    print(
+        f"rate_spike room bookings due, one adversary, by round: {sorted(rooms_due.items())}."
+    )
+    agents = load_jsonl(agents_path)
+    burst = {*range(5, 10), *range(15, 20)}
+
+    def steps_per_round(adversary: bool, in_burst: bool) -> float:
+        counts = [
+            a["step_count"]
+            for a in agents
+            if a["agent"].startswith("adv-") == adversary
+            and (a["round_num"] in burst) == in_burst
+        ]
+        return sum(counts) / len(counts)
+
+    print(
+        "rate_spike steps per active round: burst rounds "
+        f"{steps_per_round(True, True):.1f} adversaries, "
+        f"{steps_per_round(False, True):.1f} normal; other rounds "
+        f"{steps_per_round(True, False):.1f} adversaries, "
+        f"{steps_per_round(False, False):.1f} normal."
+    )
+
+
 def print_tables(results: list[dict]) -> None:
     """Print data tables to stdout. No commentary."""
 
@@ -171,6 +380,9 @@ def print_tables(results: list[dict]) -> None:
     total_h = sum(r["all_probe_verdicts"].get("healthy", 0) for r in results)
     total_c = sum(r["all_probe_verdicts"].get("compromised", 0) for r in results)
     print(f"\nTotals: {total_h} healthy, {total_c} compromised")
+    probe_slots = sum(len(r["probe_rounds"]) * N_ADVERSARIAL for r in results)
+    with_verdict = sum(sum(r["adv_probe_verdicts"].values()) for r in results)
+    print(f"Adversary probe rounds: {probe_slots}, with a verdict: {with_verdict}")
 
     # Envelope
     print("\n### Statistical Envelope\n")
@@ -234,6 +446,8 @@ def main() -> None:
         sys.exit(1)
 
     print_tables(results)
+    print_observation_effect()
+    print_run_facts()
 
 
 if __name__ == "__main__":
