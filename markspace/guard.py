@@ -202,6 +202,21 @@ class _Claim:
     expires_at: float | None = None
 
 
+class _BarrierView:
+    """The barriers one guard call judges: each read on first use, then kept,
+    so a call costs one snapshot per agent it judges, not one per barrier, and
+    one agent has one barrier for the whole call."""
+
+    def __init__(self, read: Callable[[uuid.UUID], BarrierSnapshot | None]) -> None:
+        self._read = read
+        self._seen: dict[uuid.UUID, BarrierSnapshot | None] = {}
+
+    def get(self, agent_id: uuid.UUID) -> BarrierSnapshot | None:
+        if agent_id not in self._seen:
+            self._seen[agent_id] = self._read(agent_id)
+        return self._seen[agent_id]
+
+
 def _competes(a: str, b: str) -> bool:
     """Whether claims in scopes *a* and *b* compete: one contains the other."""
     return scope_contains(a, b) or scope_contains(b, a)
@@ -1494,10 +1509,10 @@ class Guard:
     ) -> str | None:
         """
         Why *barrier* blocks *agent* from writing *mark_type* in *scope*, or
-        None. It reads the space without the barrier lock: the barrier lock is
-        never held while the space is read, so a resolution boundary can hold
-        the space while it judges barriers it read before. now: the time of
-        the need read, as in read(); a boundary passes its own.
+        None. It reads the space without the barrier lock: the barrier lock
+        takes no other lock, so a resolution boundary can hold the space while
+        it reads a barrier. now: the time of the need read, as in read(); a
+        boundary passes its own.
         """
         if barrier is None:
             return None
@@ -1556,7 +1571,7 @@ class Guard:
         Thread safety: Per-resource locks serialize the read->write->read->decide
         sequence for each (scope, resource) pair. Different resources proceed
         concurrently. Lock ordering: resource_lock -> space._lock -> the lease
-        table's lock.
+        table's lock -> the barrier lock, which takes no other lock.
         """
         with self._resource_lock(scope, resource):
             return self._pre_action_inner(agent, scope, resource, action, confidence)
@@ -1651,13 +1666,10 @@ class Guard:
         )
         if write_budget_msg is not None:
             return GuardDecision(verdict=GuardVerdict.DENIED, reason=write_budget_msg)
-        # Every barrier, before the space hold: a competitor restricted in its
-        # intent's scope does not beat or block this intent (Section 9.8),
-        # and no barrier lock is taken under the space lock.
-        # shortcut: one snapshot of every barrier per call (about 1.4 ms at
-        # 1,000 barriers); read only the competitors' barriers when a
-        # deployment holds many barriers.
-        barriers = self._all_barriers()
+        # A competitor restricted in its intent's scope does not beat or block
+        # this intent (Section 9.8). The view reads a competitor's barrier
+        # under the space hold; the barrier lock takes no other lock.
+        barriers = _BarrierView(self.get_barrier)
         stored = False
         try:
             with self.space.locked():
@@ -1718,7 +1730,7 @@ class Guard:
         resource: str,
         intent_id: uuid.UUID,
         now: float,
-        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        barriers: _BarrierView,
     ) -> tuple[GuardDecision, bool]:
         """
         G3 rules 4 to 7 for the intent just written: a competitor that beats
@@ -1872,11 +1884,6 @@ class Guard:
             conflict_found=True,
         )
 
-    def _all_barriers(self) -> dict[uuid.UUID, BarrierSnapshot | None]:
-        """Snapshots of every barrier, by agent id."""
-        with self._barrier_lock:
-            return {a: b.snapshot() for a, b in self._barriers.items()}
-
     @staticmethod
     def _revoked_to_act(barrier: BarrierSnapshot | None, scope: str) -> MarkType | None:
         """The type, intent or action, that *barrier* revokes in *scope*, or
@@ -1892,7 +1899,7 @@ class Guard:
         self,
         intent: Intent,
         agents: dict[uuid.UUID, Agent] | None,
-        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        barriers: _BarrierView,
         now: float,
     ) -> str | None:
         """
@@ -1974,15 +1981,14 @@ class Guard:
         case by re-issuing intents.
         """
         # The caller's agents map is copied once. Each agent's barrier is read
-        # once, inside the resource lock, so a restriction applied while the
-        # boundary waits for that lock counts, and before the space is held:
-        # the barrier lock is never held while the space is held (Section
-        # 6.2.3). Every barrier is read: an agent missing from the mapping
-        # can still be restricted.
+        # once, under the hold, so a restriction applied while the boundary
+        # waits for its locks counts. It is read by agent id: an agent missing
+        # from the mapping can still be restricted. The barrier lock takes no
+        # other lock.
         if agents is not None:
             agents = dict(agents)
         with self._resource_lock(scope, resource):
-            barriers = self._all_barriers()
+            barriers = _BarrierView(self.get_barrier)
             with self.space.locked():
                 results = self._resolve_locked(scope, resource, agents, barriers)
         self._emit_lease_events()
@@ -1993,7 +1999,7 @@ class Guard:
         scope: str,
         resource: str,
         agents: dict[uuid.UUID, Agent] | None,
-        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        barriers: _BarrierView,
     ) -> dict[uuid.UUID, GuardDecision]:
         """
         resolve_deferred() under its resource lock and the space lock. The
@@ -2019,7 +2025,7 @@ class Guard:
         self,
         resource: str,
         agents: dict[uuid.UUID, Agent] | None,
-        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        barriers: _BarrierView,
         now: float,
         lease_now: float,
         all_intents: list[Intent],
@@ -2448,9 +2454,7 @@ class Guard:
                 )
                 # A competitor restricted in its intent's scope does not
                 # block a direct claim (Section 9.8).
-                barriers = (
-                    self._all_barriers() if intent_id is None and not failed else {}
-                )
+                barriers = _BarrierView(self.get_barrier)
                 with self.space.locked():
                     now = self.space.now()
                     with self._claim_lock:
@@ -2564,7 +2568,7 @@ class Guard:
         intent_id: uuid.UUID | None,
         now: float,
         lease_now: float,
-        barriers: dict[uuid.UUID, BarrierSnapshot | None],
+        barriers: _BarrierView,
     ) -> uuid.UUID | None:
         """
         The intent whose lease covers this action, None for an allowed direct

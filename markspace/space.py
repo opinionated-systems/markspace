@@ -757,11 +757,11 @@ class MarkSpace:
         block ends. A guard decision that reads several sets holds it, so that
         every read sees one state (Section 6.2.3). The write hooks of writes
         made inside the block wait as in hooks_deferred(). Lock order: a
-        guard's resource lock, then a barrier lock, then this one, then the
-        guard's lease-table lock (Section 6.5). Take it only inside a guard's
-        resource lock or with no guard lock held. While holding it, the space
-        calls only its guard's ClaimTable methods; never call another guard
-        method or take a barrier lock while holding it.
+        guard's resource lock, then its need-mark lock, then this one, then
+        its lease-table lock, then its barrier and write-budget locks, which
+        take no other lock (Section 6.2.3). While holding it, the space calls
+        only its guard's ClaimTable methods; a guard reads barriers and write
+        budgets, and it takes no resource or need-mark lock.
         """
         with self.hooks_deferred(), self._lock:
             yield

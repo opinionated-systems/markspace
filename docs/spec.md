@@ -550,10 +550,10 @@ The boundary cannot check the registry entry of an agent that is missing from th
 **Atomicity.** A boundary holds the mark space for all its reads and judgments. Until the boundary returns, no write, gc or read by another agent runs. Thus every competing set that the boundary reads shows one state, at one time. This state includes the need marks that a barrier check reads, and the lease table of the guard. The guard does these steps in this order:
 
 1. The guard takes its resource lock.
-2. The guard reads the barrier of each agent.
-3. The guard holds the mark space.
+2. The guard holds the mark space.
+3. The guard reads the barrier of each agent that it judges, once for the boundary.
 
-Thus, if a barrier gets a restriction while the boundary waits for the resource lock, that restriction counts. Also, no thread holds the mark space while that thread waits for a guard lock.
+Thus, if a barrier gets a restriction while the boundary waits for these locks, that restriction counts. A thread that holds the mark space waits only for the lease table and for the barrier lock. The barrier lock takes no other lock, so these waits cannot form a cycle.
 
 **Wildcard topic matching.** If the `observation_topics` or the `warning_topics` of a scope contains `"*"`, any topic string matches. The `"*"` is a literal wildcard, not a glob or a regex. It means "this scope accepts any topic." When `"*"` is in a list, the named topics in that list are redundant. They are not an error.
 
@@ -1226,7 +1226,7 @@ restore_all(token)                 -- clear all restrictions (principal-only)
 **Restricted.** An agent is restricted in a scope when its barrier revokes intents or actions there. The guard refuses a restricted agent every new lease in that scope:
 
 - `pre_action` returns DENIED and names the revoked type. It checks the revocations before the need requirement, because a need mark cannot lift a revocation.
-- A resolution boundary reads every barrier by agent id, with or without the agents mapping. It refuses the agent's intent, and the intent is lost (Section 6.2.3, G4).
+- A resolution boundary reads the barrier of each intent's agent by agent id, with or without the agents mapping. It refuses the agent's intent, and the intent is lost (Section 6.2.3, G4).
 - The principal's `grant()` returns DENIED (G5).
 - A pending intent of a restricted agent does not beat or block another agent's intent (G3 steps 4 and 5) or direct claim (G6).
 

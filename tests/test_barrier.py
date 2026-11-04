@@ -12,7 +12,19 @@ import uuid
 
 import pytest
 
-from markspace.barrier import AgentBarrier
+from markspace import (
+    Agent,
+    ConflictPolicy,
+    DecayConfig,
+    Guard,
+    GuardVerdict,
+    Intent,
+    MarkSpace,
+    Scope,
+    hours,
+    minutes,
+)
+from markspace.barrier import AgentBarrier, BarrierSnapshot
 
 
 def _make_barrier() -> tuple[AgentBarrier, uuid.UUID, uuid.UUID]:
@@ -235,3 +247,103 @@ class TestAgentBarrier:
             assert snap.needs_required(scope) == barrier.needs_required(scope)
         barrier.require_need_all()
         assert barrier.snapshot().needs_required("eng")
+
+
+class TestBarrierReadsPerCall:
+    """A guard call reads the barriers of the agents it judges, not every barrier."""
+
+    def _guard_with_barriers(self, n: int) -> tuple[MarkSpace, Guard]:
+        scope = Scope(
+            name="s",
+            allowed_intent_verbs=("do",),
+            allowed_action_verbs=("did",),
+            decay=DecayConfig(
+                observation_half_life=hours(1),
+                warning_half_life=minutes(30),
+                intent_ttl=hours(1),
+            ),
+            conflict_policy=ConflictPolicy.FIRST_WRITER,
+        )
+        space = MarkSpace(scopes=[scope])
+        guard = Guard(space)
+        for _ in range(n):
+            guard.get_or_create_barrier(uuid.uuid4())
+        return space, guard
+
+    def _count_snapshots(self, monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+        reads: list[uuid.UUID] = []
+        original = AgentBarrier.snapshot
+
+        def counted(barrier: AgentBarrier) -> BarrierSnapshot:
+            reads.append(barrier.agent_id)
+            return original(barrier)
+
+        monkeypatch.setattr(AgentBarrier, "snapshot", counted)
+        return reads
+
+    def test_pre_action_reads_no_barrier_of_an_agent_it_does_not_judge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, guard = self._guard_with_barriers(50)
+        agent = Agent(name="a", scopes={"s": ["intent", "action"]})
+        reads = self._count_snapshots(monkeypatch)
+
+        decision = guard.pre_action(agent, "s", "r", "do", 0.5)
+        assert decision.verdict == GuardVerdict.ALLOW
+        guard.post_action(agent, "s", "r", "did", {}, intent_id=decision.intent_id)
+        guard.post_action(agent, "s", "other", "did", {})
+
+        assert reads == []
+
+    def test_a_competitor_barrier_is_read_once_and_still_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        space, guard = self._guard_with_barriers(50)
+        rival = Agent(name="rival", scopes={"s": ["intent", "action"]})
+        agent = Agent(name="a", scopes={"s": ["intent", "action"]})
+        # The rival's intents are pending: they reach the space without a grant.
+        for _ in range(2):
+            space.write(
+                rival, Intent(scope="s", resource="r", action="do", confidence=0.9)
+            )
+        guard.get_or_create_barrier(rival.id).narrow("s", "intent")
+        reads = self._count_snapshots(monkeypatch)
+
+        decision = guard.pre_action(agent, "s", "r", "do", 0.5)
+
+        assert decision.verdict == GuardVerdict.ALLOW
+        assert reads == [rival.id]
+
+    def test_a_boundary_reads_only_the_barriers_of_its_candidates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        space, guard = self._guard_with_barriers(50)
+        deferred = Scope(
+            name="d",
+            allowed_intent_verbs=("do",),
+            allowed_action_verbs=("did",),
+            decay=DecayConfig(
+                observation_half_life=hours(1),
+                warning_half_life=minutes(30),
+                intent_ttl=hours(1),
+            ),
+            conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE,
+            deferred=True,
+        )
+        space.register_scope(deferred)
+        one = Agent(name="one", scopes={"d": ["intent", "action"]})
+        two = Agent(name="two", scopes={"d": ["intent", "action"]})
+        assert (
+            guard.pre_action(one, "d", "r", "do", 0.5).verdict == GuardVerdict.BLOCKED
+        )
+        assert (
+            guard.pre_action(two, "d", "r", "do", 0.9).verdict == GuardVerdict.BLOCKED
+        )
+        guard.get_or_create_barrier(two.id).narrow("d", "intent")
+        reads = self._count_snapshots(monkeypatch)
+
+        results = guard.resolve_deferred("d", "r")
+
+        assert results[one.id].verdict == GuardVerdict.ALLOW
+        assert results[two.id].verdict == GuardVerdict.DENIED
+        assert reads == [two.id]
