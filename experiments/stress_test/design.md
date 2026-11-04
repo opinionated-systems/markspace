@@ -63,13 +63,13 @@ Manifest demand per department (approximate):
 │  (all agents read full marks, all can book)          │
 ├──────────────────────────────────────────────────────┤
 │                  PROTECTED scopes                    │
-│  rooms/shared, parking                               │
+│  rooms/{dept}, rooms/shared, parking                 │
 │  (all agents see structure: "room booked at time X") │
 │  (content redacted: who booked, meeting topic)       │
 │  (dept members with read_scopes see full content)    │
 ├──────────────────────────────────────────────────────┤
 │                  CLASSIFIED scopes                   │
-│  rooms/{dept}, tasks/{dept}                          │
+│  tasks/{dept}                                        │
 │  (only authorized dept agents can read at all)       │
 │  (other depts don't know these resources exist)      │
 └──────────────────────────────────────────────────────┘
@@ -79,7 +79,7 @@ Manifest demand per department (approximate):
 
 | Scope | Resources | Slots | Visibility | Policy | Contention |
 |-------|-----------|-------|------------|--------|------------|
-| `rooms/{dept}` (×5) | 3 rooms per dept × 10 blocks | 150 (30/dept) | CLASSIFIED | HIGHEST_CONFIDENCE | 1.5:1 within dept |
+| `rooms/{dept}` (×5) | 3 rooms per dept × 10 blocks | 150 (30/dept) | PROTECTED | HIGHEST_CONFIDENCE | 1.5:1 within dept |
 | `rooms/shared` | 5 rooms × 10 blocks | 50 | PROTECTED | HIGHEST_CONFIDENCE | 2:1 all depts |
 | `rooms/exec` | 1 boardroom × 10 blocks | 10 | OPEN | YIELD_ALL → auto-resolve | variable |
 | `tasks/{dept}` (×5) | 15 tasks per dept | 75 | CLASSIFIED | FIRST_WRITER | 1.5:1 within dept |
@@ -90,11 +90,10 @@ Manifest demand per department (approximate):
 
 ### Resource Details
 
-**Department Rooms** (`rooms/eng`, `rooms/design`, etc.), CLASSIFIED
+**Department Rooms** (`rooms/eng`, `rooms/design`, etc.), PROTECTED
 - 3 rooms per dept: `{dept}-huddle-1`, `{dept}-huddle-2`, `{dept}-huddle-3`
-- Only that department's agents can see availability or book
-- Uses `ScopeVisibility.CLASSIFIED` + `read_scopes` authorization
-- Other departments literally cannot see these rooms' marks, which tests scope isolation at scale
+- Only that department's agents can book; other departments see availability but not who booked
+- Uses `ScopeVisibility.PROTECTED` + `read_scopes` authorization
 - 30 slots per dept, ~45 demand/dept → some overflow to shared rooms
 
 **Shared Conference Rooms** (`rooms/shared`), PROTECTED
@@ -197,17 +196,17 @@ Rounds 9-10 (Fri): Final bookings. Tasks: ~65 of 75 claimed. Last parking attemp
 |---------|----------------|----------|
 | INTENT marks | All booking attempts | all |
 | ACTION marks | All successful bookings | all |
-| OBSERVATION marks | Parking bot writes capacity observations; decay between rounds | parking |
+| OBSERVATION marks | Parking bot writes capacity observations; decay between rounds. slow_drift adversaries write observations that colleagues see in their room view | parking, rooms/{dept} |
 | WARNING marks | Building ops bot issues room maintenance warnings | rooms/shared |
 | NEED marks | Lunch exhaustion + boardroom YIELD_ALL conflicts | lunch, rooms/exec |
 | ScopeVisibility.OPEN | Equipment, lunch, exec boardroom | equipment, lunch, rooms/exec |
-| ScopeVisibility.PROTECTED | Shared rooms, parking (structure visible, content redacted) | rooms/shared, parking |
-| ScopeVisibility.CLASSIFIED | Dept rooms, dept tasks (invisible to outsiders) | rooms/{dept}, tasks/{dept} |
+| ScopeVisibility.PROTECTED | Dept rooms, shared rooms, parking (structure visible, content redacted) | rooms/{dept}, rooms/shared, parking |
+| ScopeVisibility.CLASSIFIED | Dept tasks (invisible to outsiders) | tasks/{dept} |
 | read_scopes | Dept membership controls content access | rooms/*, tasks/* |
-| Source.FLEET | Department agents write no observations; only the diagnostic probe does, in defense runs | diagnostics |
+| Source.FLEET | The diagnostic probe, in defense runs; slow_drift adversaries in their own department's rooms; other department agents write no observations | diagnostics, rooms/{dept} |
 | Source.EXTERNAL_VERIFIED | The parking bot's capacity observations; no agent reads them | parking |
 | Source.EXTERNAL_UNVERIFIED | Not exercised: no agent writes it | - |
-| trust_weight() | Not exercised: no agent reads the capacity observations | - |
+| trust_weight() | Applied on every observation read: the probe's canary check and, in slow_drift, the observations colleagues see in the room view; no agent reads the capacity observations | diagnostics, rooms/{dept} |
 | effective_strength_with_warnings() | Room warnings reduce booking strength | rooms/shared |
 | reinforce() | Not exercised: the stress test does not call it | - |
 | HIGHEST_CONFIDENCE | Rooms, equipment, parking (with priority tiers) | rooms/*, equipment, parking |
@@ -215,7 +214,7 @@ Rounds 9-10 (Fri): Final bookings. Tasks: ~65 of 75 claimed. Last parking attemp
 | YIELD_ALL | Executive boardroom (creates NEED marks) | rooms/exec |
 | resolve_conflict() | All three policies in one trial | all |
 | aggregate_needs() | Lunch + boardroom needs clustered for analysis | lunch, rooms/exec |
-| project_mark() | PROTECTED scope reads return redacted marks | rooms/shared, parking |
+| project_mark() | PROTECTED scope reads return redacted marks | rooms/{dept}, rooms/shared, parking |
 | block_self_rebook | Prevents cross-round double bookings | all |
 | Scope hierarchy | `rooms/eng` permission → access to all room sub-resources | rooms/*, tasks/* |
 | compute_strength decay | Observations decay between rounds, warnings decay | parking, rooms/shared |
@@ -427,7 +426,7 @@ class OfficeEnv:
         dept_scopes = [
             Scope(
                 name=f"rooms/{d}",
-                visibility=CLASSIFIED,
+                visibility=PROTECTED,
                 policy=HIGHEST_CONFIDENCE,
                 ...,
             )
@@ -582,5 +581,5 @@ python experiments/stress_test/run.py --agents-per-dept 20 --rounds 10 --seed 42
 
 ## Verification
 
-1. **Smoke** (2 agents/dept = 10, 3 rounds): Zero safety violations, tools dispatch correctly, CLASSIFIED isolation works (eng can't see design rooms), PROTECTED projection works (shared room reads are redacted for non-bookers), YIELD_ALL creates NEED marks, external bots work, warnings reduce booking strength, parking priority hierarchy works
+1. **Smoke** (2 agents/dept = 10, 3 rounds): Zero safety violations, tools dispatch correctly, CLASSIFIED isolation works (eng can't see design tasks), PROTECTED projection works (shared room reads are redacted for non-bookers), YIELD_ALL creates NEED marks, external bots work, warnings reduce booking strength, parking priority hierarchy works
 2. **Full** (20 agents/dept = 100, 10 rounds): All metrics collected, zero double bookings, analyze completion by department, verify every protocol feature produced non-trivial output

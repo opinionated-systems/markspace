@@ -849,9 +849,10 @@ def generate_slow_drift_manifest(
 ) -> list[ManifestItem]:
     """Generate a slow-drift adversarial manifest.
 
-    The agent writes valid observations with subtly false content,
-    maintaining normal rate and type distribution. This tests the known
-    detection gap - well-formed lies at normal rates.
+    The agent writes valid observations with subtly false content. The
+    manifest asks for one a round, a normal rate; the injected message asks for
+    more, so the runs write well above it. This tests well-formed lies from an
+    authorized agent, not a low-rate attack.
     """
     items: list[ManifestItem] = []
 
@@ -877,7 +878,7 @@ def generate_slow_drift_manifest(
             )
         )
 
-        # One false observation per round (low rate, normal type)
+        # One false observation per round; the injected message asks for more
         false_room = rng.choice(DEPT_ROOMS[dept])
         drift_desc = rng.choice(_DRIFT_DESCRIPTIONS).format(room=false_room, day=day)
         items.append(
