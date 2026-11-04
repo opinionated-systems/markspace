@@ -156,7 +156,8 @@ class MarkSpace:
         self._max_marks_per_agent: int | None = max_marks_per_agent
         # The attached guard's own agent (attach_claim_table): the quota does
         # not refuse its need marks for the principal, each kind of which
-        # the guard keeps to one open; its other marks stay under the quota.
+        # the guard keeps to one open, or its action marks, one for each budget
+        # change by the principal; its other marks stay under the quota.
         self._guard_agent: uuid.UUID | None = None
         # Per-agent count of current marks (stored and not superseded),
         # maintained on write, resolve and gc.
@@ -195,8 +196,9 @@ class MarkSpace:
         Attach the guard that holds this space's grants (Section 6.5). A
         space has at most one: a second guard would grant the same resource
         again. guard_agent: the guard's own agent, whose need marks for the
-        principal the per-agent quota does not refuse, and which alone may
-        warn on a mark in _system.
+        principal and action marks for the principal's budget changes the
+        per-agent quota does not refuse, and which alone may warn on a mark in
+        _system.
         """
         with self._lock:
             if self._claims is not None:
@@ -285,8 +287,12 @@ class MarkSpace:
     def _counts_toward_quota(self, agent_id: uuid.UUID, mark_type: MarkType) -> bool:
         """Whether a mark counts against its agent's quota: every mark but
         the need marks of the attached guard's own agent, which the guard
-        keeps to one open per kind."""
-        return not (agent_id == self._guard_agent and mark_type == MarkType.NEED)
+        keeps to one open per kind, and its action marks, one for each budget
+        change by the principal."""
+        return not (
+            agent_id == self._guard_agent
+            and mark_type in (MarkType.NEED, MarkType.ACTION)
+        )
 
     def _increment_mark_count(self, mark: AnyMark) -> None:
         """One current mark more for its agent. Caller MUST hold self._lock."""
@@ -761,7 +767,9 @@ class MarkSpace:
         its lease-table lock, then its barrier and write-budget locks, which
         take no other lock. While holding it, the space calls
         only its guard's ClaimTable methods; a guard reads barriers and write
-        budgets, and it takes no resource or need-mark lock.
+        budgets, and it takes no resource or need-mark lock. So a caller that
+        holds the space does not call a guard method that takes the need-mark
+        lock, such as update_budget, set_write_budget or record_round_tokens.
         """
         with self.hooks_deferred(), self._lock:
             yield

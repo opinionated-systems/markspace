@@ -358,14 +358,17 @@ class Guard:
         self._manifest_write_budgets: dict[uuid.UUID, WriteBudget] = {}
         # Need marks the guard writes in _system for the principal: (trigger,
         # agent, ...) -> the last one written for that key; a new one is
-        # written only when that one is no longer open. The need lock is held
-        # across the check and the write; never taken under the space lock.
+        # written only when that one is no longer open, or supersedes it. The
+        # need lock is held across the check and the write; never taken under
+        # the space lock. A budget change holds it across the change and its
+        # need marks, so that they keep the order of the changes.
         self._open_needs: dict[tuple[Any, ...], uuid.UUID] = {}
-        self._need_lock = threading.Lock()
-        # System agent for guard-originated warnings and need marks.
+        self._need_lock = threading.RLock()
+        # System agent for guard-originated warnings, need marks and the action
+        # marks of the principal's budget changes.
         self._system_agent = Agent(
             name="_guard",
-            scopes={"*": ["warning", "need"], "_system": ["warning", "need"]},
+            scopes={"*": ["warning", "need"], "_system": ["warning", "need", "action"]},
             read_scopes=frozenset(),
         )
         # Register the _system scope for guard-originated marks (budget
@@ -881,46 +884,54 @@ class Guard:
         except Exception:
             logger.debug("Token metric emission failed", exc_info=True)
 
-        # Hold the lock for the entire check-and-flag sequence so that
+        # Hold the budget lock for the entire check-and-flag sequence so that
         # concurrent calls for the same agent cannot both see
-        # warning_emitted as False and emit duplicate Need marks.
-        warn_input = False
-        warn_output = False
-        input_consumed = 0
-        output_consumed = 0
+        # warning_emitted as False and emit duplicate Need marks. Hold the need
+        # lock across it and the Need marks, so that a budget call cannot fall
+        # between them and leave the needs showing an older state.
+        with self.space.hooks_deferred(), self._need_lock:
+            with self._budget_lock:
+                budget = self._get_agent_budget(agent)
+                if budget is None:
+                    return BudgetStatus.OK
+                tracker = self._budget_trackers.get(agent.id)
+                if tracker is None:
+                    tracker = BudgetTracker()
+                    self._budget_trackers[agent.id] = tracker
 
-        with self._budget_lock:
-            budget = self._get_agent_budget(agent)
-            if budget is None:
-                return BudgetStatus.OK
-            tracker = self._budget_trackers.get(agent.id)
-            if tracker is None:
-                tracker = BudgetTracker()
-                self._budget_trackers[agent.id] = tracker
+                tracker.record_input(input_tokens)
+                tracker.record_output(output_tokens)
+                status = tracker.check_lifetime(budget)
 
-            tracker.record_input(input_tokens)
-            tracker.record_output(output_tokens)
-            status = tracker.check_lifetime(budget)
+                # Mark warnings as emitted inside the lock to prevent races.
+                # These are mutually exclusive (check_lifetime returns one status),
+                # but written as independent checks for clarity.
+                if status == BudgetStatus.WARNING_INPUT:
+                    tracker.warning_emitted_input = True
+                if status == BudgetStatus.WARNING_OUTPUT:
+                    tracker.warning_emitted_output = True
 
-            # Mark warnings as emitted inside the lock to prevent races.
-            # These are mutually exclusive (check_lifetime returns one status),
-            # but written as independent checks for clarity.
-            if status == BudgetStatus.WARNING_INPUT:
-                warn_input = True
-                tracker.warning_emitted_input = True
-            if status == BudgetStatus.WARNING_OUTPUT:
-                warn_output = True
-                tracker.warning_emitted_output = True
+                # Snapshot values for telemetry outside the lock
+                input_consumed = tracker.total_input_consumed
+                output_consumed = tracker.total_output_consumed
+                stops = tracker.take_new_stops(budget)
+                tracker.is_exhausted(budget)
+                # A stopped dimension shows its stop, never "Continue?" (P60).
+                warn_input = (
+                    status == BudgetStatus.WARNING_INPUT
+                    and not tracker.stop_noted_input
+                )
+                warn_output = (
+                    status == BudgetStatus.WARNING_OUTPUT
+                    and not tracker.stop_noted_output
+                )
 
-            # Snapshot values for telemetry outside the lock
-            input_consumed = tracker.total_input_consumed
-            output_consumed = tracker.total_output_consumed
-
-        # Write Need marks outside the lock (space.write acquires its own)
-        if warn_input:
-            self._emit_budget_warning(agent, budget, "input", input_consumed)
-        if warn_output:
-            self._emit_budget_warning(agent, budget, "output", output_consumed)
+            # Write Need marks outside the budget lock (space.write takes its own)
+            if warn_input:
+                self._emit_budget_warning(agent, budget, "input", input_consumed)
+            if warn_output:
+                self._emit_budget_warning(agent, budget, "output", output_consumed)
+            self._note_budget_stops(agent, stops)
         if status in (BudgetStatus.EXHAUSTED_INPUT, BudgetStatus.EXHAUSTED_OUTPUT):
             dimension = "input" if status == BudgetStatus.EXHAUSTED_INPUT else "output"
             logger.info("Agent '%s' %s budget exhausted", agent.name, dimension)
@@ -940,26 +951,45 @@ class Guard:
         The guard does not apply its per-round limits; the harness reads those
         from the manifest.
 
-        The call writes no warning, also when it stops the agent: the principal
-        has just acted. A recorded round checks the warning line.
+        The guard records the call as an action mark in _system and resolves
+        the agent's open token-budget need marks with it. If the new budget
+        stops the agent, a new need mark says so. A recorded round checks the
+        warning line.
 
         P62: if the new budget exceeds consumption, the agent resumes.
         Returns False for a wrong token.
         """
         if principal_token != self._principal_token:
             return False
-        with self._budget_lock:
-            self._token_budgets[agent.id] = new_budget
-            tracker = self._budget_trackers.setdefault(agent.id, BudgetTracker())
-            tracker.try_clear_exhaustion(new_budget)
-            stopped = tracker.is_exhausted(new_budget)
-            tracker.rearm_warnings(new_budget)
-            input_consumed = tracker.total_input_consumed
-            output_consumed = tracker.total_output_consumed
-        if stopped:
-            logger.info(
-                "Agent '%s' stopped: its new token budget is used up", agent.name
+        # The change and its marks are one step against rounds and other calls.
+        with self.space.hooks_deferred(), self._need_lock:
+            with self._budget_lock:
+                self._token_budgets[agent.id] = new_budget
+                tracker = self._budget_trackers.setdefault(agent.id, BudgetTracker())
+                tracker.try_clear_exhaustion(new_budget)
+                tracker.is_exhausted(new_budget)
+                tracker.rearm_warnings(new_budget)
+                # The call closes the open need marks, so a stop that remains
+                # gets a new one with the new numbers.
+                tracker.stop_noted_input = False
+                tracker.stop_noted_output = False
+                stops = tracker.take_new_stops(new_budget)
+                input_consumed = tracker.total_input_consumed
+                output_consumed = tracker.total_output_consumed
+            self._close_principal_needs(
+                "token_budget",
+                agent.id,
+                "set_token_budget",
+                {
+                    "agent_id": str(agent.id),
+                    "max_input_tokens_total": new_budget.max_input_tokens_total,
+                    "max_output_tokens_total": new_budget.max_output_tokens_total,
+                    "warning_fraction": new_budget.warning_fraction,
+                    "input_consumed": input_consumed,
+                    "output_consumed": output_consumed,
+                },
             )
+            self._note_budget_stops(agent, stops)
         self._emit_budget_remaining(agent, new_budget, input_consumed, output_consumed)
         return True
 
@@ -1022,32 +1052,53 @@ class Guard:
             if dimension == "input"
             else budget.max_output_tokens_total
         )
+        self._write_principal_need(
+            ("token_budget", agent.id, dimension),
+            (
+                f"Agent '{agent.name}' has consumed "
+                f"{consumed}/{total} {dimension} tokens "
+                f"({budget.warning_fraction:.0%} of budget). "
+                f"Continue, increase, or stop?"
+            ),
+            {
+                "agent_id": str(agent.id),
+                "agent_name": agent.name,
+                "trigger": "token_budget",
+                "level": "warning",
+                "dimension": dimension,
+                "consumed": consumed,
+                "total": total,
+                "warning_fraction": budget.warning_fraction,
+            },
+            priority=0.7,
+        )
 
-        try:
-            self.space.write(
-                self._system_agent,
-                Need(
-                    scope="_system",
-                    question=(
-                        f"Agent '{agent.name}' has consumed "
-                        f"{consumed}/{total} {dimension} tokens "
-                        f"({budget.warning_fraction:.0%} of budget). "
-                        f"Continue, increase, or stop?"
-                    ),
-                    context={
-                        "agent_id": str(agent.id),
-                        "agent_name": agent.name,
-                        "dimension": dimension,
-                        "consumed": consumed,
-                        "total": total,
-                        "warning_fraction": budget.warning_fraction,
-                    },
-                    priority=0.7,
-                    blocking=False,
+    def _note_budget_stops(
+        self, agent: Agent, stops: list[tuple[str, int, int]]
+    ) -> None:
+        """A need mark for each dimension that has stopped the agent (P61). It
+        supersedes an open warning of that dimension, whose numbers it updates,
+        so the principal's needs show the stop. The caller holds no budget lock."""
+        for dimension, consumed, total in stops:
+            self._write_principal_need(
+                ("token_budget", agent.id, dimension),
+                (
+                    f"Agent '{agent.name}' is stopped: it has consumed "
+                    f"{consumed}/{total} {dimension} tokens. "
+                    f"Raise the budget to resume it."
                 ),
+                {
+                    "agent_id": str(agent.id),
+                    "agent_name": agent.name,
+                    "trigger": "token_budget",
+                    "level": "stopped",
+                    "dimension": dimension,
+                    "consumed": consumed,
+                    "total": total,
+                },
+                priority=0.9,
+                supersede_open=True,
             )
-        except Exception:
-            logger.debug("Failed to write budget warning Need", exc_info=True)
 
     # ------------------------------------------------------------------
     # write_mark: single enforcement boundary for non-contested writes
@@ -1217,23 +1268,34 @@ class Guard:
     ) -> bool:
         """Set or remove (None) an agent's write budget (principal action). It
         takes precedence over the manifest's expected_activity, and it starts
-        a new count: the agent's counted writes are cleared. Returns False for
-        a wrong token."""
+        a new count: the agent's counted writes are cleared. The guard records
+        the call as an action mark in _system and resolves the agent's open
+        write-budget need marks with it. Returns False for a wrong token."""
         if principal_token != self._principal_token:
             return False
-        with self._write_budget_lock:
-            if budget is None:
-                self._write_budgets.pop(agent_id, None)
-            else:
-                self._write_budgets[agent_id] = budget
-            self._write_budget_meter.forget(agent_id)
-        with self._need_lock:
-            for key in [
-                k
-                for k in self._open_needs
-                if k[0] == "write_budget" and k[1] == agent_id
-            ]:
-                del self._open_needs[key]
+        # The change and its closing are one step: a need mark for a refusal
+        # under the new budget waits for the closing and stays open.
+        with self.space.hooks_deferred(), self._need_lock:
+            with self._write_budget_lock:
+                if budget is None:
+                    self._write_budgets.pop(agent_id, None)
+                else:
+                    self._write_budgets[agent_id] = budget
+                self._write_budget_meter.forget(agent_id)
+            self._close_principal_needs(
+                "write_budget",
+                agent_id,
+                "set_write_budget",
+                {
+                    "agent_id": str(agent_id),
+                    "per_hour": (
+                        None
+                        if budget is None
+                        else {t.value: r for t, r in budget.per_hour.items()}
+                    ),
+                    "period_seconds": None if budget is None else budget.period_seconds,
+                },
+            )
         return True
 
     def _write_budget_for(self, agent: Agent) -> WriteBudget | None:
@@ -1454,19 +1516,29 @@ class Guard:
         priority: float,
     ) -> None:
         """A write-budget need mark for the principal (Section 9.14), one open
-        per agent, mark type and kind."""
-        self._write_principal_need(
-            ("write_budget", agent_id, mark_type, kind),
-            question,
-            {
-                "agent_id": str(agent_id),
-                "trigger": "write_budget",
-                "level": kind,
-                "mark_type": mark_type.value,
-                **context,
-            },
-            priority,
-        )
+        per agent, mark type and kind. A new budget between the alert and this
+        call has ended the alert, so it writes nothing."""
+        # shortcut: a write that read the old budget before set_write_budget can
+        # still alert after it, and that need stays open until the next budget
+        # change or a resolve; carry a budget generation through the reservation
+        # if a deployment changes budgets under load.
+        with self.space.hooks_deferred(), self._need_lock:
+            with self._write_budget_lock:
+                holds = self._write_budget_meter.is_alerting(agent_id, mark_type, kind)
+            if not holds:
+                return
+            self._write_principal_need(
+                ("write_budget", agent_id, mark_type, kind),
+                question,
+                {
+                    "agent_id": str(agent_id),
+                    "trigger": "write_budget",
+                    "level": kind,
+                    "mark_type": mark_type.value,
+                    **context,
+                },
+                priority,
+            )
 
     def _write_principal_need(
         self,
@@ -1476,18 +1548,21 @@ class Guard:
         priority: float,
         blocking: bool = False,
         raise_errors: bool = False,
+        supersede_open: bool = False,
     ) -> uuid.UUID | None:
         """
         A need mark in _system for the principal, written by the guard's
         system agent, unless the last one written for *key* is still open
-        (current: not resolved, Section 8.3). Returns the id of the new need
-        mark, or None when an open one exists. A write that the space refuses
-        is logged and returns None, or raises when *raise_errors*. The write
-        hooks fire after the lock is released (Section 8.6).
+        (current: not resolved, Section 8.3). With *supersede_open*, the new
+        need mark supersedes an open one instead. Returns the id of the new
+        need mark, or None when an open one stays. A write that the space
+        refuses is logged and returns None, or raises when *raise_errors*. The
+        write hooks fire after the lock is released (Section 8.6).
         """
         with self.space.hooks_deferred(), self._need_lock:
             previous = self._open_needs.get(key)
-            if previous is not None and self.space.is_current(previous):
+            is_open = previous is not None and self.space.is_current(previous)
+            if is_open and not supersede_open:
                 return None
             try:
                 need_id = self.space.write(
@@ -1498,6 +1573,7 @@ class Guard:
                         context=context,
                         priority=priority,
                         blocking=blocking,
+                        supersedes=previous if is_open else None,
                     ),
                 )
             except Exception:
@@ -1511,6 +1587,38 @@ class Guard:
                 return None
             self._open_needs[key] = need_id
             return need_id
+
+    def _close_principal_needs(
+        self, kind: str, agent_id: uuid.UUID, action: str, result: dict[str, Any]
+    ) -> None:
+        """Record a budget change by the principal as an action mark in _system
+        and resolve the agent's open need marks of this kind with it (Section
+        8.3). An action mark that fails is logged, and the need marks stay open
+        and on record, so that a later stop supersedes them."""
+        with self.space.hooks_deferred(), self._need_lock:
+            try:
+                action_id = self.space.write(
+                    self._system_agent,
+                    Action(
+                        scope="_system",
+                        resource=str(agent_id),
+                        action=action,
+                        result=result,
+                    ),
+                )
+                with self.space.locked():
+                    for key in [
+                        k for k in self._open_needs if k[0] == kind and k[1] == agent_id
+                    ]:
+                        need_id = self._open_needs.pop(key)
+                        if self.space.is_current(need_id):
+                            self.space.resolve(need_id, action_id, self._system_agent)
+            except Exception:
+                logger.warning(
+                    "Failed to record a budget change for the principal (%s)",
+                    action,
+                    exc_info=True,
+                )
 
     def _ask_principal(self, agent: Agent, need: Need) -> uuid.UUID:
         """

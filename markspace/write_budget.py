@@ -309,6 +309,16 @@ class WriteBudgetMeter:
         count = times.count_since(now - budget.period_seconds) if times else 0
         return count + open_writes + 1 > budget.budget(mark_type)
 
+    def is_alerting(self, agent_id: uuid.UUID, mark_type: MarkType, kind: str) -> bool:
+        """Whether an alert of this kind ("exhausted", or a tier's level) still
+        holds for the agent and type. A new budget ends them all (forget)."""
+        if kind == "exhausted":
+            return (agent_id, mark_type) in self._exhausted
+        return any(
+            a == agent_id and t == mark_type and tier.level == kind
+            for a, t, tier in self._firing
+        )
+
     def forget(self, agent_id: uuid.UUID) -> None:
         """Clear the agent's counted writes (the principal set a new budget)."""
         for key in [k for k in self._times if k[0] == agent_id]:

@@ -1227,6 +1227,9 @@ class OfficeEnv:
         counts: dict[str, int] = {}
         for m in all_marks.values():
             mt = m.mark_type.value
+            # The guard's record of a budget change is not an agent's action.
+            if mt == "action" and m.agent_id == self.guard.system_agent_id:
+                continue
             counts[mt] = counts.get(mt, 0) + 1
 
         # Count need marks by scope

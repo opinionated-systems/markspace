@@ -1501,9 +1501,123 @@ class TestP79WriteBudgetAlerts:
         observe(guard, agent)
         observe(guard, agent)  # page, tier firing
         assert guard.set_write_budget(agent.id, ALERTING, token)
+        assert levels(space) == []  # the call answered it
         observe(guard, agent)
         observe(guard, agent)  # fires anew; the open-need record was cleared
-        assert levels(space) == ["page", "page"]
+        assert levels(space) == ["page"]
+
+    def test_set_write_budget_resolves_the_open_needs_with_an_action_mark(self) -> None:
+        space, guard, agent, token = space_and_guard(ALERTING)
+        observe(guard, agent)
+        observe(guard, agent)  # page, tier firing
+        assert [c for c in space.aggregate_needs()]
+        assert guard.set_write_budget(agent.id, DAILY, token)
+        assert space.aggregate_needs() == []
+        resolved = [
+            m for m in space._marks.values() if isinstance(m, Need) and m.resolved_by
+        ]
+        assert len(resolved) == 1
+        assert resolved[0].resolved_by_agent == guard.system_agent_id
+        assert resolved[0].resolved_by is not None
+        action = space.get_mark(resolved[0].resolved_by)
+        assert isinstance(action, Action)
+        assert (action.scope, action.action) == ("_system", "set_write_budget")
+        assert action.result["agent_id"] == str(agent.id)
+        assert action.result["per_hour"] == {O.value: DAILY.per_hour[O]}
+
+    def test_removing_a_write_budget_is_recorded_too(self) -> None:
+        space, guard, agent, token = space_and_guard(ALERTING)
+        assert guard.set_write_budget(agent.id, None, token)
+        actions = [m for m in space._marks.values() if isinstance(m, Action)]
+        assert len(actions) == 1
+        assert actions[0].result["per_hour"] is None
+        assert actions[0].result["period_seconds"] is None
+        assert actions[0].resource == str(agent.id)
+
+    def test_a_refused_action_mark_leaves_the_write_budget_needs_on_record(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        space, guard, agent, token = space_and_guard(ALERTING)
+        observe(guard, agent)
+        observe(guard, agent)  # page, tier firing
+        real_write = space.write
+
+        def refuse_actions(writer: Agent, mark: Any) -> uuid.UUID:
+            if isinstance(mark, Action):
+                raise ValueError("refused")
+            return real_write(writer, mark)
+
+        monkeypatch.setattr(space, "write", refuse_actions)
+        with caplog.at_level("WARNING", logger="markspace.guard"):
+            assert guard.set_write_budget(agent.id, DAILY, token)
+        assert "Failed to record" in caplog.text
+        assert levels(space) == ["page"]
+
+    def test_a_refusal_during_a_new_budget_keeps_its_need(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A write refused under the new budget while the call closes the old
+        needs: the agent is refused, so its need must stay."""
+        space, guard, agent, token = space_and_guard(ALERTING)
+        zero = WriteBudget(per_hour={}, tiers=())
+        close = guard._close_principal_needs
+        refused: list[bool] = []
+
+        def refused_write() -> None:
+            try:
+                observe(guard, agent)
+            except ScopeError:
+                refused.append(True)
+
+        write = threading.Thread(target=refused_write, daemon=True)
+
+        def close_with_a_write_in_flight(*args: Any) -> None:
+            write.start()
+            write.join(timeout=0.2)
+            close(*args)
+
+        monkeypatch.setattr(
+            guard, "_close_principal_needs", close_with_a_write_in_flight
+        )
+        assert guard.set_write_budget(agent.id, zero, token)
+        write.join(timeout=5)
+        assert refused == [True]
+        assert levels(space) == ["exhausted"]
+
+    def test_a_new_budget_before_a_refusals_need_ends_that_need(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The principal replaces a spent budget after a refusal and before its
+        need mark: the next write works, so no need may say it is refused."""
+        space, guard, agent, token = space_and_guard(WriteBudget(per_hour={}, tiers=()))
+        notify = guard._notify_budget_spent
+
+        def notify_after_a_new_budget(*args: Any) -> None:
+            assert guard.set_write_budget(agent.id, DAILY, token)
+            notify(*args)
+
+        monkeypatch.setattr(guard, "_notify_budget_spent", notify_after_a_new_budget)
+        with pytest.raises(ScopeError):
+            observe(guard, agent)
+        observe(guard, agent)
+        assert levels(space) == []
+
+    def test_a_wrong_token_answers_no_write_budget_need(self) -> None:
+        space, guard, agent, token = space_and_guard(ALERTING)
+        observe(guard, agent)
+        observe(guard, agent)  # page, tier firing
+        assert not guard.set_write_budget(agent.id, DAILY, uuid.uuid4())
+        assert levels(space) == ["page"]
+        assert not [m for m in space._marks.values() if isinstance(m, Action)]
+
+    def test_set_write_budget_leaves_other_agents_needs_open(self) -> None:
+        space, guard, agent, token = space_and_guard(ALERTING)
+        other = Agent(name="other", scopes={"notes": ["observation"]})
+        assert guard.set_write_budget(other.id, ALERTING, token)
+        observe(guard, agent)
+        observe(guard, agent)  # page, tier firing
+        assert guard.set_write_budget(other.id, DAILY, token)
+        assert levels(space) == ["page"]
 
     def test_need_mark_hooks_run_with_the_guard_locks_released(self) -> None:
         """A write hook on one agent's need mark can wait for another
