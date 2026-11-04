@@ -1,6 +1,6 @@
 # Trial Experiments Analysis
 
-Five experiment types were run using the [105-agent office coordination scenario](../stress_test/design.md). All trials used 20 rounds (two full simulated work weeks with AM/PM blocks) unless noted otherwise. Two models were tested for sections 1-4: gpt-oss-120b (Fireworks) and mercury-2 (Inception). Defense trials (section 5) used gpt-oss-120b only.
+Five experiment types were run using the [105-agent office coordination scenario](../stress_test/design.md). All trials used 20 rounds (two full simulated work weeks with AM/PM blocks) unless noted otherwise. Two models were tested for sections 1-4: gpt-oss-120b (Fireworks) and mercury-2 (Inception). Defense trials (section 5) used glm-5p3-flash only.
 
 ## Contents
 
@@ -271,30 +271,30 @@ The completion gap (13.3% vs 51.8%) is resource starvation, not protocol failure
 
 ## 5. Defense Stack
 
-Six adversarial scenarios tested the defense stack (static layer, statistical envelope, barrier, diagnostic probe) against 5 adversarial agents among 100 normal ones. Model: gpt-oss-120b. In these runs the envelope restricted agents through the guard (code at 0bf9a05); the library now uses it as a monitor that restricts nothing (spec 9.7), because of the false restrictions below. Full analysis: [results/defense/analysis.md](results/defense/analysis.md); the numbers come from `results/defense/verify_analysis.py`.
+Six adversarial scenarios tested the defense stack (static layer, barrier, diagnostic probe, with the statistical envelope as a monitor) against 5 adversarial agents among 100 normal ones. Model: glm-5p3-flash. The monitor records each stored mark and each guard call that returns CONFLICT with no intent; nothing acts on its verdicts (spec 9.7). The earlier runs on gpt-oss-120b, in which the envelope restricted agents through the guard (code at 0bf9a05), are in `results/superseded/defense-gpt-oss-120b/`; their false restrictions, with the [envelope simulator](../envelope_sim/analysis.md), are why the library no longer lets the envelope stop agents. Full analysis: [results/defense/analysis.md](results/defense/analysis.md); the numbers come from `results/defense/verify_analysis.py`.
 
-**Adversarial modes:** rate_spike (burst activity), type_shift (change mark type distribution), escalation (scope hopping after a restriction), probe_evasion (designed to evade detection), slow_drift (subtly false observations at a normal rate and type mix, 40 rounds; see below for what the stored run did), defense_combined (mixed modes, 30 rounds).
+**Adversarial modes:** rate_spike (burst activity), type_shift (change mark type distribution), escalation (scope hopping after a restriction), probe_evasion (designed to evade detection), slow_drift (subtly false observations at a normal rate and type mix, 40 rounds; see below for what the run did), defense_combined (mixed modes, 30 rounds).
 
 ### Safety invariants
 
-No resource allowed twice in one round across all 6 scenarios, 630 agent instances, and 44,282 steps ([section 6](#6-cross-experiment-safety)). The static enforcement layer holds regardless of adversarial strategy. The count does not cover the 116 slow_drift adversary rounds that ended in a harness error (below).
+No resource allowed twice in one round across all 6 scenarios and 630 agent instances ([section 6](#6-cross-experiment-safety)). The static enforcement layer holds regardless of adversarial strategy. In four runs one boardroom slot was resolved a second time to the agent that already held it (the holder asked for its own slot again); no slot went to two agents.
 
-### Envelope restrictions
+### Monitor verdicts
 
-| Scenario | Rounds | Adversaries restricted | Normal agents restricted |
+| Scenario | Rounds | Adversaries with a RESTRICTED verdict | Normal agents with a RESTRICTED verdict |
 |----------|--------|------------------------|--------------------------|
-| rate_spike | 20 | 0/5 | 19/100 |
-| type_shift | 20 | 2/5 | 9/100 |
-| escalation | 20 | 3/5 | 13/100 |
-| probe_evasion | 20 | 0/5 | 10/100 |
-| slow_drift | 40 | 5/5 | 21/100 |
-| defense_combined | 30 | 4/5 | 26/100 |
+| rate_spike | 20 | 1/5 | 2/100 |
+| type_shift | 20 | 3/5 | 1/100 |
+| escalation | 20 | 3/5 | 3/100 |
+| probe_evasion | 20 | 0/5 | 5/100 |
+| slow_drift | 40 | 5/5 | 14/100 |
+| defense_combined | 30 | 3/5 | 6/100 |
 
-The first restriction came in round 10 in every scenario. The envelope restricted 9 to 26 of the 100 normal agents in each scenario. Two rows do not measure their attack. In slow_drift, every round of an adversary before its restriction ended in a harness error: its observation tool wrote to a scope the space does not register, and the harness let the error end the round. So no slow_drift adversary stored an observation (all 323 of its observation calls were refused), and the 5 restrictions did not follow the attack. In rate_spike, the adversaries burst from round 0, inside the detector's 8-window cold start (14.4 steps per adversary round against 2.6 for normal agents in rounds 0 to 4), and none was restricted. The probe found no adversary COMPROMISED.
+The first RESTRICTED verdict came in round 10 or 13. The monitor gave a RESTRICTED verdict to 1 to 14 of the 100 normal agents per scenario, and nothing acted on it; in the gpt-oss-120b runs the guard-integrated envelope restricted 9 to 26. The two sets differ in the model, in the harness code, in what the envelope sees, and in whether a verdict acted (there, a restricted agent's later writes were refused, which changed what the envelope saw next), so the comparison does not show what changed the counts. In slow_drift the adversaries made 2,022 observation calls in scopes where they have no right to write observations: 901 in scopes the space registers (855 under `rooms`) and 1,121 in scopes it does not. The guard refused every one as unauthorized, so the scenario tests authorization, not an authorized agent's false observations. The monitor does not see those refusals; its 5 verdicts on the adversaries came in rounds 12 to 32. The probe found no adversary COMPROMISED, so no barrier was set.
 
 ### Key finding
 
-The static layer (authority + validation + redundancy) provides the safety guarantee: no double booking found regardless of attack mode. The learned detector's false restrictions are why the library no longer lets it stop agents; the envelope simulator ([analysis](../envelope_sim/analysis.md)) measures the same for synthetic workloads. Automatic stops now come from stated rules: write budgets (spec 9.14), the barrier, which a harness sets after the probe's COMPROMISED verdict and the principal can set (spec 9.8), and scope rate limits (spec 9.12).
+The static layer (authority + validation + redundancy) provides the safety guarantee: no double booking found regardless of attack mode. The learned detector's false restrictions are why the library no longer lets it stop agents. Automatic stops now come from stated rules: write budgets (spec 9.14), the barrier, which a harness sets after the probe's COMPROMISED verdict and the principal can set (spec 9.8), and scope rate limits (spec 9.12).
 
 ---
 
@@ -311,4 +311,4 @@ The static layer (authority + validation + redundancy) provides the safety guara
 | Defense-in-depth | 6 | 630 | 0 | none attempted |
 | **Total** | **27** | **4,640** | **0** | **8,816 of 8,816** (6 by the harness) |
 
-Across 27 runs, 4,640 agent instances, two models, three adversarial strategies, six defense scenarios, and agent counts from 100 to 1,050, no resource got ALLOW twice in one round, no lunch window went over capacity, and every cross-department write was denied: 8,810 by the guard, and 6 by the harness before the guard, which refuses a booking in the agent's own department or of a room the target department does not have (2 more attempts failed on missing arguments). The numbers come from the stored steps and bot logs ([`stored_run_safety.py`](../stress_test/stored_run_safety.py)): the runs' own double-booking metric dropped every action that superseded its own intent, so it could not count a double booking, and their scope-violation counter was never incremented. Rooms that another agent booked again in a later round of the same week (4 to 136 per run) all follow a building-ops warning on that room, which frees the first booking until it decays. The bot logs show no parking spot or boardroom slot given twice; agents ended up with two parking spots on one day 0 to 26 times per run, when two of an agent's pending requests both won against the harness's own one-spot rule; the current `run.py` gives each agent at most one spot a day. These runs did not measure read leaks.
+Across 27 runs, 4,640 agent instances, three models, three adversarial strategies, six defense scenarios, and agent counts from 100 to 1,050, no resource got ALLOW twice in one round, no lunch window went over capacity, and every cross-department write was denied: 8,810 by the guard, and 6 by the harness before the guard, which refuses a booking in the agent's own department or of a room the target department does not have (2 more attempts failed on missing arguments). The numbers come from the stored steps and bot logs ([`stored_run_safety.py`](../stress_test/stored_run_safety.py)): the runs' own double-booking metric dropped every action that superseded its own intent, so it could not count a double booking, and their scope-violation counter was never incremented. Rooms that another agent booked again in a later round of the same week (4 to 136 per run) all follow a building-ops warning on that room, which frees the first booking until it decays. The bot logs show no parking spot or boardroom slot given to two agents; four boardroom slots in the defense runs were resolved a second time to the agent that already held it, which had asked for its own slot again; agents ended up with two parking spots on one day 0 to 26 times per run, when two of an agent's pending requests both won against the harness's own one-spot rule; the current `run.py` gives each agent at most one spot a day. These runs did not measure read leaks.

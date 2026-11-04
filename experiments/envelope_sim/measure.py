@@ -270,7 +270,7 @@ def main() -> None:
     seeds = range(1, args.seeds + 1)
     span_l = args.windows * L.window_seconds
     horizons_l = [d * DAY for d in HORIZON_DAYS if d * DAY <= span_l]
-    # Configuration T: two rounds a day; the stored trials ran 10 to 20 days.
+    # Configuration T: two rounds a day; the gpt-oss-120b defense trials ran 10 to 20 days.
     span_t = round_time(args.windows - 1)
     horizons_t = [d * DAY for d in (10, 20, 30) if d * DAY <= span_t]
     results: dict[str, Any] = {

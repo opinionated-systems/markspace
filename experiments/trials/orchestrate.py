@@ -11,7 +11,7 @@ Usage:
     python experiments/trials/orchestrate.py --experiment multi_trial --models gpt-oss-120b mercury-2
     python experiments/trials/orchestrate.py --experiment adversarial --models gpt-oss-120b mercury-2
     python experiments/trials/orchestrate.py --experiment scaling --models gpt-oss-120b mercury-2
-    python experiments/trials/orchestrate.py --experiment defense --models gpt-oss-120b
+    python experiments/trials/orchestrate.py --experiment defense --models glm-5p3-flash
     python experiments/trials/orchestrate.py --experiment all --models gpt-oss-120b mercury-2
     python experiments/trials/orchestrate.py --experiment defense --dry-run
 """

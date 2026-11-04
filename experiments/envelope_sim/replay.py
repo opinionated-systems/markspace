@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Replay of the stored defense trials (experiments/trials/results/defense/).
+Replay of the gpt-oss-120b defense trials that commit 0bf9a05 ran
+(experiments/trials/results/superseded/defense-gpt-oss-120b/).
 
 Each agent's envelope events come from its tool calls in steps.jsonl and from
 the end-of-round resolutions in the bot_log of rounds.jsonl, by the rules of
@@ -37,7 +38,10 @@ from markspace.envelope import EnvelopeVerdict
 
 from .streams import CHECK, A, Event, I, N, O, T, W
 
-DEFENSE = Path(__file__).resolve().parent.parent / "trials/results/defense/gpt-oss-120b"
+DEFENSE = (
+    Path(__file__).resolve().parent.parent
+    / "trials/results/superseded/defense-gpt-oss-120b"
+)
 TRIALS = (
     "rate_spike",
     "type_shift",

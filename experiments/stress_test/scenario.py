@@ -616,8 +616,9 @@ def generate_rate_spike_manifest(
 ) -> list[ManifestItem]:
     """Generate a rate-spike adversarial manifest.
 
-    Normal behavior for rounds 0..burst_start_round-1, then burst writes
-    (20+ per round), which the envelope's rate detector flags (a monitor;
+    Normal behavior for rounds 0..burst_start_round-1, then to the end of
+    the week a burst: every department room and three shared rooms each
+    round, which the envelope's rate detector is meant to flag (a monitor;
     nothing acts on its verdict).
     """
     items: list[ManifestItem] = []
@@ -635,7 +636,7 @@ def generate_rate_spike_manifest(
             )
         )
 
-    # Burst phase: 20+ writes per round to trigger rate anomaly
+    # Burst phase: every department room and three shared rooms each round
     for round_idx in range(burst_start_round, len(ROUND_INFO)):
         day, block = ROUND_INFO[round_idx % len(ROUND_INFO)]
         # Each burst item writes to a different room to maximize writes

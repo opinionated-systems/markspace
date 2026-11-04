@@ -44,7 +44,7 @@ No arguments. Results print to stdout. Analysis in [composition_stress/analysis.
 
 ### Envelope Simulator
 
-False and missed RESTRICTED verdicts of the statistical envelope (spec 9.7, a monitor) on synthetic workloads, and a replay of the stored defense trials. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
+False and missed RESTRICTED verdicts of the statistical envelope (spec 9.7, a monitor) on synthetic workloads, and a replay of the gpt-oss-120b defense trials of commit 0bf9a05. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
 
 ```bash
 python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results
@@ -140,7 +140,8 @@ python experiments/trials/orchestrate.py --experiment scaling
 python experiments/trials/orchestrate.py --experiment scaling_proportional
 
 # Defenses (write budgets for the bots, barrier, probe; the envelope as a monitor)
-python experiments/trials/orchestrate.py --experiment defense --models gpt-oss-120b
+# run.py appends to existing JSONL files: move earlier runs away first, or pass --resume to skip completed runs
+python experiments/trials/orchestrate.py --experiment defense --models glm-5p3-flash
 
 # All experiments
 python experiments/trials/orchestrate.py --experiment all
@@ -286,6 +287,7 @@ Per-model defaults are configured in the orchestrator:
 |-------|-------------|----------------|
 | gpt-oss-120b | 30 | 20 |
 | mercury-2 | 8 | 10 |
+| glm-5p3-flash | 30 | 20 |
 
 Override with `--requests-per-second` and `--max-concurrent` on `stress_test/run.py`, or adjust `MODEL_DEFAULTS` in `orchestrate.py`.
 
@@ -297,6 +299,7 @@ Model pricing per million tokens (check provider pages for current rates):
 |-------|--------|------------|----------|
 | [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 ($0.015 cached) | $0.60 | [Fireworks](https://fireworks.ai/) (model page, read 2026-11-03) |
 | [mercury-2](https://docs.inceptionlabs.ai/) | $0.25 | $0.75 | [Inception AI](https://www.inceptionlabs.ai/) |
+| [glm-5p3-flash](https://fireworks.ai/models/fireworks/glm-5p3-flash) | $0.15 ($0.03 cached) | $0.50 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-11-03) |
 | deepseek-v4p1-flash-1017 | $0.30 ($0.006 cached) | $1.20 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-10-30) |
 
 Actual costs from trial data (105 agents, 20 rounds, averaged across 5 seeds):

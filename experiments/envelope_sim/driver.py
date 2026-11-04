@@ -2,7 +2,7 @@
 """
 Runs a stream through the envelope's detector (D0), checked before each
 write as the guard checked it while it used the envelope, and configuration
-T's normal agents, resampled from the stored trials. The envelope is now a
+T's normal agents, resampled from the gpt-oss-120b defense trials. The envelope is now a
 monitor (spec 9.7); D0's verdicts restrict nothing.
 
 The driver reads the envelope's per-agent state (_agents) to know when a

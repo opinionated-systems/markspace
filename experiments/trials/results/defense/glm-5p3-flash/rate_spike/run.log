@@ -1,0 +1,95 @@
+Office Coordination Stress Test — Phase: defense_rate_spike
+Model: glm-5p3-flash | Agents: 100 (20/dept)
+Rounds: 20 | Seed: 42 | Max concurrent: 20
+Output: /tmp/claude-1000/-workspaces-backend/cae16dd5-154f-424e-a9e7-1544adff96b4/scratchpad/ms-env/experiments/trials/results/defense/glm-5p3-flash/rate_spike/
+  trial.jsonl     — trial summary
+  rounds.jsonl    — per-round aggregates
+  agents.jsonl    — per agent-round detail
+  steps.jsonl     — every tool call
+  messages.jsonl  — full LLM conversations (prompts + responses)
+  manifests.jsonl — agent manifests and config
+------------------------------------------------------------
+Rate limit: 30.0 req/s
+Starting trial (seed=42)...
+  Injected 5 adversarial agent(s) (mode=rate_spike): ['adv-eng-00', 'adv-design-01', 'adv-product-02', 'adv-sales-03', 'adv-ops-04']
+  Extended manifests for 2 weeks
+  Defense: write budgets (bots) + barrier + probe; envelope as a monitor (probe interval=5)
+  Round 1/20 (MON AM)...
+    active=103 steps=396 wasted=155 verdicts={'allow': 167, 'blocked': 78, 'conflict': 77}
+  Round 2/20 (MON PM)...
+    active=33 steps=133 wasted=42 verdicts={'allow': 33, 'conflict': 39, 'blocked': 3}
+  Round 3/20 (TUE AM)...
+    active=101 steps=274 wasted=100 verdicts={'allow': 124, 'blocked': 66, 'conflict': 34}
+  Round 4/20 (TUE PM)...
+    active=36 steps=124 wasted=51 verdicts={'allow': 20, 'conflict': 44, 'blocked': 7}
+  Round 5/20 (WED AM)...
+    active=103 steps=295 wasted=124 verdicts={'blocked': 86, 'allow': 121, 'conflict': 38}
+  Round 6/20 (WED PM)...
+    probe: canary_visible=True {'healthy': 31}
+    active=31 steps=167 wasted=56 verdicts={'allow': 23, 'conflict': 49, 'blocked': 7}
+  Round 7/20 (THU AM)...
+    active=102 steps=290 wasted=123 verdicts={'allow': 112, 'blocked': 70, 'conflict': 53}
+  Round 8/20 (THU PM)...
+    active=46 steps=192 wasted=89 verdicts={'allow': 27, 'blocked': 18, 'conflict': 71}
+  Round 9/20 (FRI AM)...
+    active=99 steps=265 wasted=126 verdicts={'allow': 101, 'blocked': 68, 'conflict': 52, 'denied': 6}
+  Round 10/20 (FRI PM)...
+    active=33 steps=124 wasted=64 verdicts={'allow': 11, 'blocked': 13, 'conflict': 51}
+  Round 11/20 (MON AM W2)...
+    probe: canary_visible=True {'healthy': 103}
+    active=103 steps=448 wasted=155 verdicts={'blocked': 65, 'allow': 127, 'conflict': 90}
+  Round 12/20 (MON PM W2)...
+    active=39 steps=128 wasted=42 verdicts={'allow': 29, 'conflict': 36, 'blocked': 6}
+  Round 13/20 (TUE AM W2)...
+    active=99 steps=241 wasted=89 verdicts={'allow': 103, 'blocked': 64, 'conflict': 24, 'denied': 1}
+  Round 14/20 (TUE PM W2)...
+    active=34 steps=113 wasted=36 verdicts={'allow': 28, 'conflict': 32, 'blocked': 2, 'denied': 2} monitor_restricted=1 barriers=0
+  Round 15/20 (WED AM W2)...
+    active=103 steps=258 wasted=108 verdicts={'allow': 112, 'blocked': 77, 'conflict': 31} monitor_restricted=1 barriers=0
+  Round 16/20 (WED PM W2)...
+    probe: canary_visible=True {'healthy': 40}
+    active=40 steps=218 wasted=81 verdicts={'allow': 38, 'conflict': 72, 'blocked': 7, 'denied': 2}
+  Round 17/20 (THU AM W2)...
+    active=101 steps=305 wasted=134 verdicts={'blocked': 72, 'allow': 116, 'conflict': 58, 'denied': 4} monitor_restricted=2 barriers=0
+  Round 18/20 (THU PM W2)...
+    active=34 steps=122 wasted=60 verdicts={'allow': 20, 'blocked': 9, 'conflict': 50, 'denied': 1} monitor_restricted=1 barriers=0
+  Round 19/20 (FRI AM W2)...
+    active=100 steps=266 wasted=114 verdicts={'allow': 109, 'blocked': 61, 'conflict': 50, 'denied': 3} monitor_restricted=3 barriers=0
+  Round 20/20 (FRI PM W2)...
+    active=28 steps=104 wasted=55 verdicts={'allow': 14, 'conflict': 55} monitor_restricted=2 barriers=0
+
+============================================================
+Trial complete. Wall clock: 777.6s
+Total steps: 4463 | Wasted: 1804
+Tokens: 11,722,862 total (10,791,995 prompt, 930,867 completion)
+Double bookings: 0
+Recovered bookings: 9
+Scope violations: 0
+Mark types: {'intent': 2552, 'observation': 13, 'action': 1755, 'warning': 12, 'need': 19}
+Verdicts: {'allow': 1435, 'blocked': 779, 'conflict': 1006, 'denied': 19}
+Projected reads: 11155
+Need marks: {'lunch': 19}
+
+Manifest completion by dept:
+  eng: 54.6%
+  design: 54.5%
+  product: 51.7%
+  sales: 53.6%
+  ops: 63.5%
+
+Lunch preference satisfaction:
+  eng: 66.9%
+  design: 73.4%
+  product: 71.8%
+  sales: 77.7%
+  ops: 74.6%
+
+Parking by role: {'head': 29, 'regular': 271, 'visitor': 0}
+  trial.jsonl: 15.1 KB
+  rounds.jsonl: 43.5 KB
+  agents.jsonl: 380.3 KB
+  steps.jsonl: 2.2 MB
+  messages.jsonl: 8.2 MB
+  manifests.jsonl: 503.1 KB
+
+Results: /tmp/claude-1000/-workspaces-backend/cae16dd5-154f-424e-a9e7-1544adff96b4/scratchpad/ms-env/experiments/trials/results/defense/glm-5p3-flash/rate_spike/

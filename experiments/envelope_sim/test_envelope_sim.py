@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-The envelope simulator: the replay reproduces the stored defense trials, the
+The envelope simulator: the replay reproduces the gpt-oss-120b defense trials of commit 0bf9a05, the
 driver calls the envelope as the guard does, the streams have the rates and
 the timing they name, and the summaries count what they say.
 """

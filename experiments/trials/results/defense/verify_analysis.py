@@ -31,7 +31,7 @@ SCENARIOS = [
     "slow_drift",
     "defense_combined",
 ]
-MODEL = "gpt-oss-120b"
+MODEL = "glm-5p3-flash"
 N_ADVERSARIAL = 5
 N_NORMAL = 100  # from manifests.jsonl: 105 total - 5 adv
 
@@ -175,7 +175,7 @@ def print_tables(results: list[dict]) -> None:
     # Envelope
     print("\n### Statistical Envelope\n")
     print(
-        "| Scenario | Source | Adversaries restricted | Share | Normal agents restricted | Share | First Restriction |"
+        "| Scenario | Source | Adversaries with a RESTRICTED verdict | Share | Normal agents with a RESTRICTED verdict | Share | First RESTRICTED verdict |"
     )
     print(
         "|----------|--------|-------------|---------|----------|---------|-------------------|"
@@ -214,8 +214,10 @@ def print_tables(results: list[dict]) -> None:
     print("|-------|--------|")
     print(f"| Static | {total_doubles} double bookings found / {total_rounds} rounds |")
     print(f"| Probe | {total_c} compromised / {total_h + total_c} probed |")
-    envelope_detected = sum(1 for r in results if r["tp_count"] > 0)
-    print(f"| Envelope | adversaries restricted in {envelope_detected}/6 scenarios |")
+    with_adversary_verdicts = sum(1 for r in results if r["tp_count"] > 0)
+    print(
+        f"| Envelope | RESTRICTED verdicts for adversaries in {with_adversary_verdicts}/6 scenarios |"
+    )
 
 
 def main() -> None:

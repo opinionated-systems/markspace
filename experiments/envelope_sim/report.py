@@ -127,21 +127,21 @@ def render(results: dict[str, Any]) -> str:
         "**Result.** D0 cannot restrict automatically. "
         f"In configuration L, the normal profiles other than the first-use ones restricted {pct(min(day1))} to {pct(max(day1))} of their agents within {first_days} and {pct(min(day30))} to {pct(max(day30))} within {last_days}. "
         f"Agents that write observations and one warning in their run (the first-use profiles with a burst of 1) were restricted within {last_days} in {pct(min(rare30))} to {pct(max(rare30))} of the runs. "
-        f"In configuration T, agents resampled from the stored trials were restricted in {pct(t['restricted_within_10_days']['share'])} within 10 days (20 rounds) and {pct(t['restricted_within_20_days']['share'])} within 20 days (40 rounds); the stored trials restricted 9 to 26 of 100 normal agents in 20 to 40 rounds. "
+        f"In configuration T, agents resampled from the gpt-oss-120b defense trials of commit 0bf9a05 were restricted in {pct(t['restricted_within_10_days']['share'])} within 10 days (20 rounds) and {pct(t['restricted_within_20_days']['share'])} within 20 days (40 rounds); those trials restricted 9 to 26 of 100 normal agents in 20 to 40 rounds. "
         f"Attacks just after cold start (nominal window 15) were detected in {pct(min(det_early))} to {pct(max(det_early))} of the agents. "
         f"Before attacks after a long history (nominal window 1,200), D0 had already restricted {pct(min(late_before))} to {pct(max(late_before))} of the agents. "
-        f"The replay of the six stored defense trials compares {compared} agents with their stored first restriction and differs for {differences}; the 5 slow_drift adversaries are not compared (no write of theirs before the restriction is stored).",
+        f"The replay of those six trials compares {compared} agents with their stored first restriction and differs for {differences}; the 5 slow_drift adversaries are not compared (no write of theirs before the restriction is stored).",
         "",
         METHOD,
         "## Normal profiles, configuration L",
         "",
         *normal_table(profiles, "L"),
         "",
-        "## Normal agents resampled from the stored trials, configuration T",
+        "## Normal agents resampled from the gpt-oss-120b defense trials, configuration T",
         "",
         *normal_table(profiles, "T"),
         "",
-        f"The stored trials restricted {stored_normal} of their 600 normal agents in total.",
+        f"Those trials restricted {stored_normal} of their 600 normal agents in total.",
         "",
         "## Attack profiles, configuration L",
         "",
@@ -157,9 +157,9 @@ def render(results: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "## Replay of the stored defense trials",
+        "## Replay of the gpt-oss-120b defense trials",
         "",
-        "The replay turns each agent's stored tool calls (`steps.jsonl`) and the round's resolution winners (`bot_log` of `rounds.jsonl`) into envelope events by the rules of the code that wrote the traces (0bf9a05), and runs them through D0 in configuration T. Writes after an agent's first restriction are not counted, because the stored agent then behaved as D0's restriction made it.",
+        "The replay turns each agent's stored tool calls (`steps.jsonl`) and the round's resolution winners (`bot_log` of `rounds.jsonl`) into envelope events by the rules of the code that wrote the traces (0bf9a05; the traces are in `../trials/results/superseded/defense-gpt-oss-120b/`), and runs them through D0 in configuration T. Writes after an agent's first restriction are not counted, because the stored agent then behaved as D0's restriction made it.",
         "",
         "| Trial | Normal agents restricted | Adversaries restricted | Agents compared | Differences from stored |",
         "|---|---|---|---|---|",
