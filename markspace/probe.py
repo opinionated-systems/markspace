@@ -4,7 +4,7 @@ Diagnostic Probe - Canary injection and agent response checking.
 
 Not an agent - a system-level service. Creates a dedicated probe agent
 identity for writing synthetic marks, but does not participate in
-coordination. Writes via space.write() directly (exempt from envelope).
+coordination. Writes via space.write() directly (a monitor exempts it).
 
 Spec Section 9.9.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -62,7 +63,7 @@ class DiagnosticProbe:
     P46: Probe Mark Isolation - probe agent writes only to diagnostic scope.
 
     Write path: Uses space.write() directly (not guard.write_mark()).
-    The probe agent is exempt from envelope monitoring.
+    A harness that runs the envelope as a monitor exempts the probe agent.
     """
 
     def __init__(
@@ -83,7 +84,7 @@ class DiagnosticProbe:
 
     @property
     def probe_agent(self) -> Agent:
-        """The probe's agent identity. Expose for envelope exemption."""
+        """The probe's agent identity, for a monitor's exemption."""
         return self._probe_agent
 
     def inject_canary(
@@ -128,7 +129,7 @@ class DiagnosticProbe:
         agent_id: uuid.UUID,
         agent_name: str,
         canary_id: uuid.UUID,
-        marks_after: list[AnyMark],
+        marks_after: Sequence[AnyMark],
     ) -> ProbeResult:
         """
         Check whether an agent acknowledged a canary.
@@ -191,7 +192,7 @@ class DiagnosticProbe:
     def run_probe(
         self,
         target_scope: str,
-        agents: dict[uuid.UUID, tuple[str, list[AnyMark]]],
+        agents: Mapping[uuid.UUID, tuple[str, Sequence[AnyMark]]],
         content: Any = None,
     ) -> list[ProbeResult]:
         """

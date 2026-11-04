@@ -27,6 +27,7 @@ FIREWORKS_MODELS: dict[str, str] = {
     "minimax-m2p5": "accounts/fireworks/models/minimax-m2p5",
     "gpt-oss-20b": "accounts/fireworks/models/gpt-oss-20b",
     "gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b",
+    "glm-5p3-flash": "accounts/fireworks/models/glm-5p3-flash",
 }
 
 # Non-Fireworks models with their own endpoints

@@ -247,14 +247,17 @@ def test_bot_allocations_count_what_the_bots_gave() -> None:
             "Parking mon/spot-3: eng-02 (conf=0.5, regular)",  # spot-3 again
             "Parking mon/spot-4: eng-05 (conf=0.5, regular)",  # eng-05's second
             "Boardroom boardroom/mon/AM: resolved → exec-02",  # the slot again
+            "Boardroom boardroom/tue/PM: resolved → exec-03",
         ],
+        3: ["Boardroom boardroom/tue/PM: resolved → exec-03"],  # to its holder again
         week2: ["Parking mon/spot-2: eng-03 (conf=0.5, regular)"],  # a new week
     }
     assert booking_checks.bot_allocations(logs) == {
         "parking_spots_given": 6,
         "visitor_spots_prebooked": 1,
-        "boardroom_slots_resolved": 2,
-        "given_twice": 2,
+        "boardroom_slots_resolved": 4,
+        "given_to_two_agents": 2,
+        "given_again_to_holder": 1,
         "agents_with_two_spots_on_one_day": 2,
     }
 

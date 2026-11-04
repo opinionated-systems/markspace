@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 #   TOKENS_INPUT    - record_round_tokens()
 #   TOKENS_OUTPUT   - record_round_tokens()
 #   CONFLICTS       - _pre_action_inner() when conflict resolution runs
-#   BUDGET_REMAINING - record_round_tokens() when budget is set
+#   BUDGET_REMAINING - record_round_tokens() and update_budget() when budget is set
 #
 # Caller-emitted (the caller has the data, guard does not):
 #   MARKS_READ       - caller instruments space.read() calls
@@ -80,7 +80,6 @@ class TelemetryEvent:
     verdict: str = ""  # "accepted", "rejected", "conflict", "denied", "allowed"
     conflict_check: bool = False
     conflict_found: bool = False
-    envelope_status: str = ""
     barrier_restricted: bool = False
     input_tokens_this_round: int = 0
     output_tokens_this_round: int = 0

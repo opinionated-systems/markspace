@@ -86,6 +86,8 @@ class BudgetTracker:
     total_output_consumed: int = 0
     warning_emitted_input: bool = False
     warning_emitted_output: bool = False
+    stop_noted_input: bool = False
+    stop_noted_output: bool = False
     exhausted: bool = False
 
     def record_input(self, tokens: int) -> None:
@@ -110,8 +112,8 @@ class BudgetTracker:
         """
         # Check warnings first. If usage jumps from below warning to
         # above exhaustion in a single call, the warning must still fire
-        # (P60) before the hard stop (P61). The guard emits the Need
-        # mark and then handles exhaustion on the next check.
+        # as a status (P60) before the hard stop (P61). The guard then writes
+        # only the stop's Need mark, and the next call reports the stop.
         if (
             budget.max_input_tokens_total is not None
             and not self.warning_emitted_input
@@ -163,6 +165,48 @@ class BudgetTracker:
             self.exhausted = True
             return True
         return False
+
+    def rearm_warnings(self, budget: TokenBudget) -> None:
+        """Usage below the budget's warning line has not crossed that line, so
+        crossing it writes a warning, also after a warning for an earlier
+        budget (P60). A dimension without a total has no line, so a later total
+        warns again. Usage at or above the line keeps its state: a warning
+        already written is not repeated."""
+        if (
+            budget.max_input_tokens_total is None
+            or self.total_input_consumed
+            < budget.max_input_tokens_total * budget.warning_fraction
+        ):
+            self.warning_emitted_input = False
+        if (
+            budget.max_output_tokens_total is None
+            or self.total_output_consumed
+            < budget.max_output_tokens_total * budget.warning_fraction
+        ):
+            self.warning_emitted_output = False
+
+    def take_new_stops(self, budget: TokenBudget) -> list[tuple[str, int, int]]:
+        """The dimensions whose total the usage has reached and whose stop has
+        no need mark yet, as (dimension, consumed, total), now marked as noted
+        (P61)."""
+        stops: list[tuple[str, int, int]] = []
+        total = budget.max_input_tokens_total
+        if (
+            total is not None
+            and self.total_input_consumed >= total
+            and not self.stop_noted_input
+        ):
+            self.stop_noted_input = True
+            stops.append(("input", self.total_input_consumed, total))
+        total = budget.max_output_tokens_total
+        if (
+            total is not None
+            and self.total_output_consumed >= total
+            and not self.stop_noted_output
+        ):
+            self.stop_noted_output = True
+            stops.append(("output", self.total_output_consumed, total))
+        return stops
 
     def try_clear_exhaustion(self, budget: TokenBudget) -> bool:
         """Clear exhaustion if the budget has been increased past consumption.

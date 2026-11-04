@@ -18,7 +18,7 @@ from importlib.metadata import version, PackageNotFoundError
 try:
     __version__ = version("markspace")
 except PackageNotFoundError:
-    __version__ = "0.3.0-beta"
+    __version__ = "0.4.0-beta"
 
 from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.compose import validate_manifest_permissions, validate_pipeline
@@ -82,6 +82,7 @@ from markspace.llm import LLMClient, LLMConfig
 from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeResult, ProbeVerdict
 from markspace.rate_limit import RateLimitTracker, ScopeRateLimit
 from markspace.schedule import Scheduler
+from markspace.write_budget import WriteBudget, WriteBudgetMeter
 from markspace.models import DEFAULT_MODELS, FIREWORKS_MODELS, resolve_model_id
 from markspace.telemetry import (
     FailingSink,
@@ -184,6 +185,9 @@ __all__ = [
     # Rate limit
     "RateLimitTracker",
     "ScopeRateLimit",
+    # Write budgets
+    "WriteBudget",
+    "WriteBudgetMeter",
     # Telemetry
     "FailingSink",
     "InMemorySink",

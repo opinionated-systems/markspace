@@ -50,8 +50,6 @@ class BarrierSnapshot:
     """
 
     agent_id: uuid.UUID
-    flag_count: int
-    flagged_scopes: frozenset[str]
     revoked: frozenset[tuple[str, str]]
     require_need_scopes: frozenset[str]
 
@@ -77,8 +75,6 @@ class AgentBarrier:
     _principal_token: uuid.UUID
     _revoked: set[tuple[str, str]] = field(default_factory=set)
     _require_need_scopes: set[str] = field(default_factory=set)
-    _flag_count: int = 0  # escalation counter
-    flagged_scopes: set[str] = field(default_factory=set)  # scopes that triggered flags
 
     def is_allowed(self, scope: str, mark_type_value: str) -> bool:
         """Check if (scope, mark_type) has NOT been revoked."""
@@ -93,11 +89,15 @@ class AgentBarrier:
         self._revoked.add(("*", mark_type_value))
 
     def require_need(self, scope: str) -> None:
-        """Force Need marks before any action in scope."""
+        """Require a Need mark in scope before other writes there (the guard
+        checks it in write_mark, pre_action and a boundary with the agents
+        mapping; a direct claim without it is recorded, with a need mark for
+        the principal).
+        """
         self._require_need_scopes.add(scope)
 
     def require_need_all(self) -> None:
-        """Force Need marks before any action in any scope."""
+        """require_need() in every scope."""
         self._require_need_scopes.add("*")
 
     def needs_required(self, scope: str) -> bool:
@@ -106,15 +106,6 @@ class AgentBarrier:
         Hierarchical: require_need("hr") also requires needs for "hr/payroll".
         """
         return need_required(self._require_need_scopes, scope)
-
-    def increment_flags(self) -> int:
-        """Increment and return the flag count for escalation."""
-        self._flag_count += 1
-        return self._flag_count
-
-    @property
-    def flag_count(self) -> int:
-        return self._flag_count
 
     def restore(
         self, scope: str, mark_type_value: str, principal_token: uuid.UUID
@@ -131,7 +122,6 @@ class AgentBarrier:
             return False
         self._revoked.clear()
         self._require_need_scopes.clear()
-        self._flag_count = 0
         return True
 
     def is_allowed_checked(self, scope: str, mark_type_value: str) -> bool:
@@ -146,8 +136,6 @@ class AgentBarrier:
         """Return a frozen snapshot for external inspection."""
         return BarrierSnapshot(
             agent_id=self.agent_id,
-            flag_count=self._flag_count,
-            flagged_scopes=frozenset(self.flagged_scopes),
             revoked=frozenset(self._revoked),
             require_need_scopes=frozenset(self._require_need_scopes),
         )

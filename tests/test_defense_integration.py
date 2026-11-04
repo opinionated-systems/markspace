@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Integration tests for the defense-in-depth stack:
-envelope -> barrier -> guard -> space.
-
-Tests the full cycle: anomalous behavior detected by envelope,
-barrier applied by guard, agent blocked on subsequent writes.
+Integration tests for the defenses: barrier -> guard -> space, the
+principal's restore, the diagnostic probe, and the statistical envelope as a
+monitor that a harness attaches to the space (spec 9.7).
 """
-
-import uuid
 
 import pytest
 
@@ -20,22 +16,19 @@ from markspace import (
     MarkSpace,
     MarkType,
     Observation,
-    Need,
     Scope,
     ScopeError,
     Source,
-    Warning,
     hours,
     minutes,
 )
 from markspace.envelope import (
     EnvelopeConfig,
-    EnvelopeVerdict,
     StatisticalEnvelope,
     WelfordConfig,
     WelfordDetector,
 )
-from markspace.probe import DiagnosticProbe, ProbeConfig, ProbeVerdict
+from markspace.probe import DiagnosticProbe
 
 
 def _make_space(clock: float = 0.0) -> MarkSpace:
@@ -89,91 +82,20 @@ def _make_envelope(
     )
 
 
-class TestEnvelopeTriggersBarrier:
-    """Envelope detects anomaly -> guard creates barrier -> agent blocked."""
-
-    def test_rate_spike_blocks_agent(self):
-        """After baseline, a rate spike triggers RESTRICTED and barrier."""
-        t = [0.0]
-        clock_fn = lambda: t[0]
-        space = _make_space(clock=0.0)
-        envelope = _make_envelope(clock_fn, min_samples=3, window=10.0)
-        guard = Guard(space, envelope=envelope)
-        agent = _make_agent()
-
-        # Build baseline: 3 windows with 2 observations each
-        for window_num in range(3):
-            t[0] = window_num * 10.0
-            space.set_clock(t[0])
-            for _ in range(2):
-                guard.write_mark(
-                    agent,
-                    Observation(
-                        scope="test",
-                        topic="sensor",
-                        content={"value": 42},
-                        source=Source.FLEET,
-                    ),
-                )
-            # Advance past window boundary to trigger rotation
-            t[0] = (window_num + 1) * 10.0 - 0.01
-
-        # Now spike: 20 observations in next window (10x baseline)
-        t[0] = 30.0
-        space.set_clock(t[0])
-        # First write triggers window rotation and feeds baseline into Welford
-        guard.write_mark(
-            agent,
-            Observation(
-                scope="test",
-                topic="sensor",
-                content={"spike": True},
-                source=Source.FLEET,
-            ),
-        )
-        for i in range(19):
-            try:
-                guard.write_mark(
-                    agent,
-                    Observation(
-                        scope="test",
-                        topic="sensor",
-                        content={"spike": i},
-                        source=Source.FLEET,
-                    ),
-                )
-            except ScopeError:
-                # Agent got restricted - expected
-                break
-
-        # Verify barrier exists
-        barrier = guard.get_barrier(agent.id)
-        assert barrier is not None
-        assert not barrier.is_allowed_checked("test", "observation")
-
-        # Verify agent is blocked on further writes
-        with pytest.raises(ScopeError, match="blocked by barrier"):
-            guard.write_mark(
-                agent,
-                Observation(
-                    scope="test", topic="sensor", content={}, source=Source.FLEET
-                ),
-            )
+class TestBarrierBlocksWrites:
+    """A barrier set on the guard blocks the agent's writes."""
 
     def test_barrier_blocks_pre_action(self):
         """Barrier also blocks intent/action writes via pre_action."""
-        t = [0.0]
-        clock_fn = lambda: t[0]
         space = _make_space(clock=0.0)
-        envelope = _make_envelope(clock_fn, min_samples=3, window=10.0)
-        guard = Guard(space, envelope=envelope)
+        guard = Guard(space)
         agent = _make_agent()
 
         # Manually set a barrier
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.INTENT.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # pre_action should be denied
         decision = guard.pre_action(agent, "test", "room-1", "book", confidence=0.9)
@@ -193,7 +115,7 @@ class TestPrincipalRestore:
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.OBSERVATION.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # Verify blocked
         with pytest.raises(ScopeError):
@@ -244,7 +166,7 @@ class TestResolvedDeferredWithBarrier:
         token = guard._principal_token
         barrier = AgentBarrier(agent_id=agent.id, _principal_token=token)
         barrier.narrow("test", MarkType.INTENT.value)
-        guard.set_barrier(agent.id, barrier)
+        guard.set_barrier(agent.id, barrier, token)
 
         # resolve_deferred should deny this agent
         results = guard.resolve_deferred("test", "room-1", agents={agent.id: agent})
@@ -253,28 +175,36 @@ class TestResolvedDeferredWithBarrier:
         assert "barrier" in results[agent.id].reason
 
 
-class TestProbeWithEnvelope:
-    """Probe and envelope work together."""
+class TestProbeAndMonitor:
+    """The envelope as a monitor, attached by a write hook, with the probe's
+    agent exempt (spec 9.7, 9.9)."""
 
-    def test_probe_exempt_from_envelope(self):
-        """Probe writes should not trigger envelope flagging."""
+    def test_probe_exempt_from_the_monitor(self):
+        """The monitor records every stored mark except those of exempt
+        agents: the probe's canaries do not reach it."""
         t = [0.0]
         clock_fn = lambda: t[0]
         space = _make_space(clock=0.0)
         envelope = _make_envelope(clock_fn, min_samples=1, window=10.0)
-        guard = Guard(space, envelope=envelope)
+        Guard(space)
+        space.add_write_hook(lambda agent_id, mark: envelope.record(agent_id, mark))
 
         probe = DiagnosticProbe(space)
-        # Register probe agent as exempt
         envelope.add_exempt_agent(probe.probe_agent.id)
-
-        # Write many canaries - should not trigger envelope
         for i in range(50):
             probe.inject_canary("test", content={"canary": i})
+        assert envelope.get_stats(probe.probe_agent.id) is None
 
-        # Probe agent should not be tracked at all
-        stats = envelope.get_stats(probe.probe_agent.id)
-        assert stats is None
+        agent = _make_agent()
+        space.write(
+            agent,
+            Observation(scope="test", topic="x", content={}, source=Source.FLEET),
+        )
+        assert envelope.get_stats(agent.id) is not None
+
+
+class TestWriteMarkRejectsContestedMarks:
+    """Intents and actions go through pre_action and post_action only."""
 
     def test_write_mark_rejects_intent(self):
         """write_mark() must reject Intent marks."""

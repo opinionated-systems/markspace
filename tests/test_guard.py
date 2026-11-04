@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 
-from unittest.mock import MagicMock
 
 from markspace import (
     Action,
@@ -39,6 +38,7 @@ from markspace import (
     Observation,
     PolicyResult,
     PolicyVerdict,
+    QuotaExceededError,
     Scope,
     ScopeVisibility,
     Source,
@@ -46,7 +46,11 @@ from markspace import (
     hours,
     minutes,
 )
-from markspace.barrier import BarrierSnapshot
+from markspace.barrier import AgentBarrier, BarrierSnapshot
+from markspace.guard import ClaimState, _BarrierView
+from markspace.rate_limit import ScopeRateLimit
+from markspace.space import ScopeError, ValidationError
+from markspace.write_budget import WriteBudget
 from markspace.core import AnyMark, resolve_conflict, scope_contains
 
 
@@ -914,11 +918,11 @@ class TestToolFnExceptionHandling:
 
 
 # ---------------------------------------------------------------------------
-# W20: Trust source enforcement at write boundary
+# W20: max_source enforcement at write boundary
 # ---------------------------------------------------------------------------
 
 
-class TestTrustSourceEnforcement:
+class TestMaxSourceEnforcement:
     def test_external_agent_cannot_write_fleet_source(self) -> None:
         """An agent with max_source=EXTERNAL_VERIFIED cannot write FLEET observations."""
         scope = Scope(
@@ -1280,20 +1284,82 @@ class TestContentPolicies:
         )
         assert recorder.seen[0].content == {"key": "value"}
 
-    def test_flag_does_not_feed_envelope(self, notes_space, writer):
-        """FLAG verdict does NOT call envelope.record_attempt (P70)."""
-        envelope = MagicMock()
-        from markspace.envelope import EnvelopeVerdict
+    def test_a_reject_leaves_the_barrier_alone(self, notes_space, writer):
+        """A REJECT refuses the write and narrows no barrier (P70)."""
+        guard = Guard(notes_space, content_policies=[_RejectPolicy("no")])
+        with pytest.raises(ContentPolicyError):
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        assert guard.get_barrier(writer.id) is None
 
-        envelope.check.return_value = EnvelopeVerdict.NORMAL
+    def test_flag_warnings_stay_under_the_mark_limit(self, notes_scope, writer):
+        """The guard's content-policy warnings count against its mark limit;
+        only its need marks are exempt."""
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=2)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        previous = None
+        for k in range(5):
+            previous = guard.write_mark(
+                writer,
+                Observation(
+                    scope="notes", topic="t", content=f"x{k}", supersedes=previous
+                ),
+            )
+        flags = space.read(scope="_system", mark_type=MarkType.WARNING)
+        assert len(flags) == 2
 
+    def test_guard_needs_leave_room_for_its_flag_warnings(self, notes_scope, writer):
+        """The guard's need marks do not count against its mark limit, so
+        they do not crowd out its content-policy warnings."""
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=2)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        for k in range(2):
+            claimer = Agent(name=f"c{k}", scopes={"notes": ["action"]})
+            guard.get_or_create_barrier(claimer.id).narrow("notes", "action")
+            guard.post_action(claimer, "notes", f"r{k}", "noted", result=None)
+        assert len(space.read(scope="_system", mark_type=MarkType.NEED)) == 2
+        guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        assert len(space.read(scope="_system", mark_type=MarkType.WARNING)) == 1
+
+    def test_a_refused_flagged_write_leaves_no_flag_warning(self, notes_space, writer):
+        """The FLAG warning is written only for a stored observation: a write
+        that the write budget refuses after the policies leaves none."""
         guard = Guard(
             notes_space,
-            envelope=envelope,
             content_policies=[_FlagPolicy("sus")],
+            write_budgets={writer.id: WriteBudget(per_hour={})},
         )
-        guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
-        envelope.record_attempt.assert_not_called()
+        with pytest.raises(ScopeError, match="spent its write budget"):
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="x"))
+        assert notes_space.read(scope="_system", mark_type=MarkType.WARNING) == []
+
+    def test_a_flagged_write_the_space_refuses_leaves_no_flag_warning(self, writer):
+        space = MarkSpace(scopes=[Scope(name="notes", observation_topics=("status",))])
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        with pytest.raises(ValidationError):
+            guard.write_mark(writer, Observation(scope="notes", topic="other"))
+        assert space.read(scope="_system", mark_type=MarkType.WARNING) == []
+
+    def test_a_refused_flag_warning_is_logged(
+        self, notes_scope, writer, caplog: pytest.LogCaptureFixture
+    ):
+        space = MarkSpace(scopes=[notes_scope], max_marks_per_agent=1)
+        space.set_clock(1_000_000.0)
+        guard = Guard(space, content_policies=[_FlagPolicy("sus")])
+        first = guard.write_mark(
+            writer, Observation(scope="notes", topic="t", content="a")
+        )
+        with caplog.at_level("WARNING", logger="markspace.guard"):
+            guard.write_mark(
+                writer,
+                Observation(scope="notes", topic="t", content="b", supersedes=first),
+            )
+        assert any(
+            r.levelname == "WARNING" and "content-policy-flag" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_policies_skip_warning_marks(self, notes_space, writer):
         """Content policies are NOT evaluated for Warning marks (P69)."""
@@ -1721,6 +1787,861 @@ class TestWriteOrderAfterGc:
         )
 
 
+class TestQuotaCountsEachCurrentMarkOnce:
+    """max_marks_per_agent counts the agent's stored marks that are not superseded."""
+
+    @staticmethod
+    def _space(quota: int) -> tuple[MarkSpace, Agent]:
+        s = MarkSpace(
+            scopes=[Scope(name="notes")],
+            max_marks_per_agent=quota,
+        )
+        s.set_clock(1000000.0)
+        return s, Agent(
+            name="writer", scopes={"notes": ["observation", "need", "action"]}
+        )
+
+    @staticmethod
+    def _obs(content: str, supersedes: uuid.UUID | None = None) -> Observation:
+        return Observation(
+            scope="notes", topic="t", content=content, supersedes=supersedes
+        )
+
+    def test_superseding_write_at_quota_replaces_the_mark(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("other"))
+        s.write(a, self._obs("v2", supersedes=first))  # still 2 current marks
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("third"))
+
+    def test_gc_of_a_superseded_mark_frees_no_second_slot(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("v2", supersedes=first))
+        assert s.gc() == 1  # v1, superseded
+        s.write(a, self._obs("other"))  # 2 current marks: v2, other
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("third"))
+
+    def test_second_supersession_of_one_mark_counts_the_new_mark(self) -> None:
+        s, a = self._space(quota=2)
+        first = s.write(a, self._obs("v1"))
+        s.write(a, self._obs("v2", supersedes=first))
+        s.write(a, self._obs("v3", supersedes=first))  # 2 current marks: v2, v3
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("v4"))
+
+    def test_resolved_need_frees_its_slot_after_gc(self) -> None:
+        s, a = self._space(quota=2)
+        principal = Agent(name="principal", scopes={"notes": ["action"]})
+        need = s.write(a, Need(scope="notes", question="which?"))
+        done = s.write(
+            principal,
+            Action(scope="notes", resource="r", action="answered", result=None),
+        )
+        s.resolve(need, done)
+        assert s.gc() == 2  # the need and its resolved copy
+        s.write(a, self._obs("one"))
+        s.write(a, self._obs("two"))
+        with pytest.raises(QuotaExceededError):
+            s.write(a, self._obs("three"))
+
+
+class TestSystemScopeIsClassified:
+    def test_agent_without_read_authorization_sees_no_system_mark(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="work")])
+        space.set_clock(1000000.0)
+        Guard(space)
+        ops = Agent(name="ops", scopes={"_system": ["warning"]})
+        reader = Agent(name="reader", scopes={"work": ["observation"]})
+        space.write(ops, Warning(scope="_system", topic="t", reason="names a scope"))
+        assert space.read(scope="_system", reader=reader) == []
+        assert len(space.read(scope="_system")) == 1
+
+    def test_an_open_system_scope_is_refused(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="_system")])
+        with pytest.raises(ValueError):
+            Guard(space)
+
+    def test_a_protected_system_scope_is_refused(self) -> None:
+        protected = Scope(name="_system", visibility=ScopeVisibility.PROTECTED)
+        with pytest.raises(ValueError):
+            Guard(MarkSpace(scopes=[protected]))
+
+
+class TestSetBarrierNeedsThePrincipal:
+    @staticmethod
+    def _guard(token: uuid.UUID) -> tuple[Guard, Agent]:
+        space = MarkSpace(scopes=[Scope(name="s")])
+        agent = Agent(name="a", scopes={"s": ["observation"]})
+        return Guard(space, principal_token=token), agent
+
+    @staticmethod
+    def _restricted_snapshot(guard: Guard, agent: Agent) -> BarrierSnapshot:
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow("s", "observation")
+        barrier.require_need("s")
+        saved = guard.get_barrier(agent.id)
+        assert saved is not None
+        return saved
+
+    def test_wrong_token_keeps_the_barrier(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        guard.get_or_create_barrier(agent.id).narrow("s", "observation")
+        empty = AgentBarrier(agent_id=agent.id, _principal_token=token)
+        assert guard.set_barrier(agent.id, empty, uuid.uuid4()) is False
+        kept = guard.get_barrier(agent.id)
+        assert kept is not None
+        assert not kept.is_allowed_checked("s", "observation")
+        assert guard.set_barrier(agent.id, empty, token) is True
+
+    def test_snapshot_loads_into_a_new_guard(self) -> None:
+        from markspace.space import ScopeError
+
+        token = uuid.uuid4()
+        old, agent = self._guard(token)
+        saved = self._restricted_snapshot(old, agent)
+        new, _ = self._guard(token)
+        assert new.set_barrier(agent.id, saved, token) is True
+        assert new.get_barrier(agent.id) == saved
+        with pytest.raises(ScopeError):
+            new.write_mark(agent, Observation(scope="s", topic="t", content="x"))
+        assert new.get_or_create_barrier(agent.id).restore("s", "observation", token)
+
+    def test_other_objects_are_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        not_a_barrier: Any = object()
+        with pytest.raises(TypeError):
+            guard.set_barrier(agent.id, not_a_barrier, token)
+
+    def test_barrier_of_another_agent_is_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        saved = self._restricted_snapshot(guard, agent)
+        other = Agent(name="b", scopes={"s": ["observation"]})
+        with pytest.raises(ValueError):
+            guard.set_barrier(other.id, saved, token)
+
+    def test_barrier_with_another_token_is_refused(self) -> None:
+        token = uuid.uuid4()
+        guard, agent = self._guard(token)
+        foreign = AgentBarrier(agent_id=agent.id, _principal_token=uuid.uuid4())
+        with pytest.raises(ValueError):
+            guard.set_barrier(agent.id, foreign, token)
+
+
+class TestGuardConstruction:
+    def test_parameters_after_space_are_keyword_only(self) -> None:
+        """A positional second argument raises, so no caller passes an old
+        envelope argument as the principal token by mistake."""
+        positional: list[Any] = [MarkSpace(), uuid.uuid4()]
+        with pytest.raises(TypeError):
+            Guard(*positional)
+
+
+class TestWriteMarkChecksAuthorizationFirst:
+    """A write the agent may not make runs no other check (spec 9.6)."""
+
+    def test_an_outsider_takes_no_share_of_the_rate_limit(self) -> None:
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name="notes",
+                    rate_limit=ScopeRateLimit(max_total_writes_per_window=2),
+                )
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        guard = Guard(space)
+        outsider = Agent(name="o", scopes={})
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="not authorized"):
+                guard.write_mark(outsider, Observation(scope="notes", topic="t"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    @staticmethod
+    def _limited() -> tuple[MarkSpace, Guard]:
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name=n,
+                    rate_limit=ScopeRateLimit(max_total_writes_per_window=2),
+                )
+                for n in ("notes", "desk")
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        return space, Guard(space)
+
+    def test_a_warning_on_an_action_elsewhere_takes_no_share(self) -> None:
+        """A warning that hides an action in a scope where the agent may not
+        warn is refused before the rate limit counts it."""
+        space, guard = self._limited()
+        booker = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        action_id = guard.post_action(booker, "desk", "r1", "booked", result=None)
+        hider = Agent(name="h", scopes={"notes": ["warning"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="may not write warnings"):
+                guard.write_mark(
+                    hider,
+                    Warning(
+                        scope="notes", topic="t", reason="r", invalidates=action_id
+                    ),
+                )
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    def test_superseding_another_agents_mark_takes_no_share(self) -> None:
+        space, guard = self._limited()
+        owner = Agent(name="o", scopes={"notes": ["observation"]})
+        theirs = guard.write_mark(
+            owner, Observation(scope="notes", topic="t", content="x")
+        )
+        other = Agent(name="x", scopes={"notes": ["observation"]})
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="may not supersede"):
+                guard.write_mark(
+                    other,
+                    Observation(
+                        scope="notes", topic="t", content="y", supersedes=theirs
+                    ),
+                )
+        guard.write_mark(owner, Observation(scope="notes", topic="t", content="z"))
+
+    def test_an_observation_above_max_source_takes_no_share(self) -> None:
+        space, guard = self._limited()
+        external = Agent(
+            name="e",
+            scopes={"notes": ["observation"]},
+            max_source=Source.EXTERNAL_UNVERIFIED,
+        )
+        for _ in range(3):
+            with pytest.raises(ScopeError, match="cannot write observations"):
+                guard.write_mark(
+                    external,
+                    Observation(scope="notes", topic="t", source=Source.FLEET),
+                )
+        member = Agent(name="m", scopes={"notes": ["observation"]})
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="a"))
+        guard.write_mark(member, Observation(scope="notes", topic="t", content="b"))
+
+    def test_a_warning_on_a_system_mark_is_refused_before_the_barrier(self) -> None:
+        space, guard = self._limited()
+        claimer = Agent(name="c", scopes={"desk": ["action"]})
+        guard.get_or_create_barrier(claimer.id).narrow("desk", "action")
+        guard.post_action(claimer, "desk", "r1", "booked", result=None)
+        need = space.read(scope="_system", mark_type=MarkType.NEED)[0]
+        hider = Agent(name="h", scopes={"notes": ["warning"]})
+        guard.get_or_create_barrier(hider.id).narrow_all("warning")
+        with pytest.raises(ScopeError, match="may not warn on a mark in '_system'"):
+            guard.write_mark(
+                hider,
+                Warning(scope="notes", topic="t", reason="r", invalidates=need.id),
+            )
+
+    def test_authorization_comes_before_the_barrier(self) -> None:
+        space, guard = self._limited()
+        outsider = Agent(name="o", scopes={})
+        guard.get_or_create_barrier(outsider.id).narrow_all("observation")
+        with pytest.raises(
+            ScopeError, match="not authorized to write observation to scope"
+        ):
+            guard.write_mark(outsider, Observation(scope="notes", topic="t"))
+
+    def test_an_outsider_runs_no_content_policy(self) -> None:
+        class Counting(ContentPolicy):
+            calls = 0
+
+            def evaluate(
+                self, agent: Agent, mark: Observation, scope: Scope
+            ) -> PolicyResult:
+                Counting.calls += 1
+                return PolicyResult(verdict=PolicyVerdict.ALLOW)
+
+        space = MarkSpace(scopes=[Scope(name="notes")])
+        guard = Guard(space, content_policies=[Counting()])
+        with pytest.raises(ScopeError, match="not authorized"):
+            guard.write_mark(
+                Agent(name="o", scopes={}), Observation(scope="notes", topic="t")
+            )
+        assert Counting.calls == 0
+
+
+class TestP42WriteMarkAtomicity:
+    """A write_mark() refusal stores nothing, whichever check refuses it."""
+
+    @staticmethod
+    def _refused(kind: str) -> tuple[MarkSpace, Guard, Agent, Observation]:
+        rate_limit = ScopeRateLimit(max_writes_per_agent_per_window=1)
+        space = MarkSpace(
+            scopes=[
+                Scope(
+                    name="notes",
+                    rate_limit=rate_limit if kind == "rate limit" else None,
+                )
+            ]
+        )
+        space.set_clock(1_000_000.0)
+        writer = Agent(
+            name="w",
+            scopes={"notes": ["observation"] if kind != "authorization" else []},
+        )
+        guard = Guard(
+            space,
+            content_policies=(
+                [_RejectPolicy("no")] if kind == "content policy" else None
+            ),
+            write_budgets=(
+                {writer.id: WriteBudget(per_hour={})}
+                if kind == "write budget"
+                else None
+            ),
+        )
+        if kind == "barrier":
+            guard.get_or_create_barrier(writer.id).narrow("notes", "observation")
+        if kind == "rate limit":
+            guard.write_mark(writer, Observation(scope="notes", topic="t", content="a"))
+        return space, guard, writer, Observation(scope="notes", topic="t", content="x")
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["authorization", "barrier", "write budget", "rate limit", "content policy"],
+    )
+    def test_a_refused_write_stores_nothing(self, kind: str) -> None:
+        space, guard, writer, mark = self._refused(kind)
+
+        def written() -> int:
+            return sum(1 for m in space._marks.values() if m.agent_id == writer.id)
+
+        before = written()
+        with pytest.raises(ScopeError):
+            guard.write_mark(writer, mark)
+        assert written() == before
+
+
+class TestBarrierRevokesActions:
+    """A barrier that revokes intents or actions: the agent starts no action;
+    what has happened is still recorded (spec 9.8)."""
+
+    @staticmethod
+    def _setup(
+        deferred: bool = False,
+        max_marks_per_agent: int | None = None,
+    ) -> tuple[MarkSpace, Guard, Agent, uuid.UUID]:
+        space = MarkSpace(
+            scopes=[Scope(name="desk", deferred=deferred)],
+            max_marks_per_agent=max_marks_per_agent,
+        )
+        space.set_clock(1000000.0)
+        token = uuid.uuid4()
+        guard = Guard(space, principal_token=token)
+        agent = Agent(name="a", scopes={"desk": ["intent", "action", "need"]})
+        return space, guard, agent, token
+
+    @staticmethod
+    def _system_needs(space: MarkSpace) -> list[Need]:
+        return [
+            n
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need)
+        ]
+
+    def test_intent_is_refused_also_after_a_need(self) -> None:
+        space, guard, agent, _ = self._setup()
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow("desk", "action")
+        barrier.require_need("desk")
+        space.write(agent, Need(scope="desk", question="may I?"))
+        decision = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert decision.verdict == GuardVerdict.DENIED
+        assert "action revoked" in decision.reason
+
+    def test_boundary_does_not_grant(self) -> None:
+        space, guard, agent, _ = self._setup(deferred=True)
+        decision = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert decision.verdict == GuardVerdict.BLOCKED
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        results = guard.resolve_deferred("desk", "r1", agents={agent.id: agent})
+        assert results[agent.id].verdict == GuardVerdict.DENIED
+
+    def test_boundary_without_agents_loses_the_refused_intent(self) -> None:
+        """Without the agents mapping the boundary reads the barrier by agent
+        id: the barred intent is lost and does not beat the other one."""
+        space, guard, agent, _ = self._setup(deferred=True)
+        other = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        barred = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        guard.pre_action(other, "desk", "r1", "book", 0.5)
+        assert barred.intent_id is not None
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        results = guard.resolve_deferred("desk", "r1")
+        assert results[agent.id].verdict == GuardVerdict.DENIED
+        assert results[other.id].verdict == GuardVerdict.ALLOW
+        assert guard.claim_state(barred.intent_id) == ClaimState.LOST
+
+    def test_principal_grant_waits_for_restore(self) -> None:
+        space, guard, agent, token = self._setup(deferred=True)
+        pending = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert pending.intent_id is not None
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow("desk", "action")
+        decision = guard.grant(pending.intent_id, token)
+        assert decision.verdict == GuardVerdict.DENIED
+        assert "action" in decision.reason
+        assert barrier.restore_all(token)
+        assert guard.grant(pending.intent_id, token).verdict == GuardVerdict.ALLOW
+
+    def test_principal_grant_names_a_revoked_intent(self) -> None:
+        space, guard, agent, token = self._setup(deferred=True)
+        pending = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert pending.intent_id is not None
+        guard.get_or_create_barrier(agent.id).narrow("desk", "intent")
+        decision = guard.grant(pending.intent_id, token)
+        assert decision.verdict == GuardVerdict.DENIED
+        assert "revokes intent" in decision.reason
+
+    def test_a_need_requirement_does_not_stop_the_principal_grant(self) -> None:
+        space, guard, agent, token = self._setup(deferred=True)
+        pending = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert pending.intent_id is not None
+        guard.get_or_create_barrier(agent.id).require_need("desk")
+        assert guard.grant(pending.intent_id, token).verdict == GuardVerdict.ALLOW
+
+    def test_direct_claim_is_recorded_with_a_need_mark(self) -> None:
+        space, guard, agent, _ = self._setup()
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        action_id = guard.post_action(agent, "desk", "r1", "booked", result=None)
+        assert isinstance(space.get_mark(action_id), Action)
+        needs = self._system_needs(space)
+        assert [n.context["action_id"] for n in needs] == [str(action_id)]
+        other = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        decision = guard.pre_action(other, "desk", "r1", "book", 0.9)
+        assert decision.verdict == GuardVerdict.CONFLICT
+
+    def test_direct_claim_without_the_required_need_writes_a_need_mark(self) -> None:
+        space, guard, agent, _ = self._setup()
+        guard.get_or_create_barrier(agent.id).require_need("desk")
+        action_id = guard.post_action(agent, "desk", "r1", "booked", result=None)
+        needs = self._system_needs(space)
+        assert [n.context["action_id"] for n in needs] == [str(action_id)]
+
+    def test_action_under_an_earlier_lease_is_recorded(self) -> None:
+        space, guard, agent, _ = self._setup()
+        decision = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert decision.verdict == GuardVerdict.ALLOW
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        # No intent id: post_action finds the agent's own lease (G6, step 2).
+        action_id = guard.post_action(agent, "desk", "r1", "booked", result=None)
+        assert isinstance(space.get_mark(action_id), Action)
+        assert self._system_needs(space) == []
+
+    def test_failed_action_is_recorded_without_a_need_mark(self) -> None:
+        space, guard, agent, _ = self._setup()
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        action_id = guard.post_action(
+            agent, "desk", "r1", "booked", result=None, failed=True
+        )
+        assert isinstance(space.get_mark(action_id), Action)
+        assert self._system_needs(space) == []
+
+    def test_the_first_refusal_names_the_revoked_action(self) -> None:
+        """A need cannot lift a revocation, so the reason must not ask for
+        one (P38)."""
+        space, guard, agent, _ = self._setup()
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow_all("action")
+        barrier.require_need_all()
+        decision = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert decision.verdict == GuardVerdict.DENIED
+        assert "action revoked" in decision.reason
+
+    def test_boundary_loses_a_restricted_intent_of_an_unmapped_agent(self) -> None:
+        """The boundary reads the barrier by agent id also for an agent
+        missing from the mapping."""
+        space, guard, agent, _ = self._setup(deferred=True)
+        other = Agent(name="b", scopes={"desk": ["intent", "action"]})
+        barred = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        guard.pre_action(other, "desk", "r1", "book", 0.5)
+        assert barred.intent_id is not None
+        guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+        results = guard.resolve_deferred("desk", "r1", agents={other.id: other})
+        assert results[agent.id].verdict == GuardVerdict.DENIED
+        assert results[other.id].verdict == GuardVerdict.ALLOW
+        assert guard.claim_state(barred.intent_id) == ClaimState.LOST
+
+    def test_direct_claim_under_an_intent_revocation_writes_a_need_mark(self) -> None:
+        """Restricted means intents or actions revoked; either one makes a
+        direct claim a breach."""
+        space, guard, agent, _ = self._setup()
+        guard.get_or_create_barrier(agent.id).narrow("desk", "intent")
+        action_id = guard.post_action(agent, "desk", "r1", "booked", result=None)
+        needs = self._system_needs(space)
+        assert [n.context["action_id"] for n in needs] == [str(action_id)]
+
+    def test_a_failed_action_elsewhere_keeps_the_lease(self) -> None:
+        """A failed action ends the named lease only on its own scope and
+        resource."""
+        space = MarkSpace(scopes=[Scope(name="desk"), Scope(name="lab")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(
+            name="a",
+            scopes={n: ["intent", "action"] for n in ("desk", "lab")},
+        )
+        lease = guard.pre_action(agent, "desk", "r1", "book", 0.9)
+        assert lease.intent_id is not None
+        guard.post_action(
+            agent, "lab", "r1", "booked", {}, intent_id=lease.intent_id, failed=True
+        )
+        guard.post_action(
+            agent, "desk", "r3", "booked", {}, intent_id=lease.intent_id, failed=True
+        )
+        assert guard.claim_state(lease.intent_id) == ClaimState.GRANTED
+
+    def test_breach_needs_are_not_lost_to_the_mark_quota(self) -> None:
+        """The per-agent quota does not apply to the guard's own agent."""
+        space, guard, _, _ = self._setup(max_marks_per_agent=2)
+        for k in range(3):
+            agent = Agent(name=f"a{k}", scopes={"desk": ["intent", "action"]})
+            guard.get_or_create_barrier(agent.id).narrow("desk", "action")
+            guard.post_action(agent, "desk", f"r{k}", "booked", result=None)
+        assert len(self._system_needs(space)) == 3
+
+
+class TestRestrictedCompetitorsTakeNoPart:
+    """A pending intent of an agent restricted in its scope neither beats nor
+    blocks another agent's intent (spec 9.8, G3 rules 4 and 5)."""
+
+    @staticmethod
+    def _restrict(guard: Guard, agent: Agent) -> None:
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow_all("intent")
+        barrier.narrow_all("action")
+
+    def test_a_restricted_intent_in_a_deferred_ancestor_does_not_win(self) -> None:
+        space = MarkSpace(
+            scopes=[Scope(name="ops", deferred=True), Scope(name="ops/desk")]
+        )
+        space.set_clock(1000000.0)
+        guard = Guard(space, principal_token=uuid.uuid4())
+        a = Agent(name="a", scopes={"ops": ["intent", "action"]})
+        b = Agent(name="b", scopes={"ops/desk": ["intent", "action"]})
+        assert (
+            guard.pre_action(a, "ops", "r1", "use", 0.9).verdict == GuardVerdict.BLOCKED
+        )
+        self._restrict(guard, a)
+        assert (
+            guard.pre_action(b, "ops/desk", "r1", "use", 0.5).verdict
+            == GuardVerdict.ALLOW
+        )
+
+    def test_a_restricted_intent_does_not_block_a_direct_claim(self) -> None:
+        space = MarkSpace(
+            scopes=[Scope(name="ops", deferred=True), Scope(name="ops/desk")]
+        )
+        space.set_clock(1000000.0)
+        guard = Guard(space, principal_token=uuid.uuid4())
+        a = Agent(name="a", scopes={"ops": ["intent", "action"]})
+        c = Agent(name="c", scopes={"ops/desk": ["intent", "action"]})
+        assert (
+            guard.pre_action(a, "ops", "r1", "use", 0.9).verdict == GuardVerdict.BLOCKED
+        )
+        self._restrict(guard, a)
+        action_id = guard.post_action(c, "ops/desk", "r1", "used", "ok")
+        assert isinstance(space.get_mark(action_id), Action)
+
+    def test_a_restricted_intent_makes_no_yield_all_pair(self) -> None:
+        space = MarkSpace(
+            scopes=[Scope(name="desk", conflict_policy=ConflictPolicy.YIELD_ALL)]
+        )
+        space.set_clock(1000000.0)
+        token = uuid.uuid4()
+        guard = Guard(space, principal_token=token)
+        a, b, x = (
+            Agent(name=n, scopes={"desk": ["intent", "action", "need"]})
+            for n in ("a", "b", "x")
+        )
+        dx = guard.pre_action(x, "desk", "r1", "use", 0.5)
+        da = guard.pre_action(a, "desk", "r1", "use", 0.5)
+        assert da.verdict == GuardVerdict.BLOCKED and dx.intent_id is not None
+        guard.release(dx.intent_id, token)
+        self._restrict(guard, a)
+        assert (
+            guard.pre_action(b, "desk", "r1", "use", 0.5).verdict == GuardVerdict.ALLOW
+        )
+
+    def test_a_competitor_restricted_elsewhere_still_counts(self) -> None:
+        """The competitor's barrier is read in its own intent's scope: an
+        agent restricted only in the inner scope still wins with its intent
+        in the outer deferred scope."""
+        space = MarkSpace(
+            scopes=[Scope(name="ops", deferred=True), Scope(name="ops/desk")]
+        )
+        space.set_clock(1000000.0)
+        guard = Guard(space, principal_token=uuid.uuid4())
+        a = Agent(name="a", scopes={"ops": ["intent", "action"]})
+        b = Agent(name="b", scopes={"ops/desk": ["intent", "action"]})
+        c = Agent(name="c", scopes={"ops/desk": ["intent", "action"]})
+        assert (
+            guard.pre_action(a, "ops", "r1", "use", 0.9).verdict == GuardVerdict.BLOCKED
+        )
+        guard.get_or_create_barrier(a.id).narrow("ops/desk", "action")
+        decision = guard.pre_action(b, "ops/desk", "r1", "use", 0.5)
+        assert decision.verdict == GuardVerdict.CONFLICT
+        with pytest.raises(NotGrantedError):
+            guard.post_action(c, "ops/desk", "r1", "used", "ok")
+
+
+class TestRestrictedAgentAsksThePrincipal:
+    """A need mark of an agent restricted in its scope goes to the principal
+    in _system, one open per agent (spec 9.8)."""
+
+    @staticmethod
+    def _setup() -> tuple[MarkSpace, Guard, Agent, uuid.UUID]:
+        space = MarkSpace(scopes=[Scope(name="lunch"), Scope(name="desk")])
+        space.set_clock(1000000.0)
+        token = uuid.uuid4()
+        guard = Guard(space, principal_token=token)
+        agent = Agent(
+            name="a",
+            scopes={
+                n: ["intent", "action", "need", "warning", "observation"]
+                for n in ("lunch", "desk")
+            },
+        )
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow_all("observation")
+        barrier.narrow_all("action")
+        barrier.require_need_all()
+        return space, guard, agent, token
+
+    @staticmethod
+    def _ask(guard: Guard, agent: Agent, scope: str = "lunch") -> uuid.UUID:
+        return guard.write_mark(
+            agent, Need(scope=scope, question="may I order?", context={"k": "v"})
+        )
+
+    @staticmethod
+    def _resolve(space: MarkSpace, need_id: uuid.UUID) -> None:
+        principal = Agent(name="p", scopes={"_system": ["action"]})
+        action_id = space.write(
+            principal,
+            Action(scope="_system", resource="n", action="seen", result="ok"),
+        )
+        space.resolve(need_id, action_id)
+
+    def test_the_need_goes_to_system_and_no_agent_reads_it(self) -> None:
+        space, guard, agent, _ = self._setup()
+        need_id = self._ask(guard, agent)
+        need = space.get_mark(need_id)
+        assert isinstance(need, Need) and need.scope == "_system"
+        assert need.context["agent_id"] == str(agent.id)
+        assert need.context["scope"] == "lunch"
+        assert need.context["agent_context"] == {"k": "v"}
+        assert space.read(scope="lunch", mark_type=MarkType.NEED) == []
+        reader = Agent(name="r", scopes={"lunch": ["need"]})
+        assert space.read(scope="_system", reader=reader) == []
+
+    def test_one_open_need_until_the_principal_resolves_it(self) -> None:
+        space, guard, agent, _ = self._setup()
+        first = self._ask(guard, agent)
+        with pytest.raises(ScopeError, match="open need mark for the principal"):
+            self._ask(guard, agent, "desk")
+        self._resolve(space, first)
+        second = self._ask(guard, agent, "desk")
+        assert second != first
+
+    def test_it_meets_the_need_requirement_in_its_scope_only(self) -> None:
+        space, guard, agent, _ = self._setup()
+        self._ask(guard, agent, "lunch")
+        guard.write_mark(agent, Warning(scope="lunch", topic="t", reason="r"))
+        with pytest.raises(ScopeError, match="must write a Need mark"):
+            guard.write_mark(agent, Warning(scope="desk", topic="t", reason="r"))
+
+    def test_an_agent_without_need_permission_cannot_ask(self) -> None:
+        space, guard, _, _ = self._setup()
+        agent = Agent(name="b", scopes={"lunch": ["intent", "action"]})
+        guard.get_or_create_barrier(agent.id).narrow_all("action")
+        with pytest.raises(ScopeError, match="not authorized"):
+            self._ask(guard, agent)
+        assert space.read(scope="_system", mark_type=MarkType.NEED) == []
+
+    def test_breaches_in_sub_scopes_share_one_need(self) -> None:
+        """A sub-scope counts as its registered scope: one open breach need
+        mark for claims on many sub-scopes."""
+        space = MarkSpace(scopes=[Scope(name="equipment")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(name="a", scopes={"equipment": ["action"]})
+        guard.get_or_create_barrier(agent.id).narrow("equipment", "action")
+        for k in range(1, 4):
+            guard.post_action(agent, f"equipment/x{k}", "r", "used", result=None)
+        breaches = [
+            n
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need) and n.context["trigger"] == "barrier_breach"
+        ]
+        assert len(breaches) == 1
+
+    def test_nested_registered_scopes_keep_their_own_need(self) -> None:
+        """The key is the registered scope a claim's scope resolves to, also
+        when a registered scope lies inside another."""
+        space = MarkSpace(scopes=[Scope(name="a"), Scope(name="a/b")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(name="x", scopes={"a": ["action"]})
+        guard.get_or_create_barrier(agent.id).narrow_all("action")
+        guard.post_action(agent, "a/b/c", "r1", "used", result=None)
+        guard.post_action(agent, "a", "r2", "used", result=None)
+        breaches = [
+            n
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need) and n.context["trigger"] == "barrier_breach"
+        ]
+        assert sorted(str(n.context["scope"]) for n in breaches) == ["a", "a/b/c"]
+
+    def test_a_new_write_budget_keeps_the_open_need(self) -> None:
+        space, guard, agent, token = self._setup()
+        self._ask(guard, agent)
+        budget = WriteBudget(per_hour={MarkType.NEED: 10.0})
+        assert guard.set_write_budget(agent.id, budget, token)
+        with pytest.raises(ScopeError, match="open need mark for the principal"):
+            self._ask(guard, agent, "desk")
+
+    def test_it_meets_the_need_requirement_only_while_restricted(self) -> None:
+        space, guard, agent, token = self._setup()
+        self._ask(guard, agent, "lunch")
+        barrier = guard.get_or_create_barrier(agent.id)
+        assert barrier.restore("*", "action", token)
+        with pytest.raises(ScopeError, match="must write a Need mark"):
+            guard.write_mark(agent, Warning(scope="lunch", topic="t", reason="r"))
+
+    def test_no_agent_warns_on_the_need_for_the_principal(self) -> None:
+        space, guard, agent, _ = self._setup()
+        need_id = self._ask(guard, agent)
+        other = Agent(name="b", scopes={"lunch": ["warning"]})
+        for writer in (agent, other):
+            with pytest.raises(ScopeError, match="may not warn on a mark in '_system'"):
+                guard.write_mark(
+                    writer,
+                    Warning(scope="lunch", topic="t", reason="r", invalidates=need_id),
+                )
+        assert [n.id for n in space.aggregate_needs()[0].needs] == [need_id]
+
+    def test_it_meets_the_need_requirement_in_ancestor_scopes(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="rooms"), Scope(name="rooms/shared")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(
+            name="a",
+            scopes={
+                n: ["need", "warning", "action"] for n in ("rooms", "rooms/shared")
+            },
+        )
+        barrier = guard.get_or_create_barrier(agent.id)
+        barrier.narrow("rooms", "action")
+        barrier.narrow("rooms/shared", "action")
+        barrier.require_need("rooms")
+        guard.write_mark(agent, Need(scope="rooms/shared", question="q"))
+        guard.write_mark(agent, Warning(scope="rooms", topic="t", reason="r"))
+
+    def test_the_mark_limit_does_not_refuse_the_need(self) -> None:
+        """The space's mark limit does not refuse the guard's need marks for
+        the principal, also when its agent holds as many marks as the
+        limit."""
+        space = MarkSpace(scopes=[Scope(name="lunch")], max_marks_per_agent=1)
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        other = Agent(name="o", scopes={"lunch": ["action"]})
+        guard.get_or_create_barrier(other.id).narrow("lunch", "action")
+        guard.post_action(other, "lunch", "r1", "ordered", result=None)
+        agent = Agent(name="a", scopes={"lunch": ["need", "action"]})
+        guard.get_or_create_barrier(agent.id).narrow("lunch", "action")
+        need_id = guard.write_mark(agent, Need(scope="lunch", question="q"))
+        need = space.get_mark(need_id)
+        assert isinstance(need, Need) and need.scope == "_system"
+
+    def test_a_failed_write_of_the_need_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the space refuses the need for the principal, write_mark
+        raises that error; it does not report a false open need."""
+        space, guard, agent, _ = self._setup()
+        write = space.write
+
+        def refuse_system(writer: Agent, mark: AnyMark) -> uuid.UUID:
+            if mark.scope == "_system":
+                raise ValidationError("refused")
+            return write(writer, mark)
+
+        monkeypatch.setattr(space, "write", refuse_system)
+        with pytest.raises(ValidationError, match="refused"):
+            self._ask(guard, agent)
+
+    def test_an_unrestricted_scope_keeps_its_needs(self) -> None:
+        space = MarkSpace(scopes=[Scope(name="lunch")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(name="a", scopes={"lunch": ["need", "observation"]})
+        guard.get_or_create_barrier(agent.id).narrow("lunch", "observation")
+        need_id = guard.write_mark(agent, Need(scope="lunch", question="q"))
+        need = space.get_mark(need_id)
+        assert isinstance(need, Need) and need.scope == "lunch"
+        assert need.agent_id == agent.id
+
+    def test_the_need_counts_against_the_write_budget(self) -> None:
+        space, guard, agent, token = self._setup()
+        assert guard.set_write_budget(agent.id, WriteBudget(per_hour={}), token)
+        with pytest.raises(ScopeError, match="spent its write budget for need"):
+            self._ask(guard, agent)
+        assert [
+            n.context["trigger"]
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need)
+        ] == ["write_budget"]
+
+    def test_a_failed_action_supersedes_only_its_own_intent(self) -> None:
+        """A failed action must not hide another mark of its agent."""
+        space = MarkSpace(scopes=[Scope(name="lunch")])
+        space.set_clock(1000000.0)
+        guard = Guard(space)
+        agent = Agent(name="a", scopes={"lunch": ["need", "intent", "action"]})
+        need_id = guard.write_mark(agent, Need(scope="lunch", question="q"))
+        guard.post_action(
+            agent, "lunch", "x", "ordered", {}, intent_id=need_id, failed=True
+        )
+        assert space.is_current(need_id)
+
+    def test_one_open_breach_need_per_agent_and_scope(self) -> None:
+        space, guard, agent, _ = self._setup()
+        for resource in ("r1", "r2"):
+            guard.post_action(agent, "lunch", resource, "ordered", result=None)
+        guard.post_action(agent, "desk", "r1", "booked", result=None)
+        breaches = [
+            n
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need) and n.context["trigger"] == "barrier_breach"
+        ]
+        assert sorted(n.context["scope"] for n in breaches) == ["desk", "lunch"]
+        lunch = next(n for n in breaches if n.context["scope"] == "lunch")
+        self._resolve(space, lunch.id)
+        guard.post_action(agent, "lunch", "r3", "ordered", result=None)
+        open_lunch = [
+            n
+            for n in space.read(scope="_system", mark_type=MarkType.NEED)
+            if isinstance(n, Need)
+            and n.context["trigger"] == "barrier_breach"
+            and n.context["scope"] == "lunch"
+            and n.resolved_by is None
+        ]
+        assert len(open_lunch) == 1
+
+
 class TestPerIntentCompetingSets:
     """Section 6.1: each intent is judged against its own competing set. An
     intent in an outer scope beats one in an inner scope; inside one scope the
@@ -2020,13 +2941,16 @@ class TestPerIntentCompetingSets:
                 self,
                 intent: Intent,
                 agents: dict[uuid.UUID, Agent] | None,
-                barriers: dict[uuid.UUID, BarrierSnapshot | None],
+                barriers: _BarrierView,
                 now: float,
+                lease_now: float,
             ) -> str | None:
                 checks[intent.id] = checks.get(intent.id, 0) + 1
                 if intent.agent_id == x.id and checks[intent.id] > 1:
                     return "blocked by barrier at resolution time"
-                return super()._deferred_refusal(intent, agents, barriers, now)
+                return super()._deferred_refusal(
+                    intent, agents, barriers, now, lease_now
+                )
 
         guard = ChangingGuard(s)
         guard.pre_action(x, "corp", "r", "use", 0.5)

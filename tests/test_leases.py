@@ -26,6 +26,7 @@ from markspace import (
     GuardVerdict,
     Intent,
     MarkSpace,
+    MarkType,
     Need,
     NotGrantedError,
     Observation,
@@ -40,6 +41,7 @@ from markspace.telemetry import (
     METRIC_LEASES_LOST,
     InMemorySink,
 )
+from markspace.write_budget import WriteBudget
 
 T0 = 1_000_000.0
 TTL = 30 * 60  # the default intent TTL
@@ -628,6 +630,244 @@ class TestRound11:
         with pytest.raises(ScopeError):
             guard.write_mark(w, Warning(scope="corp/b", invalidates=action_id))
         assert [x.agent_id for x in s.get_actions("corp/a", "r")] == [a.id]
+
+    def test_a_boundary_leaves_an_intent_waiting_for_the_principal_over_budget(
+        self,
+    ) -> None:
+        """The action budget refuses a boundary's lease. An intent that waits for
+        the principal stays the principal's to decide (G5)."""
+        s = tree(deferred=("corp",), yield_all=("corp/a",))
+        token = uuid.uuid4()
+        p, q = agent("p", "corp/a"), agent("q", "corp/a", "corp/b")
+        guard = Guard(
+            s,
+            principal_token=token,
+            write_budgets={
+                q.id: WriteBudget(
+                    per_hour={MarkType.INTENT: 1000.0, MarkType.ACTION: 1 / 24},
+                    period_seconds=86_400,
+                    tiers=(),
+                )
+            },
+        )
+        dp = guard.pre_action(p, "corp/a", "r", "use")
+        dq = guard.pre_action(q, "corp/a", "r", "use")
+        assert dq.verdict == GuardVerdict.BLOCKED  # the principal decides
+        assert dp.intent_id is not None and dq.intent_id is not None
+        guard.release(dp.intent_id, token)
+        assert guard.pre_action(q, "corp/b", "s", "use").verdict == GuardVerdict.ALLOW
+        out = guard.resolve_deferred("corp", "r", agents={q.id: q})
+        assert q.id not in out
+        assert state(guard, dq.intent_id) is None  # still pending
+        assert guard.grant(dq.intent_id, token).verdict == GuardVerdict.ALLOW
+
+    def _spent_agent_pending_in_corp(self) -> tuple[MarkSpace, Guard, Agent, Intent]:
+        """An agent with no room for an action has an intent pending in deferred
+        corp. The intent came through the guard's space, not through a grant."""
+        s = tree(deferred=("corp",))
+        spent = agent("spent", "corp")
+        guard = Guard(
+            s,
+            write_budgets={
+                spent.id: WriteBudget(
+                    per_hour={MarkType.INTENT: 1000.0},
+                    period_seconds=86_400,
+                    tiers=(),
+                )
+            },
+        )
+        intent = Intent(scope="corp", resource="r", action="use", confidence=0.9)
+        intent_id = s.write(spent, intent)
+        mark = s.get_mark(intent_id)
+        assert isinstance(mark, Intent)
+        return s, guard, spent, mark
+
+    def test_an_intent_the_budget_will_refuse_does_not_beat_another_agent(self) -> None:
+        _, guard, spent, intent = self._spent_agent_pending_in_corp()
+        other = agent("other", "corp/a")
+        assert (
+            guard.pre_action(other, "corp/a", "r", "use").verdict == GuardVerdict.ALLOW
+        )
+        assert (
+            guard.resolve_deferred("corp", "r")[spent.id].verdict == GuardVerdict.DENIED
+        )
+        assert state(guard, intent.id) == ClaimState.LOST
+
+    def test_an_intent_the_budget_will_refuse_does_not_block_a_direct_claim(
+        self,
+    ) -> None:
+        s, guard, _, _ = self._spent_agent_pending_in_corp()
+        other = agent("other", "corp/a")
+        guard.post_action(other, "corp/a", "r", "used", "ok")
+        assert [a.agent_id for a in s.get_actions("corp/a", "r")] == [other.id]
+
+    def test_a_competitor_spent_only_by_its_leases_does_not_beat_another(self) -> None:
+        s = tree(deferred=("corp",))
+        token = uuid.uuid4()
+        spent = agent("spent", "corp")
+        guard = Guard(
+            s,
+            principal_token=token,
+            write_budgets={
+                spent.id: WriteBudget(
+                    per_hour={MarkType.INTENT: 1000.0, MarkType.ACTION: 1 / 24},
+                    period_seconds=86_400,
+                    tiers=(),
+                )
+            },
+        )
+        guard.pre_action(spent, "corp", "held", "use")
+        assert (
+            guard.resolve_deferred("corp", "held")[spent.id].verdict
+            == GuardVerdict.ALLOW
+        )
+        s.write(spent, Intent(scope="corp", resource="r", action="use", confidence=0.9))
+        other = agent("other", "corp/a")
+        assert (
+            guard.pre_action(other, "corp/a", "r", "use").verdict == GuardVerdict.ALLOW
+        )
+
+    def test_a_spent_agent_waiting_for_the_principal_still_counts(self) -> None:
+        """The principal can grant it, so it still makes a YIELD_ALL pair."""
+        s = tree(yield_all=("corp/a",))
+        spent = agent("spent", "corp/a")
+        guard = Guard(
+            s,
+            write_budgets={
+                spent.id: WriteBudget(
+                    per_hour={MarkType.INTENT: 1000.0},
+                    period_seconds=86_400,
+                    tiers=(),
+                )
+            },
+        )
+        s.write(
+            spent, Intent(scope="corp/a", resource="r", action="use", confidence=0.5)
+        )
+        other = agent("other", "corp/a")
+        assert (
+            guard.pre_action(other, "corp/a", "r", "use").verdict
+            == GuardVerdict.BLOCKED
+        )
+
+    def _restricted_holder(
+        self, revoked: str = "intent"
+    ) -> tuple[MarkSpace, Guard, Agent, uuid.UUID, uuid.UUID]:
+        """An agent that holds an action in corp/a and is then restricted there."""
+        s = tree()
+        token = uuid.uuid4()
+        guard = Guard(s, principal_token=token)
+        a = Agent(
+            name="a",
+            scopes={"corp/a": ["intent", "action", "warning", "observation"]},
+            max_source=Source.FLEET,
+        )
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        guard.get_or_create_barrier(a.id).narrow("corp/a", revoked)
+        return s, guard, a, action_id, token
+
+    @pytest.mark.parametrize("revoked", ["intent", "action"])
+    def test_a_restricted_agent_cannot_free_its_own_action_with_a_warning(
+        self, revoked: str
+    ) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder(revoked)
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/a", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_cannot_free_its_own_action_with_a_supersede(
+        self,
+    ) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder()
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/a", supersedes=action_id))
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(
+                a,
+                Observation(
+                    scope="corp/a",
+                    topic="t",
+                    content="c",
+                    confidence=0.5,
+                    source=Source.FLEET,
+                    supersedes=action_id,
+                ),
+            )
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_cannot_free_its_action_from_another_scope(
+        self,
+    ) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = Agent(
+            name="a",
+            scopes={"corp/a": ["intent", "action", "warning"], "corp/b": ["warning"]},
+        )
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        guard.get_or_create_barrier(a.id).narrow("corp/a", "intent")
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/b", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_can_still_give_up_a_lease(self) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"corp/a": ["intent", "action", "warning"]})
+        b = agent("b", "corp/a")
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        guard.get_or_create_barrier(a.id).narrow("corp/a", "intent")
+        assert d.intent_id is not None
+        guard.write_mark(a, Warning(scope="corp/a", supersedes=d.intent_id))
+        assert state(guard, d.intent_id) == ClaimState.RELEASED
+        assert guard.pre_action(b, "corp/a", "r", "use").verdict == GuardVerdict.ALLOW
+
+    def test_a_restricted_agent_cannot_hide_another_agents_action(self) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = agent("a", "corp/a")
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        w = Agent(name="w", scopes={"corp/a": ["intent", "action", "warning"]})
+        guard.get_or_create_barrier(w.id).narrow("corp/a", "action")
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(w, Warning(scope="corp/a", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_can_warn_on_what_holds_nothing(self) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder()
+        failed_id = guard.post_action(a, "corp/a", "other", "used", "boom", failed=True)
+        guard.write_mark(a, Warning(scope="corp/a", invalidates=failed_id))
+        guard.write_mark(a, Warning(scope="corp/a", reason="a plain warning"))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restriction_elsewhere_does_not_stop_a_warning_on_this_action(
+        self,
+    ) -> None:
+        s, guard, _, action_id, _ = self._restricted_holder()
+        b = Agent(
+            name="b",
+            scopes={"corp/a": ["warning"], "corp/b": ["intent", "action"]},
+        )
+        guard.get_or_create_barrier(b.id).narrow("corp/b", "intent")
+        guard.write_mark(b, Warning(scope="corp/a", invalidates=action_id))
+        assert s.get_actions("corp/a", "r") == []
+
+    def test_the_principal_ends_the_restriction_and_the_agent_can_warn_again(
+        self,
+    ) -> None:
+        s, guard, a, action_id, token = self._restricted_holder()
+        assert guard.get_or_create_barrier(a.id).restore("corp/a", "intent", token)
+        guard.write_mark(a, Warning(scope="corp/a", invalidates=action_id))
+        assert s.get_actions("corp/a", "r") == []
 
     def test_a_boundary_does_not_grant_an_intent_waiting_for_the_principal(
         self,

@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Statistical Envelope - Behavioral anomaly detection for agents.
+Statistical Envelope - Behavioral anomaly detection for agents, as a
+monitor.
 
 Each agent gets its own AnomalyDetector instance that learns the agent's
 individual baseline. The envelope orchestrates windowing, per-agent
 detector lifecycle, cross-agent concentration checks, and the monotonic
-RESTRICTED state machine (P40, P41).
+RESTRICTED state machine (P40, P41). It is a monitor: nothing in the library
+acts on its verdicts, and it sees only what its caller feeds it (a write hook
+for stored marks, record_attempt() for refused attempts).
 
 Detection algorithms are pluggable via the AnomalyDetector protocol.
 The default WelfordDetector uses streaming mean/variance (Welford's
@@ -31,7 +34,7 @@ from markspace.core import AnyMark, MarkType, Observation, Warning
 class EnvelopeVerdict(str, Enum):
     NORMAL = "normal"
     FLAGGED = "flagged"  # suspicious, not blocked
-    RESTRICTED = "restricted"  # triggers barrier narrowing
+    RESTRICTED = "restricted"  # individual anomaly, until a reset (P40)
 
 
 # -----------------------------------------------------------------------
@@ -43,8 +46,8 @@ class AnomalyDetector(ABC):
     """Per-agent anomaly detector. One instance per tracked agent.
 
     The envelope feeds completed window counts via observe(), then asks
-    is_anomalous() with the in-progress window to decide whether to
-    restrict the agent. Each detector maintains its own baseline -
+    is_anomalous() with the current window to decide whether its verdict
+    for the agent is RESTRICTED. Each detector maintains its own baseline -
     no assumption that agents share the same activity pattern.
     """
 
@@ -64,18 +67,18 @@ class AnomalyDetector(ABC):
 
     @abstractmethod
     def is_anomalous(self, current_counts: dict[MarkType, int]) -> bool:
-        """Check if current (in-progress) window counts are anomalous
+        """Check if the counts of the current window are anomalous
         relative to this agent's established baseline."""
         ...
 
     @abstractmethod
-    def export_state(self) -> dict[str, Any]:
-        """Serialize detector state for persistence/transfer."""
+    def save_state(self) -> dict[str, Any]:
+        """Serialize detector state, to load it after a restart."""
         ...
 
     @abstractmethod
-    def import_state(self, data: dict[str, Any]) -> None:
-        """Restore detector state from serialized form."""
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Load detector state that save_state() returned."""
         ...
 
     def seed_baseline(self, expected: dict[MarkType, float]) -> None:  # noqa: ARG002
@@ -200,7 +203,7 @@ class WelfordDetector(AnomalyDetector):
             current_counts
         )
 
-    def export_state(self) -> dict[str, Any]:
+    def save_state(self) -> dict[str, Any]:
         return {
             "completed_windows": self._completed_windows,
             "active_windows": self._active_windows,
@@ -209,7 +212,7 @@ class WelfordDetector(AnomalyDetector):
             "welford_m2": {k.value: v for k, v in self._m2.items()},
         }
 
-    def import_state(self, data: dict[str, Any]) -> None:
+    def load_state(self, data: dict[str, Any]) -> None:
         self._completed_windows = max(
             self._completed_windows, data.get("completed_windows", 0)
         )
@@ -223,7 +226,7 @@ class WelfordDetector(AnomalyDetector):
             self._mean[MarkType(k)] = v
         for k, v in data.get("welford_m2", {}).items():
             self._m2[MarkType(k)] = v
-        # Imported state is already initialized - skip cold buffer
+        # Loaded state is already initialized - skip cold buffer
         self._cold_buffer = None
 
     # -- Private --
@@ -388,7 +391,6 @@ class EnvelopeConfig:
         {MarkType.OBSERVATION, MarkType.WARNING}
     )
     concentration_threshold: int = 3  # agents on same scope+topic = FLAGGED
-    global_escalation_threshold: int = 3  # flags before global restriction
     exempt_agents: set[uuid.UUID] = field(default_factory=set)
 
 
@@ -429,9 +431,13 @@ class StatisticalEnvelope:
         self,
         config: EnvelopeConfig | None = None,
         clock: Callable[[], float] | None = None,
+        principal_token: uuid.UUID | None = None,
     ) -> None:
         self._config = config or EnvelopeConfig()
         self._clock = clock or time.time
+        # Only this token resets a restricted agent (P40). Without one, a
+        # RESTRICTED verdict stays for good.
+        self._principal_token: uuid.UUID | None = principal_token
         self._lock = threading.RLock()
         self._agents: dict[uuid.UUID, _AgentState] = {}
         # Cross-agent: (scope, topic) -> set of agent_ids in current window
@@ -459,11 +465,6 @@ class StatisticalEnvelope:
             stats.welford_m2 = diag["m2"]
             stats.completed_windows = diag["completed_windows"]
         return stats
-
-    @property
-    def global_escalation_threshold(self) -> int:
-        """Number of flags before global restriction is applied."""
-        return self._config.global_escalation_threshold
 
     def add_exempt_agent(self, agent_id: uuid.UUID) -> None:
         """Add an agent ID to the exempt set. record() ignores exempt agents."""
@@ -527,13 +528,12 @@ class StatisticalEnvelope:
                 self._recent_writers.setdefault(key, set()).add(agent_id)
 
     def record_attempt(self, agent_id: uuid.UUID, mark_type: MarkType) -> None:
-        """Record a rejected action attempt (e.g., conflict) in the envelope.
+        """Record a refused attempt (e.g., a conflict) in the envelope.
 
-        When guard._pre_action_inner() rejects an action due to resource
-        conflict, the agent produced no marks - making repeated conflict
-        attempts invisible to anomaly detection. This method makes those
-        attempts visible by incrementing the window count and tracking the
-        target, without writing an actual mark to the space.
+        A refused attempt stores no mark, so a write hook does not see it.
+        The caller reports it here, for example after a guard call that
+        returns CONFLICT with no intent id: the window count grows, and no
+        mark is written to the space.
         """
         if agent_id in self._config.exempt_agents:
             return
@@ -594,10 +594,12 @@ class StatisticalEnvelope:
             return self._make_agent_stats(state)
 
     def reset(self, agent_id: uuid.UUID, principal_token: uuid.UUID) -> bool:
-        """Reset an agent's RESTRICTED status. Requires principal token.
-
-        Note: principal_token validation is the caller's responsibility.
         """
+        Reset an agent's RESTRICTED status (P40). A wrong principal token, or
+        an envelope without one, changes nothing and returns False.
+        """
+        if self._principal_token is None or principal_token != self._principal_token:
+            return False
         with self._lock:
             state = self._agents.get(agent_id)
             if state is None or not state.restricted:
@@ -605,20 +607,23 @@ class StatisticalEnvelope:
             state.restricted = False
             return True
 
-    def export_stats(self) -> dict[str, Any]:
-        """Export all agent detector states as a serializable dict."""
+    def save_state(self) -> dict[str, Any]:
+        """
+        Save the state of each agent (detector state and the restricted
+        flag) as a serializable dict, to load it after a restart.
+        """
         with self._lock:
             result: dict[str, Any] = {}
             for agent_id, state in self._agents.items():
-                exported = state.detector.export_state()
-                exported["restricted"] = state.restricted
-                result[str(agent_id)] = exported
+                saved = state.detector.save_state()
+                saved["restricted"] = state.restricted
+                result[str(agent_id)] = saved
             return result
 
-    def import_stats(self, data: dict[str, Any]) -> None:
-        """Import previously exported stats. Additive."""
+    def load_state(self, data: dict[str, Any]) -> None:
+        """Load state that save_state() returned. Additive."""
         with self._lock:
-            for agent_id_str, stat_data in data.items():
+            for agent_id_str, saved_agent in data.items():
                 agent_id = uuid.UUID(agent_id_str)
                 state = self._agents.get(agent_id)
                 if state is None:
@@ -627,8 +632,11 @@ class StatisticalEnvelope:
                         current_window=_WindowCounts(start=self._clock()),
                     )
                     self._agents[agent_id] = state
-                state.detector.import_state(stat_data)
-                state.restricted = stat_data.get("restricted", False)
+                state.detector.load_state(saved_agent)
+                # Loading saved state can set a restriction, never lift it (P40).
+                state.restricted = state.restricted or bool(
+                    saved_agent.get("restricted", False)
+                )
 
     # ------------------------------------------------------------------
     # Private

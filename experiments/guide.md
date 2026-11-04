@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 563 tests (tests/ and experiments/stress_test/)
+pytest  # 921 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -42,13 +42,25 @@ python -m experiments.composition_stress.run
 
 No arguments. Results print to stdout. Analysis in [composition_stress/analysis.md](composition_stress/analysis.md).
 
+### Envelope Simulator
+
+False and missed RESTRICTED verdicts of the statistical envelope (spec 9.7, a monitor) on synthetic workloads, and a replay of the gpt-oss-120b defense trials of commit 0bf9a05. Pure Python. The full run (400 seeds of 15,000 windows per profile) took 445 s on 48 processes; `--quick` (20 seeds of 2,000 windows) takes about 10 s.
+
+```bash
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --quick
+python -m experiments.envelope_sim.measure --out experiments/envelope_sim/results --detector write_budget
+```
+
+Writes `d0.json` (the envelope's default detector) or `write_budget.json` (the write budgets of spec 9.14, with the settings it measured); `--quick` writes `*_quick.json`. `python -m experiments.envelope_sim.report experiments/envelope_sim/results/d0.json experiments/envelope_sim/analysis.md experiments/envelope_sim/results/write_budget.json` writes the analysis from them: [envelope_sim/analysis.md](envelope_sim/analysis.md).
+
 ## LLM Experiments
 
 These call model APIs and require keys in `.env`.
 
 ### Stress Test
 
-Full 105-agent office coordination scenario. 100 employees across 5 departments coordinate meetings, tasks, equipment, parking, and lunch through the shared mark space. Two external system bots publish low-trust observations. Scenario design in [stress_test/design.md](stress_test/design.md).
+Full 105-agent office coordination scenario. 100 employees across 5 departments coordinate meetings, tasks, equipment, parking, and lunch through the shared mark space. Two external system bots publish capacity observations and room warnings. Scenario design in [stress_test/design.md](stress_test/design.md).
 
 ```bash
 # Smoke test (10 agents, 3 rounds)
@@ -62,7 +74,7 @@ python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
 python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
     --adversarial 5 --adversarial-mode confidence
 
-# With defense stack (envelope, barrier, probe)
+# With the defenses (bot write budgets, barrier, probe) and the envelope as a monitor
 python experiments/stress_test/run.py --agents-per-dept 20 --rounds 20 \
     --adversarial 5 --adversarial-mode rate_spike --defense --probe-interval 5
 
@@ -98,11 +110,11 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--pace-min-rps` | 0.05 | Lowest rate after cuts |
 | `--pace-target-fraction` | 0.6 | Stop stepping once this run's generated tokens in the last minute reach this share of the provider's reported limit |
 | `--pace-cooldown-seconds` | 300 | No step for this long after a rate-limit signal |
-| `--output-dir` | auto | Output directory |
+| `--output-dir` | auto | Output directory; a relative path is taken from `experiments/stress_test/` |
 | `--adversarial` | 0 | Number of adversarial agents |
-| `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift` |
+| `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift`, `low_rate_drift` |
 | `--scale-resources` | false | Scale resources proportionally with agents |
-| `--defense` | false | Enable defense stack (envelope, barrier, probe) |
+| `--defense` | false | Enable the defenses (bot write budgets, barrier, probe) and the envelope as a monitor |
 | `--probe-interval` | 5 | Run diagnostic probe every N rounds (requires `--defense`) |
 | `--resume` | false | Resume from existing output |
 
@@ -127,8 +139,9 @@ python experiments/trials/orchestrate.py --experiment scaling
 # Scaling with proportional resources
 python experiments/trials/orchestrate.py --experiment scaling_proportional
 
-# Defense stack (envelope, barrier, probe scenarios)
-python experiments/trials/orchestrate.py --experiment defense --models gpt-oss-120b
+# Defenses (write budgets for the bots, barrier, probe; the envelope as a monitor)
+# run.py appends to existing JSONL files: move earlier runs away first, or pass --resume to skip completed runs
+python experiments/trials/orchestrate.py --experiment defense --models glm-5p3-flash
 
 # All experiments
 python experiments/trials/orchestrate.py --experiment all
@@ -274,6 +287,7 @@ Per-model defaults are configured in the orchestrator:
 |-------|-------------|----------------|
 | gpt-oss-120b | 30 | 20 |
 | mercury-2 | 8 | 10 |
+| glm-5p3-flash | 30 | 20 |
 
 Override with `--requests-per-second` and `--max-concurrent` on `stress_test/run.py`, or adjust `MODEL_DEFAULTS` in `orchestrate.py`.
 
@@ -283,8 +297,9 @@ Model pricing per million tokens (check provider pages for current rates):
 
 | Model | Prompt | Completion | Provider |
 |-------|--------|------------|----------|
-| [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 | $0.60 | [Fireworks](https://fireworks.ai/) |
+| [gpt-oss-120b](https://fireworks.ai/models/fireworks/gpt-oss-120b) | $0.15 ($0.015 cached) | $0.60 | [Fireworks](https://fireworks.ai/) (model page, read 2026-11-03) |
 | [mercury-2](https://docs.inceptionlabs.ai/) | $0.25 | $0.75 | [Inception AI](https://www.inceptionlabs.ai/) |
+| [glm-5p3-flash](https://fireworks.ai/models/fireworks/glm-5p3-flash) | $0.15 ($0.03 cached) | $0.50 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-11-03) |
 | deepseek-v4p1-flash-1017 | $0.30 ($0.006 cached) | $1.20 (thinking included) | [Fireworks](https://fireworks.ai/) (model page, read 2026-10-30) |
 
 Actual costs from trial data (105 agents, 20 rounds, averaged across 5 seeds):

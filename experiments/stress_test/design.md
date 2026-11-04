@@ -2,7 +2,7 @@
 
 ## Context
 
-The [validation](../validation/analysis.md) tested 1–10 agents on a single resource type (calendar booking) using only INTENT marks, ACTION marks, OPEN visibility, HIGHEST_CONFIDENCE, and FIRST_WRITER. That's ~30% of the protocol. This stress test exercises the full protocol surface: all 5 mark types, all 3 visibility levels, all 3 conflict policies, trust-weighted external agents, scope hierarchy, projected reads, warning invalidation, need escalation, and observation decay, all at 100-agent scale across 5 resource types over 10 rounds.
+The [validation](../validation/analysis.md) tested 1–10 agents on a single resource type (calendar booking) using only INTENT marks, ACTION marks, OPEN visibility, HIGHEST_CONFIDENCE, and FIRST_WRITER. That's ~30% of the protocol. This stress test exercises the full protocol surface: all 5 mark types, all 3 visibility levels, all 3 conflict policies, two external agents, scope hierarchy, projected reads, warning invalidation, need escalation, and observation decay, all at 100-agent scale across 5 resource types over 10 rounds.
 
 Single model: gpt-oss-120b. No model comparison; pure protocol stress test.
 
@@ -14,7 +14,7 @@ Clock advances 4 hours between rounds. Intent TTL = 2 hours → intents expire b
 
 ## Agents
 
-### Department Agents (100, Source.FLEET, trust=1.0)
+### Department Agents (100)
 
 | Department | People | Head | Focus |
 |-----------|--------|------|-------|
@@ -38,19 +38,19 @@ Manifest demand per department (approximate):
 
 ### External Agents (2, no LLM, deterministic scripted actions)
 
-**Parking Management Bot** (Source.EXTERNAL_VERIFIED, trust=0.7)
+**Parking Management Bot** (`max_source=EXTERNAL_VERIFIED`: its observations weigh 0.7)
 - Represents the building's parking garage system
-- At each day boundary (rounds 1, 3, 5, 7, 9), pre-books 2–3 spots for visitors/contractors by writing ACTION marks
+- At each day boundary (rounds 1, 3, 5, 7, 9), pre-books 2–5 spots for visitors/contractors by writing ACTION marks
 - Writes OBSERVATION marks about daily capacity ("27 of 30 spots remaining")
-- Observations decay between rounds, so agents must check freshness
-- Action marks are permanent but have trust-weighted strength (0.7)
+- Observations decay between rounds. No agent and no tool reads them
+- Action marks are permanent. Actions carry no source level, so their trust weight is 1.0 (spec 4.2)
 
-**Building Operations Bot** (Source.EXTERNAL_UNVERIFIED, trust=0.3)
+**Building Operations Bot** (`max_source=EXTERNAL_VERIFIED`; it writes only warnings, which carry no source level, so their trust weight is 1.0)
 - Represents the building management system
 - Between rounds, randomly issues room WARNING marks (~15% chance per round per shared room) simulating maintenance/AV issues
 - Warnings reduce the target booking's effective strength via `effective_strength_with_warnings()`
-- Low trust (0.3) means a single warning barely dents a fleet booking, but multiple warnings on the same room `reinforce()` to a meaningful signal
-- Agents check warnings on their bookings via `my_bookings` and rebook if invalidated
+- One fresh warning brings the booking's effective strength to 0. The booking recovers as the warning decays (P35)
+- Agents check warnings on their bookings via `my_status` and rebook if invalidated
 
 ## 5 Resource Types (Scopes)
 
@@ -63,13 +63,13 @@ Manifest demand per department (approximate):
 │  (all agents read full marks, all can book)          │
 ├──────────────────────────────────────────────────────┤
 │                  PROTECTED scopes                    │
-│  rooms/shared, parking                               │
+│  rooms/{dept}, rooms/shared, parking                 │
 │  (all agents see structure: "room booked at time X") │
 │  (content redacted: who booked, meeting topic)       │
 │  (dept members with read_scopes see full content)    │
 ├──────────────────────────────────────────────────────┤
 │                  CLASSIFIED scopes                   │
-│  rooms/{dept}, tasks/{dept}                          │
+│  tasks/{dept}                                        │
 │  (only authorized dept agents can read at all)       │
 │  (other depts don't know these resources exist)      │
 └──────────────────────────────────────────────────────┘
@@ -79,7 +79,7 @@ Manifest demand per department (approximate):
 
 | Scope | Resources | Slots | Visibility | Policy | Contention |
 |-------|-----------|-------|------------|--------|------------|
-| `rooms/{dept}` (×5) | 3 rooms per dept × 10 blocks | 150 (30/dept) | CLASSIFIED | HIGHEST_CONFIDENCE | 1.5:1 within dept |
+| `rooms/{dept}` (×5) | 3 rooms per dept × 10 blocks | 150 (30/dept) | PROTECTED | HIGHEST_CONFIDENCE | 1.5:1 within dept |
 | `rooms/shared` | 5 rooms × 10 blocks | 50 | PROTECTED | HIGHEST_CONFIDENCE | 2:1 all depts |
 | `rooms/exec` | 1 boardroom × 10 blocks | 10 | OPEN | YIELD_ALL → auto-resolve | variable |
 | `tasks/{dept}` (×5) | 15 tasks per dept | 75 | CLASSIFIED | FIRST_WRITER | 1.5:1 within dept |
@@ -90,11 +90,10 @@ Manifest demand per department (approximate):
 
 ### Resource Details
 
-**Department Rooms** (`rooms/eng`, `rooms/design`, etc.), CLASSIFIED
+**Department Rooms** (`rooms/eng`, `rooms/design`, etc.), PROTECTED
 - 3 rooms per dept: `{dept}-huddle-1`, `{dept}-huddle-2`, `{dept}-huddle-3`
-- Only that department's agents can see availability or book
-- Uses `ScopeVisibility.CLASSIFIED` + `read_scopes` authorization
-- Other departments literally cannot see these rooms' marks, which tests scope isolation at scale
+- Only that department's agents can book; other departments see availability but not who booked
+- Uses `ScopeVisibility.PROTECTED` + `read_scopes` authorization
 - 30 slots per dept, ~45 demand/dept → some overflow to shared rooms
 
 **Shared Conference Rooms** (`rooms/shared`), PROTECTED
@@ -128,9 +127,9 @@ Manifest demand per department (approximate):
 **Parking** (`parking`), PROTECTED, HIGHEST_CONFIDENCE + external agent
 - 30 spots per day
 - PROTECTED: agents see remaining count but not individual booker identities
-- **Priority hierarchy**:
-  - Parking bot pre-books 2–3 spots/day at confidence=0.7 (EXTERNAL_VERIFIED, trust=0.7)
-  - Department heads at confidence=0.95 (FLEET, trust=1.0)
+- **Priority hierarchy** (by confidence; intents carry no source level, so trust weights do not apply):
+  - Parking bot pre-books 2–5 spots/day at confidence=0.7
+  - Department heads at confidence=0.95
   - Regular employees at confidence=0.5
   - Heads always win concurrent conflicts with regulars
 - Parking bot writes OBSERVATION marks about daily capacity that decay (half-life 6h, ~40% per round)
@@ -197,25 +196,25 @@ Rounds 9-10 (Fri): Final bookings. Tasks: ~65 of 75 claimed. Last parking attemp
 |---------|----------------|----------|
 | INTENT marks | All booking attempts | all |
 | ACTION marks | All successful bookings | all |
-| OBSERVATION marks | Parking bot writes capacity observations; decay between rounds | parking |
+| OBSERVATION marks | Parking bot writes capacity observations; decay between rounds. slow_drift adversaries write observations that colleagues see in their room view | parking, rooms/{dept} |
 | WARNING marks | Building ops bot issues room maintenance warnings | rooms/shared |
 | NEED marks | Lunch exhaustion + boardroom YIELD_ALL conflicts | lunch, rooms/exec |
 | ScopeVisibility.OPEN | Equipment, lunch, exec boardroom | equipment, lunch, rooms/exec |
-| ScopeVisibility.PROTECTED | Shared rooms, parking (structure visible, content redacted) | rooms/shared, parking |
-| ScopeVisibility.CLASSIFIED | Dept rooms, dept tasks (invisible to outsiders) | rooms/{dept}, tasks/{dept} |
+| ScopeVisibility.PROTECTED | Dept rooms, shared rooms, parking (structure visible, content redacted) | rooms/{dept}, rooms/shared, parking |
+| ScopeVisibility.CLASSIFIED | Dept tasks (invisible to outsiders) | tasks/{dept} |
 | read_scopes | Dept membership controls content access | rooms/*, tasks/* |
-| Source.FLEET | All 100 department agents | all |
-| Source.EXTERNAL_VERIFIED | Parking management bot | parking |
-| Source.EXTERNAL_UNVERIFIED | Building operations bot | rooms/shared |
-| trust_weight() | External marks have 0.7 or 0.3 trust, affects effective strength | parking, rooms/shared |
+| Source.FLEET | The diagnostic probe, in defense runs; slow_drift adversaries in their own department's rooms; other department agents write no observations | diagnostics, rooms/{dept} |
+| Source.EXTERNAL_VERIFIED | The parking bot's capacity observations; no agent reads them | parking |
+| Source.EXTERNAL_UNVERIFIED | Not exercised: no agent writes it | - |
+| trust_weight() | Applied on every observation read: the probe's canary check and, in slow_drift, the observations colleagues see in the room view; no agent reads the capacity observations | diagnostics, rooms/{dept} |
 | effective_strength_with_warnings() | Room warnings reduce booking strength | rooms/shared |
-| reinforce() | Multiple building warnings on same room compound | rooms/shared |
+| reinforce() | Not exercised: the stress test does not call it | - |
 | HIGHEST_CONFIDENCE | Rooms, equipment, parking (with priority tiers) | rooms/*, equipment, parking |
 | FIRST_WRITER | Tasks, lunch | tasks/*, lunch |
 | YIELD_ALL | Executive boardroom (creates NEED marks) | rooms/exec |
 | resolve_conflict() | All three policies in one trial | all |
 | aggregate_needs() | Lunch + boardroom needs clustered for analysis | lunch, rooms/exec |
-| project_mark() | PROTECTED scope reads return redacted marks | rooms/shared, parking |
+| project_mark() | PROTECTED scope reads return redacted marks | rooms/{dept}, rooms/shared, parking |
 | block_self_rebook | Prevents cross-round double bookings | all |
 | Scope hierarchy | `rooms/eng` permission → access to all room sub-resources | rooms/*, tasks/* |
 | compute_strength decay | Observations decay between rounds, warnings decay | parking, rooms/shared |
@@ -257,9 +256,10 @@ Agent(
 Agent(
     name="parking-system",
     scopes={
-        "parking": ["action", "observation"],
+        "parking": ["intent", "action", "observation"],
     },
     read_scopes=frozenset({"parking"}),
+    max_source=Source.EXTERNAL_VERIFIED,
 )
 
 # Building ops bot
@@ -269,6 +269,7 @@ Agent(
         "rooms/shared": ["warning"],
     },
     read_scopes=frozenset(),
+    max_source=Source.EXTERNAL_VERIFIED,
 )
 ```
 
@@ -425,7 +426,7 @@ class OfficeEnv:
         dept_scopes = [
             Scope(
                 name=f"rooms/{d}",
-                visibility=CLASSIFIED,
+                visibility=PROTECTED,
                 policy=HIGHEST_CONFIDENCE,
                 ...,
             )
@@ -502,7 +503,7 @@ class OfficeEnv:
     def snapshot_metrics(self) -> dict[str, Any]: ...
 ```
 
-**Key implementation detail for YIELD_ALL boardroom**: When `guard.execute()` returns `BLOCKED`, the guard has already written a NEED mark. The environment returns: `"BLOCKED: Multiple departments want the boardroom at this time. The conflict has been escalated. Try a different time or use a shared room instead."`
+**Key implementation detail for YIELD_ALL boardroom**: When `guard.execute()` returns `BLOCKED` in a deferred scope such as `rooms/exec`, the guard has written no NEED mark. In an immediate scope, a NEED mark already exists: the agent's own, or the guard's question in `_system`. The environment returns: `"BLOCKED: Multiple departments want the boardroom at this time. The conflict has been escalated. Try a different time or use a shared room instead."`
 
 **Key implementation detail for `my_status`**: Reads the agent's own action marks across all scopes, then checks for warnings targeting those marks. Returns structured output showing bookings and any warnings/invalidations.
 
@@ -580,5 +581,5 @@ python experiments/stress_test/run.py --agents-per-dept 20 --rounds 10 --seed 42
 
 ## Verification
 
-1. **Smoke** (2 agents/dept = 10, 3 rounds): Zero safety violations, tools dispatch correctly, CLASSIFIED isolation works (eng can't see design rooms), PROTECTED projection works (shared room reads are redacted for non-bookers), YIELD_ALL creates NEED marks, external bots work, warnings reduce booking strength, parking priority hierarchy works
+1. **Smoke** (2 agents/dept = 10, 3 rounds): Zero safety violations, tools dispatch correctly, CLASSIFIED isolation works (eng can't see design tasks), PROTECTED projection works (shared room reads are redacted for non-bookers), YIELD_ALL creates NEED marks, external bots work, warnings reduce booking strength, parking priority hierarchy works
 2. **Full** (20 agents/dept = 100, 10 rounds): All metrics collected, zero double bookings, analyze completion by department, verify every protocol feature produced non-trivial output

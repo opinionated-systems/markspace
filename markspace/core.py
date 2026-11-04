@@ -13,13 +13,14 @@ Functions: compute_strength, trust_weight, effective_strength,
 
 from __future__ import annotations
 
+import math
 import uuid
 from enum import Enum
 from types import MappingProxyType
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from markspace.budget import TokenBudget
 from markspace.rate_limit import ScopeRateLimit
@@ -73,7 +74,7 @@ class MarkType(str, Enum):
 
 
 class Source(str, Enum):
-    """Trust source levels, in strict total order: FLEET > EXTERNAL_VERIFIED > EXTERNAL_UNVERIFIED."""
+    """Source levels, in strict total order: FLEET > EXTERNAL_VERIFIED > EXTERNAL_UNVERIFIED."""
 
     FLEET = "fleet"
     EXTERNAL_VERIFIED = "external_verified"
@@ -175,7 +176,7 @@ class Agent(BaseModel):
 
     scopes: mapping of scope_name -> list of writable MarkType names.
     read_scopes: set of scope names with full content read access.
-    max_source: maximum trust source this agent can claim on observations.
+    max_source: the highest source level this agent can give an observation.
     Both are hierarchical: permission for "a" implies permission for "a/b".
 
     Spec Section 11.
@@ -187,9 +188,9 @@ class Agent(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     scopes: dict[str, list[str]] = Field(default_factory=dict)
     read_scopes: frozenset[str] = Field(default_factory=frozenset)
-    max_source: Source = Source.FLEET  # maximum trust level this agent can write
+    max_source: Source = Source.FLEET  # highest source level of its observations
 
-    manifest: AgentManifest | None = None  # optional composition contract (Section 14)
+    manifest: AgentManifest | None = None  # optional composition contract (Section 13)
 
     def can_write(self, scope_name: str, mark_type: MarkType) -> bool:
         """Check if this agent is authorized to write mark_type in scope_name."""
@@ -235,7 +236,7 @@ class WatchPattern(BaseModel):
     A pattern describing marks an agent is interested in.
     Used for subscription-based reactive activation.
 
-    Spec Section 14.1.
+    Spec Section 13.1.
     P55: matches() is a pure function with no side effects.
     """
 
@@ -268,6 +269,10 @@ class WatchPattern(BaseModel):
         return True
 
 
+# A manifest's expected rate is an average, so a write budget allows twice it.
+EXPECTED_ACTIVITY_HEADROOM = 2.0
+
+
 class AgentManifest(BaseModel):
     """
     Declared input/output contract for an agent.
@@ -290,6 +295,19 @@ class AgentManifest(BaseModel):
         None  # MarkType.value -> expected marks per hour
     )
     budget: TokenBudget | None = None  # optional token budget (Section 9.10)
+
+    @model_validator(mode="after")
+    def _check_expected_activity(self) -> AgentManifest:
+        """Keys are mark type values; rates are >= 0, and finite also after the
+        headroom of the guard's write budget (Section 9.14)."""
+        for name, rate in (self.expected_activity or {}).items():
+            MarkType(name)  # raises ValueError for an unknown type
+            if not math.isfinite(rate * EXPECTED_ACTIVITY_HEADROOM) or rate < 0:
+                raise ValueError(
+                    f"expected_activity[{name!r}] must be >= 0, and finite "
+                    f"also at {EXPECTED_ACTIVITY_HEADROOM:g} times its value"
+                )
+        return self
 
     def produces(self, scope: str, mark_type: MarkType) -> bool:
         """Check if this manifest declares production of a mark type in a scope."""
@@ -339,7 +357,7 @@ class Mark(BaseModel):
     agent_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     created_at: float = 0.0
-    initial_strength: float = Field(default=1.0, ge=0.0)
+    initial_strength: float = Field(default=1.0, ge=0.0, le=1.0)
     supersedes: uuid.UUID | None = None  # any mark can supersede a prior mark
     projected: bool = False  # True if content fields were redacted by a projected read
 
@@ -496,7 +514,8 @@ def compute_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> fl
 def effective_strength(mark: AnyMark, now: float, decay_config: DecayConfig) -> float:
     """
     Effective strength = decay strength * trust weight.
-    Observation marks carry a source field; all others are fleet-internal (trust = 1.0).
+    Observation marks carry a source field; all other marks have trust weight
+    1.0, whatever the max_source of their writer.
 
     Spec Section 4.2.
     """

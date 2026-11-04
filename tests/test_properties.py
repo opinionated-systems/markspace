@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import uuid
 
+import pydantic
 import pytest
 
 from markspace import (
@@ -32,6 +33,7 @@ from markspace import (
     ScopeVisibility,
     Severity,
     Source,
+    ValidationError,
     Warning,
     WatchPattern,
     compute_strength,
@@ -313,6 +315,38 @@ class TestP7TrustBounds:
 
 
 # ---------------------------------------------------------------------------
+# Spec 2.1 — initial_strength is in [0.0, 1.0]
+# ---------------------------------------------------------------------------
+
+
+class TestInitialStrengthBound:
+    def test_construction_above_one_is_refused(self) -> None:
+        with pytest.raises(pydantic.ValidationError):
+            Observation(
+                scope="test",
+                topic="x",
+                content="y",
+                initial_strength=math.nextafter(1.0, 2.0),
+            )
+
+    def test_write_refuses_a_copy_above_one(
+        self, space: MarkSpace, agent: Agent
+    ) -> None:
+        template = Observation(scope="test", topic="x", content="y")
+        above = template.model_copy(
+            update={"initial_strength": math.nextafter(1.0, 2.0)}
+        )
+        with pytest.raises(ValidationError):
+            space.write(agent, above)
+
+    def test_write_accepts_one(self, space: MarkSpace, agent: Agent) -> None:
+        space.write(
+            agent,
+            Observation(scope="test", topic="x", content="y", initial_strength=1.0),
+        )
+
+
+# ---------------------------------------------------------------------------
 # P8 — Sublinearity
 # N identical marks produce aggregate < N * single.
 # ---------------------------------------------------------------------------
@@ -546,29 +580,6 @@ class TestP19ScopeIsolation:
 
 
 # ---------------------------------------------------------------------------
-# P20 — Read Openness
-# Any agent can read from any scope.
-# ---------------------------------------------------------------------------
-
-
-class TestP20ReadOpenness:
-    def test_unauthorized_agent_can_read(self, space: MarkSpace, agent: Agent) -> None:
-        space.write(
-            agent,
-            Observation(
-                scope="test",
-                topic="x",
-                content="y",
-                source=Source.FLEET,
-            ),
-        )
-        unauthorized = Agent(name="reader", scopes={})
-        # Read should succeed — no authorization needed
-        marks = space.read(scope="test")
-        assert len(marks) == 1
-
-
-# ---------------------------------------------------------------------------
 # P23 — Hierarchy
 # Authorization for "a" implies authorization for "a/b".
 # ---------------------------------------------------------------------------
@@ -712,7 +723,7 @@ class TestP29ResolutionImmediacy:
 # ---------------------------------------------------------------------------
 
 
-class TestP33InvalidationBound:
+class TestP34InvalidationBound:
     def test_invalidation_floor_at_zero(self, space: MarkSpace, agent: Agent) -> None:
         obs_id = space.write(
             agent,
@@ -761,7 +772,7 @@ class TestP33InvalidationBound:
 # ---------------------------------------------------------------------------
 
 
-class TestP34InvalidationDecay:
+class TestP35InvalidationDecay:
     def test_invalidated_mark_recovers_as_warning_decays(self) -> None:
         """
         P35: As the warning decays, the suppression it causes shrinks.

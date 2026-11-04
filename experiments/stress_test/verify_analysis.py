@@ -112,7 +112,8 @@ def main():
         print(
             f"    Bots: parking spots {safety['parking_spots_given']}, visitor spots "
             f"{safety['visitor_spots_prebooked']}, boardroom slots "
-            f"{safety['boardroom_slots_resolved']}, given twice {safety['given_twice']}"
+            f"{safety['boardroom_slots_resolved']}, given to two agents "
+            f"{safety['given_to_two_agents']}, again to the holder {safety['given_again_to_holder']}"
         )
         print(
             f"    Agents with two parking spots on one day: {safety['agents_with_two_spots_on_one_day']}"

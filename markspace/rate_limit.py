@@ -6,11 +6,10 @@ Per-scope write rate limits enforced by the guard. Each scope can
 optionally define per-agent and fleet-wide write caps within a
 sliding time window.
 
-Rate limits operate independently of the statistical envelope and
-token budgets (P66). An agent within its rate limit but flagged by
-the envelope is still subject to envelope restrictions; an agent
-within its envelope baseline but exceeding its rate limit is still
-rejected.
+Rate limits operate independently of the token budgets and the write
+budgets (P66). An agent within its rate limit that has spent its write
+budget of a type is still refused writes of that type; an agent within its
+write budget that exceeds its rate limit is still rejected.
 
 Spec Section 9.12.
 """

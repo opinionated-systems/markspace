@@ -63,7 +63,7 @@ _CLUSTER_BONUS_FACTOR: float = 0.1
 # to exclude effectively-dead ones that haven't been GC'd yet.
 _DEFAULT_MIN_STRENGTH: float = 0.01
 
-# Trust source ordering for validation (strict total order).
+# Source level ordering for validation (strict total order).
 _SOURCE_ORDER: list[Source] = [
     Source.EXTERNAL_UNVERIFIED,
     Source.EXTERNAL_VERIFIED,
@@ -151,9 +151,16 @@ class MarkSpace:
         # created_at of the latest intent or action per (scope, resource): the
         # next one there gets a later time (P32).
         self._last_claim_at: dict[tuple[str, str], float] = {}
-        # Per-agent write quota. None = unlimited.
+        # Per-agent write quota, a limit of this reference implementation
+        # (the spec has none). None = unlimited.
         self._max_marks_per_agent: int | None = max_marks_per_agent
-        # Per-agent live mark count, maintained incrementally on write/gc.
+        # The attached guard's own agent (attach_claim_table): the quota does
+        # not refuse its need marks for the principal, each kind of which
+        # the guard keeps to one open, or its action marks, one for each budget
+        # change by the principal; its other marks stay under the quota.
+        self._guard_agent: uuid.UUID | None = None
+        # Per-agent count of current marks (stored and not superseded),
+        # maintained on write, resolve and gc.
         self._agent_mark_counts: dict[uuid.UUID, int] = {}
         # Scope index: maintained incrementally on write() for O(scope) reads
         self._by_scope: dict[str, set[uuid.UUID]] = {}
@@ -165,7 +172,7 @@ class MarkSpace:
         # Post-write hooks: fired outside the lock after each write.
         self._write_hooks: dict[uuid.UUID, Callable[[uuid.UUID, AnyMark], None]] = {}
         self._write_seq: int = 0
-        # Subscription state for watch/subscribe (Section 14)
+        # Subscription state for watch/subscribe (Section 13)
         self._subscriptions: dict[uuid.UUID, list[WatchPattern]] = {}
         self._pending_notifications: dict[uuid.UUID, list[uuid.UUID]] = {}
         # The guard that holds this space's grants (Section 6.5); at most one.
@@ -182,16 +189,22 @@ class MarkSpace:
         with self._lock:
             self._scopes[scope.name] = scope
 
-    def attach_claim_table(self, table: ClaimTable) -> None:
+    def attach_claim_table(
+        self, table: ClaimTable, guard_agent: uuid.UUID | None = None
+    ) -> None:
         """
         Attach the guard that holds this space's grants (Section 6.5). A
         space has at most one: a second guard would grant the same resource
-        again.
+        again. guard_agent: the guard's own agent, whose need marks for the
+        principal and action marks for the principal's budget changes the
+        per-agent quota does not refuse, and which alone may warn on a mark in
+        _system.
         """
         with self._lock:
             if self._claims is not None:
                 raise ValueError("This MarkSpace already has a guard")
             self._claims = table
+            self._guard_agent = guard_agent
 
     def add_write_hook(self, hook: Callable[[uuid.UUID, AnyMark], None]) -> uuid.UUID:
         """Register a post-write hook. Returns a handle for removal."""
@@ -264,17 +277,91 @@ class MarkSpace:
                     f"Warning topic '{mark.topic}' not allowed in scope '{scope.name}'."
                 )
 
-        # Trust source enforcement: reject observations where the claimed
-        # source exceeds the agent's max_source. Prevents external agents
-        # from writing Source.FLEET observations.
-        if isinstance(mark, Observation):
-            mark_level = _SOURCE_ORDER.index(mark.source)
-            agent_level = _SOURCE_ORDER.index(agent.max_source)
-            if mark_level > agent_level:
-                raise ScopeError(
-                    f"Agent '{agent.name}' (max_source={agent.max_source.value}) "
-                    f"cannot write observations with source={mark.source.value}"
-                )
+        # Spec 2.1: initial_strength is in [0.0, 1.0]. The model checks it on
+        # construction; model_copy and model_construct skip that check.
+        if not 0.0 <= mark.initial_strength <= 1.0:
+            raise ValidationError(
+                f"initial_strength {mark.initial_strength} is outside [0.0, 1.0]"
+            )
+
+    def _counts_toward_quota(self, agent_id: uuid.UUID, mark_type: MarkType) -> bool:
+        """Whether a mark counts against its agent's quota: every mark but
+        the need marks of the attached guard's own agent, which the guard
+        keeps to one open per kind, and its action marks, one for each budget
+        change by the principal."""
+        return not (
+            agent_id == self._guard_agent
+            and mark_type in (MarkType.NEED, MarkType.ACTION)
+        )
+
+    def _increment_mark_count(self, mark: AnyMark) -> None:
+        """One current mark more for its agent. Caller MUST hold self._lock."""
+        if self._counts_toward_quota(mark.agent_id, mark.mark_type):
+            self._agent_mark_counts[mark.agent_id] = (
+                self._agent_mark_counts.get(mark.agent_id, 0) + 1
+            )
+
+    def authorization_refusal(self, agent: Agent, mark: AnyMark) -> str | None:
+        """
+        Why *agent* may not write *mark*, or None: it may not write the
+        mark's type in its scope; it supersedes another agent's mark (only
+        a mark's author supersedes it, Section 10: another agent could
+        otherwise erase an action, or the warning that hides one, from an
+        unrelated scope); or the mark is a warning that hides an action in a
+        scope where the agent may not warn (Section 9.5: otherwise an agent
+        could hide a booking from any scope it may warn in, and take the
+        resource); the mark is an observation whose claimed source exceeds
+        the agent's max_source (an external agent cannot write
+        Source.FLEET observations); or it is a warning on a mark in _system,
+        the guard's marks for the principal, by an agent other than the
+        guard's own. write() refuses such a mark; the guard asks first.
+        """
+        if not agent.can_write(mark.scope, mark.mark_type):
+            return (
+                f"Agent '{agent.name}' is not authorized to write "
+                f"{mark.mark_type.value} to scope '{mark.scope}'"
+            )
+        if isinstance(mark, Observation) and _SOURCE_ORDER.index(
+            mark.source
+        ) > _SOURCE_ORDER.index(agent.max_source):
+            return (
+                f"Agent '{agent.name}' (max_source={agent.max_source.value}) "
+                f"cannot write observations with source={mark.source.value}"
+            )
+        with self._lock:
+            if mark.supersedes is not None:
+                target = self._marks.get(mark.supersedes)
+                if target is not None and target.agent_id != agent.id:
+                    return (
+                        f"Agent '{agent.name}' may not supersede mark "
+                        f"{mark.supersedes} of another agent"
+                    )
+            if isinstance(mark, Warning) and mark.invalidates is not None:
+                target = self._marks.get(mark.invalidates)
+                if (
+                    target is not None
+                    and target.scope == "_system"
+                    and agent.id != self._guard_agent
+                ):
+                    return f"Agent '{agent.name}' may not warn on a mark in '_system'"
+                if isinstance(target, Action) and not agent.can_write(
+                    target.scope, MarkType.WARNING
+                ):
+                    return (
+                        f"Agent '{agent.name}' may not write warnings in scope "
+                        f"'{target.scope}', where action {target.id} lies"
+                    )
+        return None
+
+    def _decrement_mark_count(self, mark: AnyMark) -> None:
+        """One current mark fewer for its agent. Caller MUST hold self._lock."""
+        if not self._counts_toward_quota(mark.agent_id, mark.mark_type):
+            return
+        count = self._agent_mark_counts.get(mark.agent_id, 0)
+        if count > 1:
+            self._agent_mark_counts[mark.agent_id] = count - 1
+        else:
+            self._agent_mark_counts.pop(mark.agent_id, None)
 
     def _created_at_for(self, mark: AnyMark) -> float:
         """
@@ -306,7 +393,7 @@ class MarkSpace:
         (id, agent_id, created_at). The original mark object is not modified.
 
         WARNING: Direct calls to write() bypass the Guard's enforcement stack
-        (barrier, envelope). Production code should route writes through
+        (barrier, write budgets, rate limits). Production code should route writes through
         Guard.write_mark() for observations/warnings/needs, or
         Guard.execute()/pre_action()/post_action() for intents/actions.
         Direct write() is for guard-internal writes, probe writes, and tests.
@@ -321,38 +408,39 @@ class MarkSpace:
             scope = self.get_scope(mark.scope)
             self._validate_mark(agent, mark, scope)
 
+            # A write that supersedes a current mark replaces it: the
+            # author's count stays the same, so the quota does not apply.
+            replaced = (
+                self._marks.get(mark.supersedes)
+                if mark.supersedes is not None
+                and mark.supersedes not in self._superseded
+                else None
+            )
+            replaces_current = replaced is not None
+            replaces_counted = replaced is not None and self._counts_toward_quota(
+                replaced.agent_id, replaced.mark_type
+            )
+
             # Enforce per-agent write quota
-            if self._max_marks_per_agent is not None:
+            if (
+                self._max_marks_per_agent is not None
+                and not replaces_counted
+                and self._counts_toward_quota(agent.id, mark.mark_type)
+            ):
                 current = self._agent_mark_counts.get(agent.id, 0)
                 if current >= self._max_marks_per_agent:
                     raise QuotaExceededError(
-                        f"Agent '{agent.name}' has {current} live marks, "
-                        f"exceeding quota of {self._max_marks_per_agent}. "
-                        f"Wait for GC to reclaim expired marks."
+                        f"Agent '{agent.name}' has {current} current marks, "
+                        f"its quota of {self._max_marks_per_agent}. "
+                        f"gc() removes expired marks."
                     )
 
             # Only a mark's author may supersede it (Section 10): another
             # agent could otherwise erase an action, or the warning that
             # hides one, from an unrelated scope.
-            if mark.supersedes is not None:
-                target = self._marks.get(mark.supersedes)
-                if target is not None and target.agent_id != agent.id:
-                    raise ScopeError(
-                        f"Agent '{agent.name}' may not supersede mark "
-                        f"{mark.supersedes} of another agent"
-                    )
-            # A warning that hides an action needs warning rights in the
-            # action's own scope (Section 9.5): otherwise an agent could hide
-            # a booking from any scope it may warn in, and take the resource.
-            if isinstance(mark, Warning) and mark.invalidates is not None:
-                target = self._marks.get(mark.invalidates)
-                if isinstance(target, Action) and not agent.can_write(
-                    target.scope, MarkType.WARNING
-                ):
-                    raise ScopeError(
-                        f"Agent '{agent.name}' may not write warnings in scope "
-                        f"'{target.scope}', where action {target.id} lies"
-                    )
+            refusal = self.authorization_refusal(agent, mark)
+            if refusal is not None:
+                raise ScopeError(refusal)
 
             # Create an immutable copy with assigned metadata
             new_id = uuid.uuid4()
@@ -367,24 +455,13 @@ class MarkSpace:
             # Handle supersession (any mark type can supersede a prior mark)
             # The superseded mark stays in storage but will be filtered at read time
             if stored.supersedes is not None:
+                if replaces_current:
+                    self._decrement_mark_count(self._marks[stored.supersedes])
                 self._superseded.add(stored.supersedes)
-                # Decrement quota for the superseded mark's agent so supersession
-                # doesn't cause quota self-DoS under tight limits.
-                superseded_mark = self._marks.get(stored.supersedes)
-                if superseded_mark is not None:
-                    sup_count = self._agent_mark_counts.get(superseded_mark.agent_id, 0)
-                    if sup_count > 1:
-                        self._agent_mark_counts[superseded_mark.agent_id] = (
-                            sup_count - 1
-                        )
-                    else:
-                        self._agent_mark_counts.pop(superseded_mark.agent_id, None)
 
             self._marks[new_id] = stored
             # Maintain per-agent mark count
-            self._agent_mark_counts[stored.agent_id] = (
-                self._agent_mark_counts.get(stored.agent_id, 0) + 1
-            )
+            self._increment_mark_count(stored)
             # Maintain scope index
             self._by_scope.setdefault(stored.scope, set()).add(new_id)
             # Maintain warning invalidation index
@@ -600,12 +677,11 @@ class MarkSpace:
             )
             self._marks[new_id] = resolved
             self._superseded.add(need_mark_id)
+            self._decrement_mark_count(mark)
             # Maintain scope index
             self._by_scope.setdefault(resolved.scope, set()).add(new_id)
             # Maintain per-agent mark count
-            self._agent_mark_counts[resolved.agent_id] = (
-                self._agent_mark_counts.get(resolved.agent_id, 0) + 1
-            )
+            self._increment_mark_count(resolved)
             # Notify subscribers about the resolved need (supersession)
             self._notify_subscribers(resolved)
             return new_id
@@ -687,11 +763,13 @@ class MarkSpace:
         block ends. A guard decision that reads several sets holds it, so that
         every read sees one state (Section 6.2.3). The write hooks of writes
         made inside the block wait as in hooks_deferred(). Lock order: a
-        guard's resource lock, then a barrier lock, then this one, then the
-        guard's lease-table lock (Section 6.5). Take it only inside a guard's
-        resource lock or with no guard lock held. While holding it, the space
-        calls only its guard's ClaimTable methods; never call another guard
-        method or take a barrier lock while holding it.
+        guard's resource lock, then its need-mark lock, then this one, then
+        its lease-table lock, then its barrier and write-budget locks, which
+        take no other lock. While holding it, the space calls
+        only its guard's ClaimTable methods; a guard reads barriers and write
+        budgets, and it takes no resource or need-mark lock. So a caller that
+        holds the space does not call a guard method that takes the need-mark
+        lock, such as update_budget, set_write_budget or record_round_tokens.
         """
         with self.hooks_deferred(), self._lock:
             yield
@@ -733,13 +811,19 @@ class MarkSpace:
             return project_mark(mark)
         return None  # CLASSIFIED: not even projected (P22, P25)
 
+    def is_current(self, mark_id: uuid.UUID) -> bool:
+        """Whether the mark is stored and not superseded (a resolved need is
+        superseded by its resolved copy, Section 8.3)."""
+        with self._lock:
+            return mark_id in self._marks and mark_id not in self._superseded
+
     def get_mark(self, mark_id: uuid.UUID) -> AnyMark | None:
         """Retrieve a mark by id. Returns None if not found."""
         with self._lock:
             return self._marks.get(mark_id)
 
     def _warnings_on(self, mark: AnyMark) -> list[Warning]:
-        """Live warnings that invalidate *mark*. Caller MUST hold self._lock."""
+        """Current warnings that invalidate *mark*. Caller MUST hold self._lock."""
         return [
             w
             for wid in self._warnings_by_target.get(mark.id, set())
@@ -985,9 +1069,10 @@ class MarkSpace:
         decay (P35). Only marks that are intrinsically dead (expired TTL,
         resolved needs, superseded) are collected.
 
-        Handles supersession chains: if A supersedes B, and A is collected,
-        B's supersession entry is cleaned up (but B itself may also be
-        collected if it has zero strength).
+        Supersession: every superseded mark is collected at once. Removing
+        a mark drops only that mark's own entry in the superseded set, after
+        the mark count reads it: a superseded mark left the count when it
+        was superseded, so gc() does not count it down again.
         """
         if grace_period < 0:
             raise ValueError(f"grace_period must be non-negative, got {grace_period}")
@@ -1056,12 +1141,9 @@ class MarkSpace:
             for mid in to_remove:
                 removed = self._marks.pop(mid, None)
                 if removed is not None:
-                    # Decrement per-agent mark count
-                    count = self._agent_mark_counts.get(removed.agent_id, 0)
-                    if count > 1:
-                        self._agent_mark_counts[removed.agent_id] = count - 1
-                    else:
-                        self._agent_mark_counts.pop(removed.agent_id, None)
+                    # A superseded mark left the count when it was superseded.
+                    if mid not in self._superseded:
+                        self._decrement_mark_count(removed)
                     scope_ids = self._by_scope.get(removed.scope)
                     if scope_ids is not None:
                         scope_ids.discard(mid)
@@ -1098,7 +1180,7 @@ class MarkSpace:
             return len(to_remove)
 
     # ------------------------------------------------------------------
-    # Watch / Subscribe (Section 14)
+    # Watch / Subscribe (Section 13)
     # ------------------------------------------------------------------
 
     def subscribe(self, agent: Agent, patterns: list[WatchPattern]) -> None:
@@ -1108,7 +1190,7 @@ class MarkSpace:
         Subsequent writes matching any pattern will queue the mark
         for retrieval via get_watched_marks().
 
-        Spec Section 14.3.
+        Spec Section 13.3.
         P48: Idempotent - re-subscribing replaces patterns.
         P49: Prospective - does not retroactively deliver existing marks.
         """
@@ -1127,7 +1209,7 @@ class MarkSpace:
         """
         Retrieve marks matching an agent's subscriptions since the last poll.
 
-        Spec Section 14.4.
+        Spec Section 13.4.
         P50: Returns only marks matching subscription patterns.
         P51: At-most-once delivery when clear=True.
         P52: Marks returned in write order.
@@ -1137,13 +1219,16 @@ class MarkSpace:
         after retrieval but before processing, those marks will not be
         re-delivered. Production deployments needing at-least-once semantics
         should implement cursor-based delivery on top of the mark space.
+
+        A mark that is superseded by the time of the poll is skipped, as in
+        read().
         """
         with self._lock:
             pending_ids = self._pending_notifications.get(agent.id, [])
             marks: list[AnyMark] = []
             for mark_id in pending_ids:
                 mark = self._marks.get(mark_id)
-                if mark is None:
+                if mark is None or mark_id in self._superseded:
                     continue
                 # Same visibility rules as read() (Section 7.4)
                 visible = self.visible_form(mark, agent)
@@ -1156,36 +1241,15 @@ class MarkSpace:
     def _notify_subscribers(self, mark: AnyMark) -> None:
         """
         Check all subscriptions and queue the mark for matching agents.
-        Called internally by write() after storing a mark.
+        Called by write() and resolve() after storing a mark.
 
-        Agents are not notified about their own writes.
-
-        When a mark supersedes another, subscribers watching the superseded
-        mark's scope are also notified about the new mark so they can
-        detect the supersession (the new mark's .supersedes field points
-        to the now-dead mark).
+        Agents are not notified about their own writes. A mark that matches
+        no pattern is not queued, also when it supersedes a mark that does
+        (P50); the subscriber sees the superseded mark disappear on its next
+        read.
         """
-        # Collect the superseded mark (if any) to expand notification scope.
-        superseded_mark: AnyMark | None = None
-        if mark.supersedes is not None:
-            superseded_mark = self._marks.get(mark.supersedes)
-
         for agent_id, patterns in self._subscriptions.items():
             if mark.agent_id == agent_id:
                 continue  # don't notify the writer about their own marks
-            matched = False
-            for pattern in patterns:
-                if pattern.matches(mark):
-                    matched = True
-                    break
-            # If no pattern matched the new mark directly, check whether
-            # any pattern matches the superseded mark. This ensures
-            # subscribers watching the old mark's scope learn about the
-            # supersession regardless of pattern ordering.
-            if not matched and superseded_mark is not None:
-                for pattern in patterns:
-                    if pattern.matches(superseded_mark):
-                        matched = True
-                        break
-            if matched:
+            if any(pattern.matches(mark) for pattern in patterns):
                 self._pending_notifications.setdefault(agent_id, []).append(mark.id)

@@ -1,6 +1,6 @@
 # Adversarial Experiment Analysis
 
-Experiment code: [`orchestrate.py`](../../orchestrate.py), runner: [`run.py`](../../run.py).
+Experiment code: [`orchestrate.py`](../../orchestrate.py), runner: [`run.py`](../../../stress_test/run.py).
 
 ## Contents
 

@@ -16,13 +16,13 @@ If you're coordinating multiple LLM agents, you've likely hit some of these:
 
 Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy) - a mechanism by which biological systems coordinate at scale. Agents leave traces in a shared environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution. These constraints live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes. Over time, the environment becomes a model of the world the agents operate in.
 
-The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, trust-weighted decay, and [76 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
+The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, per-agent write budgets, trust-weighted decay, and [78 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
 ## Motivation
 
 LLM agents are probabilistic and reason adaptively when blocked. Coordination that depends on their compliance is therefore unsafe: the same capacity for novel solutions that makes LLMs effective will break a guarantee that relies on the agent itself.
 
-In an [experiment](experiments/comparison/analysis.md), an agent prompted to book multiple slots was rejected after its first booking. It inferred that identity checks were name-based and fabricated caller names to bypass them - through ordinary task-completion reasoning, with no instruction to attack. The gap was structural: the standard LLM tool-calling interface was designed for a single caller; caller identity was never a design parameter, which made it an attack surface the moment multiple agents shared it. The agent attempted exploitation in all 10 runs; 9 of 10 succeeded - the tenth was blocked only because all remaining slots were already taken. Safety training primarily addresses human-AI rather than AI-AI interactions ([Triedman et al., 2025](https://arxiv.org/abs/2507.06850)), leaving the AI-AI coordination layer systematically undefended.
+In an [experiment](experiments/comparison/analysis.md), an agent prompted to book multiple slots was rejected after its first booking. It inferred that identity checks were name-based and fabricated caller names to bypass them - through ordinary task-completion reasoning, with no instruction to attack. The gap was structural: the standard LLM tool-calling interface was designed for a single caller; caller identity was never a design parameter, which made it an attack surface the moment multiple agents shared it. The agent attempted exploitation in all 10 runs; 9 of 10 succeeded - the tenth was blocked only because all remaining slots were already taken. [Lupinacci et al., 2025](https://arxiv.org/abs/2507.06850) suggest that safety training primarily addresses human-AI rather than AI-AI interactions. That focus leaves the AI-AI coordination layer systematically undefended.
 
 <p align="center"><img src="figures/psa.jpg" alt="10 PM - Do you know what your agents are doing?" width="250"/></p>
 <p align="center"><sub>After <a href="https://en.wikipedia.org/wiki/Do_you_know_where_your_children_are">a US TV public service announcement</a>.</sub></p>
@@ -55,17 +55,17 @@ Each mark type encodes a different epistemic role - a plan, a fact, a belief, a 
 
 **Three conflict policies:** HIGHEST_CONFIDENCE (priority wins), FIRST_WRITER (first claim wins), YIELD_ALL (escalate to principal via need marks). Across a scope tree, intents on one resource compete with intents in ancestor and descendant scopes, not in sibling scopes: the outer scope's intent wins, and inside one scope the scope's policy decides.
 
-**Trust weighting:** Marks carry a source tag (fleet, external verified, external unverified). Trust weights attenuate effective strength. Fleet marks dominate external ones, and unverified sources are discounted further. Weights are configurable per deployment.
+**Trust weighting:** Observations carry a source level (fleet, external verified, external unverified), bounded by each agent's `max_source`. Trust weights attenuate the effective strength of observations. A single external observation weighs less than a fleet observation of the same strength and age, and observations at `EXTERNAL_UNVERIFIED` are discounted further. Weights are configurable per deployment.
 
 **Decay:** Coordination is a dynamical process - the goal is stability against continuous change, not a fixed solution reached once. Observations and warnings lose strength over configurable half-lives. Intent marks expire after TTL. Action marks are permanent. Stale information fades without explicit cleanup.
 
-Full protocol design in [`framework.md`](docs/framework.md). Formal specification (76 properties, conformance checklist) in [`spec.md`](docs/spec.md).
+Full protocol design in [`framework.md`](docs/framework.md). Formal specification (78 properties, conformance checklist) in [`spec.md`](docs/spec.md).
 
 ## Composition and isolation
 
-Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent's principal declares what the agent can read and write in a manifest, and the guard rejects everything else. Capabilities you didn't grant don't exist.
+Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent's principal grants the scopes and mark types the agent can write, and the guard rejects every other write. A manifest declares inputs and outputs for composition checks. Capabilities you didn't grant don't exist.
 
-Watch/subscribe lets agents activate when matching marks appear, forming pipelines without a central orchestrator. Agents can be added, removed, or replaced independently, and need marks let them escalate rather than grow to handle edge cases. The manifest interface is model-agnostic - each agent can run a different backend (cloud API, local open-weights model, or deterministic code), and sensitive scopes can run entirely on-premise.
+Watch/subscribe queues matching marks until a harness polls them and activates the agent, forming pipelines without a central orchestrator. Agents can be added, removed, or replaced independently, and need marks let them escalate rather than grow to handle edge cases. The manifest interface is model-agnostic - each agent can run a different backend (cloud API, local open-weights model, or deterministic code), and sensitive scopes can run entirely on-premise.
 
 ```python
 # Each agent declares exactly what it reads and writes
@@ -85,7 +85,7 @@ alerter = Agent(
     ),
 )
 
-validate_pipeline([sensor, alerter])  # guard rejects anything outside declared scope
+validate_pipeline([sensor, alerter])  # composition check, returns problems; the guard enforces scopes
 ```
 
 ## Verification
@@ -95,18 +95,19 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (563):**
+**Unit tests (921):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
-- **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), trust source enforcement, tool failure handling
+- **Guard enforcement** - scope visibility (also through parent scopes, subscriptions and guard decisions), source level enforcement (max_source), tool failure handling, barrier enforcement (a restricted agent gets no new lease; its need mark goes to the principal, one open at a time)
 - **Conflicts across scope trees** - outer scope first, per-intent competing sets, deferred boundaries, leases and fencing tokens, equal-time intents in write order
 - **Composition** - agent manifest properties, scheduling
 - **Robustness** - garbage collection, thread safety under concurrent access
 - **Property-based ([Hypothesis](https://hypothesis.readthedocs.io/))** - randomized inputs, stateful scheduler fuzzing (register/unregister/update/tick sequences)
-- **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps
+- **Observability and cost controls** - telemetry sink non-interference, budget tracking accuracy, rate limit enforcement, fleet caps, write budgets (a spent budget refuses further writes of its type; burn-rate tiers page or ticket the principal with need marks)
 - **LLM client and stress-test pacing** - Retry-After handling, cached and reasoning token accounting, arrival-ordered pacing under rate limits (real threads)
 - **Stress-test safety metrics** - double bookings counted from the guard's decisions, recovered bookings apart, scope violations checked on every mark the harness hands an agent
+- **Envelope simulator** - the simulator checks the envelope before each write, as a monitor fed by a write hook would answer; the replay of the gpt-oss-120b defense trials of commit 0bf9a05 reproduces the stored first restriction of every agent it can compare (all but the 5 slow_drift adversaries, whose writes were not stored)
 
 **[Stress test:](experiments/stress_test/analysis.md)** AI personal assistants for a simulated office - one per employee, plus adversarial agents that attempt to breach scope boundaries. No central scheduler, all coordination through the shared mark space. The scenario exercises 7 resource types across natural permission boundaries:
 
@@ -118,7 +119,7 @@ The reference implementation and experiments verify that the protocol's properti
 - **Lunch** - FIRST_WRITER: everyone eats, but preferred type has 2:1 demand
 - **Boardroom** - YIELD_ALL mediation (single shared resource)
 
-Department heads book with elevated priority. External system agents (parking bot, building ops) publish low-trust observations and warnings that decay over configurable half-lives. Adversarial agents with normal permissions but adversarial prompts attempt cross-department bookings and warning injection. All five mark types, all three conflict policies, and all three visibility levels produce non-trivial output in a single trial.
+Department heads book with elevated priority. External system agents publish capacity observations (parking bot, at `EXTERNAL_VERIFIED`) and room warnings (building ops; warnings carry no source level), which decay over configurable half-lives. Adversarial agents with normal permissions but adversarial prompts attempt cross-department bookings and warning injection. All five mark types, all three conflict policies, and all three visibility levels produce non-trivial output in a single trial.
 
 Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed analysis of resource allocation, agent behavior, temporal dynamics, and token economics in the [stress test writeup](experiments/stress_test/analysis.md). A re-run on DeepSeek V4.1 Flash 1017 with a 2048-token thinking budget (one run, 2026-11-01) allowed no resource twice in one round and denied every cross-department write, with a mean manifest completion of 64.5% across departments against 58.8% for gpt-oss-120b; the two runs also differ in pacing and harness version ([section 9](experiments/stress_test/analysis.md#9-re-run-on-deepseek-v41-flash-1017)).
 
@@ -130,7 +131,7 @@ Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed an
 - **Scaling** - up to 1,050 agents with proportionally scaled resources: per-agent step count nearly flat (1.2x at 10x scale), no double booking found at any scale point
 - **Resource contention** - 5x more agents competing for the same resources: completion drops to 13.3% from resource scarcity, not protocol failure
 
-**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + statistical envelope + diagnostic probe. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
+**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + barrier + diagnostic probe, with the statistical envelope as a monitor; on glm-5p3-flash the monitor gave a RESTRICTED verdict to 3 to 12 of 100 normal agents per scenario, and nothing acted on it. In the gpt-oss-120b runs the envelope restricted agents through the guard, 9 to 26 of 100 normal agents per scenario, which is why it is a monitor only; the two run sets differ in model and harness, so the counts do not compare directly. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). In slow drift, at a rate well above a low-rate attack, the guard stored the adversaries' false observations; colleagues shown them repeated them, and some acted on them, under a prompt that says to rebook on a maintenance warning. That is the gap the protocol states. A further run at one observation a round, with its decision rule committed first, supports that agents shown such a claim avoid the room (15% of fallback calls to a named room against 45% by chance), on one run, one model and the same seed; the prompt's rule covers maintenance warnings, and most of those calls rest on broken-equipment claims. Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
 
 **[Comparison experiment:](experiments/comparison/analysis.md)** Markspace vs a message-passing framework ([Microsoft Agent Framework](https://github.com/microsoft/agent-framework)) on a shared resource booking scenario. 10 agents, 12 slots, 10 seeds per arm.
 
@@ -149,7 +150,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 563 tests, no API key needed
+pytest            # 921 tests, no API key needed
 ```
 
 ### Use the protocol
@@ -236,7 +237,7 @@ See [`experiments/guide.md`](experiments/guide.md) for CLI reference and cost es
 ## Documentation
 
 - [`docs/framework.md`](docs/framework.md) - protocol design, biological foundations, composition, architecture, failure analysis
-- [`docs/spec.md`](docs/spec.md) - formal specification (76 properties, conformance checklist)
+- [`docs/spec.md`](docs/spec.md) - formal specification (78 properties, conformance checklist)
 - [`experiments/guide.md`](experiments/guide.md) - running experiments (setup, CLI reference, analysis, costs)
 - [`experiments/validation/`](experiments/validation/analysis.md) - safety, visibility, concurrency, scaling
 - [`experiments/stress_test/`](experiments/stress_test/) - 105-agent stress test ([design](experiments/stress_test/design.md), [analysis](experiments/stress_test/analysis.md))
@@ -253,9 +254,9 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 |------------------------------|------|
 | [`core.py`](markspace/core.py) | Mark types, enums, decay, trust, reinforcement, watch patterns, manifests. Stateless. |
 | [`space.py`](markspace/space.py) | Thread-safe mark space. Read, write, query, watch/subscribe. |
-| [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks. |
-| [`envelope.py`](markspace/envelope.py) | Optional. Pluggable per-agent anomaly detection (default: Welford's online algorithm). Manifest-declared baselines. |
-| [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching. |
+| [`guard.py`](markspace/guard.py) | Deterministic enforcement layer. Runs at the mark space boundary, independent of agent logic. Includes pluggable content policies for Observation marks and per-agent write budgets for each mark type. |
+| [`envelope.py`](markspace/envelope.py) | Optional monitor. Pluggable per-agent anomaly detection (default: Welford's online algorithm); nothing in the library acts on its verdicts. Seeded baselines. |
+| [`barrier.py`](markspace/barrier.py) | Optional. Monotonic permission restriction with hierarchical scope matching; the guard enforces it and gives a restricted agent no new lease. |
 | [`probe.py`](markspace/probe.py) | Optional. Diagnostic canary injection. Verifies agent health through the mark space. |
 | [`budget.py`](markspace/budget.py) | Optional. Per-agent token budgets with configurable warning thresholds and hard stops. |
 | [`rate_limit.py`](markspace/rate_limit.py) | Optional. Per-scope write rate limits (per-agent and fleet-wide caps). |
@@ -269,7 +270,7 @@ Most users interact with `core.py` (types), `guard.py` (enforcement), and `space
 
 This is research code - the protocol design is stable, but the implementation is not production-hardened.
 
-The reference implementation is in-memory and single-process. It does not include persistence, networking, authentication, or real-time performance guarantees. The guard enforces structural invariants (scope, identity, conflicts). Content policies provide pluggable semantic inspection of Observation content (pattern matching, LLM-based sanitization), but cannot detect well-formed lies that don't match any policy pattern. The optional layers (envelope, probe, content policies, token budgets, rate limits, telemetry) require per-deployment configuration and are not a substitute for the static enforcement layer. See the [framework doc](docs/framework.md) for a full threat model analysis.
+The reference implementation is in-memory and single-process. It does not include persistence, networking, authentication, or real-time performance guarantees. The guard enforces structural invariants (scope, identity, conflicts). Content policies provide pluggable semantic inspection of Observation content (pattern matching, LLM-based sanitization), but cannot detect well-formed lies that don't match any policy pattern. The optional layers (envelope, probe, content policies, write budgets, token budgets, rate limits, telemetry) require per-deployment configuration and are not a substitute for the static enforcement layer. See the [framework doc](docs/framework.md) for a full threat model analysis.
 
 ## License
 

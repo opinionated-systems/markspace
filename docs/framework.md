@@ -28,7 +28,7 @@ Shared-state coordination is an old idea. Blackboard systems ([Hayes-Roth, 1985]
 
    The tool-calling interface was designed for a single agent: caller identity was never a requirement. Multi-agent systems route multiple independent agents through that same interface without modification - that omission becomes an attack surface the moment multiple callers share it. In an [experiment](../experiments/comparison/analysis.md), an agent prompted to book multiple slots was rejected after its first booking, inferred that identity checks were name-based, and fabricated caller names to bypass them - through ordinary task-completion reasoning, with no instruction to attack. The agent attempted exploitation in all 10 runs; 9 of 10 succeeded. The MCP specification, the leading standard for LLM tool-calling, has "no built-in mechanism for MCP Clients or users to cryptographically verify the true origin or authenticity of a tool" ([Bhatt et al., 2025](https://arxiv.org/abs/2506.01333)); MCP servers similarly cannot distinguish who invokes a request, with session-scoped authorization reused across invocations by different agents ([Huang et al., 2026](https://arxiv.org/abs/2603.07473)): an instance of the confused deputy problem ([Zhang et al., 2026](https://arxiv.org/abs/2601.11893)). Field observations from enterprise MCP deployment confirm these gaps persist at production scale - identity propagation, adaptive tool budgeting, and structured error semantics all require infrastructure-level mechanisms that the specification does not yet address ([Srinivasan, 2026](https://arxiv.org/abs/2603.13417)).
 
-   These vulnerabilities are systemic: attacks succeed "even if individual agents are not susceptible to direct or indirect prompt injection, and even if they refuse to perform harmful actions" ([Triedman et al., 2025](https://arxiv.org/abs/2503.12188)), with no analog in single-agent setups ([Ju et al., 2025](https://arxiv.org/abs/2511.05269)). Adaptive reasoning compounds the exposure: when blocked, an agent reasons about the cause and generates alternatives - LLM flexibility is both the feature and the vulnerability. Safety training primarily addresses human-AI rather than AI-AI interactions ([Triedman et al., 2025](https://arxiv.org/abs/2507.06850)), leaving the coordination layer systematically undefended. The safety guarantees must be structural and enforced at the environment boundary, independent of agent compliance.
+   These vulnerabilities are systemic: attacks succeed "even if individual agents are not susceptible to direct or indirect prompt injection, and even if they refuse to perform harmful actions" ([Triedman et al., 2025](https://arxiv.org/abs/2503.12188)), with no analog in single-agent setups ([Ju et al., 2025](https://arxiv.org/abs/2511.05269)). Adaptive reasoning compounds the exposure: when blocked, an agent reasons about the cause and generates alternatives - LLM flexibility is both the feature and the vulnerability. [Lupinacci et al., 2025](https://arxiv.org/abs/2507.06850) suggest that safety training primarily addresses human-AI rather than AI-AI interactions; that focus leaves the coordination layer systematically undefended. The safety guarantees must be structural and enforced at the environment boundary, independent of agent compliance.
 2. **Information staleness requires explicit modeling.** Blackboard systems and shared databases treat written state as current until explicitly overwritten. LLM agents operate in environments where information decays - a calendar observation from yesterday may be wrong today. Static shared state accumulates stale information that agents cannot distinguish from fresh state without additional mechanisms.
 
 Message-passing coordination adds a third structural problem:
@@ -39,7 +39,7 @@ And consensus-based approaches add a fourth:
 
 4. **Honest-majority cliff edge.** Classical consensus mechanisms (voting, median, aggregation) require an honest majority. A Byzantine fault is any agent failure where the agent continues operating but produces incorrect, misleading, or adversarial output - the defining failure mode of LLM agents under prompt injection. Lamport et al. prove that consensus requires at least *3f + 1* participants to tolerate *f* Byzantine faults, an impossibility result, not a performance curve ([Lamport et al., 1982](https://doi.org/10.1145/357172.357176)). Below the threshold, consensus works. Above it, correctness guarantees vanish entirely.
 
-The mark space is a shared-state architecture in the blackboard tradition, extended with three mechanisms for LLM agents: (1) a deterministic guard layer that enforces authorization and conflict resolution independent of agent behavior, (2) temporal decay that models information freshness without explicit invalidation, and (3) source-based trust weighting that attenuates marks from untrusted origins.
+The mark space is a shared-state architecture in the blackboard tradition, extended with three mechanisms for LLM agents: (1) a deterministic guard layer that enforces authorization and conflict resolution independent of agent behavior, (2) temporal decay that models information freshness without explicit invalidation, and (3) source-level weighting that attenuates observations from untrusted providers.
 
 These mechanisms address the specific failure modes that arise when agents are probabilistic, exploitable, and operating in environments where information goes stale. Agents read from shared structured state rather than compressing context into messages for each other. They don't progressively diverge because the mark space *is* the shared world state. Schema and scope violations don't cascade across agents because the guard catches them at the boundary. (Semantically incorrect but well-formed observations still propagate at full trust weight - the guard has no semantic error detection.)
 
@@ -133,17 +133,17 @@ enum Severity {
 **Properties**:
 ```protobuf
 message IntentMark {
-  string agent_id    = 1;  // UUID, who wrote it
-  string scope       = 2;  // resource domain ("calendar", "email", "finances")
-  string resource_id = 3;  // specific resource ("meeting-2026-02-27-14:00")
-  string action      = 4;  // planned action ("reschedule", "cancel", "book")
-  float  confidence  = 5;  // [0,1] how committed (0.3 = considering, 0.9 = about to execute)
-  double created_at  = 6;  // unix timestamp
-  double ttl         = 7;  // seconds; evaporates if no action mark follows
+  string agent_id   = 1;  // UUID, who wrote it
+  string scope      = 2;  // resource domain ("calendar", "email", "finances")
+  string resource   = 3;  // specific resource ("meeting-2026-02-27-14:00")
+  string action     = 4;  // planned action ("reschedule", "cancel", "book")
+  float  confidence = 5;  // [0,1] how committed (0.3 = considering, 0.9 = about to execute)
+  double created_at = 6;  // unix timestamp
+  // the scope's intent_ttl sets the expiry: evaporates if no action mark follows
 }
 ```
 
-**Decay**: Intent marks without a corresponding action mark evaporate after TTL. The agent died, changed its mind, or got interrupted. The mark disappears, freeing the resource for other agents. No cleanup logic needed; evaporation handles cleanup.
+**Decay**: Intent marks without a corresponding action mark evaporate after their scope's `intent_ttl`. The agent died, changed its mind, or got interrupted. The mark disappears, freeing the resource for other agents, unless the intent holds a lease from a later grant, which runs one TTL from that grant. No cleanup logic needed; evaporation handles cleanup.
 
 **Conflict rule (local)**: If an agent reads an intent mark on a resource it also intends to modify:
 - If other intent confidence > own confidence: yield (delay own action).
@@ -156,7 +156,7 @@ Loosely similar to CAS (Compare-And-Swap) in concurrent programming (read state,
 
 **Across a scope tree**: an intent competes with intents on the same resource in its own scope, its ancestors and its descendants, not in sibling scopes. The intent in the outer scope wins; inside one scope, the scope's policy decides; YIELD_ALL in either scope hands the pair to the principal. Each intent is judged against its own competing set, so no decision allows two competing intents, and the outcome does not depend on which scope's decision computes it ([spec 6.1](spec.md#61-resolution-protocol)). Among waiting claims, an outer-scope intent pre-empts inner-scope intents whatever their order or confidence. A granted claim holds a lease with a fencing token and is not pre-empted, and a successful action written through the guard is recorded only under its lease or as an uncontested direct claim ([Gray & Cheriton, 1989](https://doi.org/10.1145/74850.74870); [Burrows, 2006](https://www.usenix.org/legacy/event/osdi06/tech/burrows.html); [spec 6.5](spec.md#65-grants)). The costs: a crashed holder blocks the resource until its lease expires, and a tool that runs longer than its lease loses it, and its action is not recorded. Equal intents resolve in write order: each intent or action on a resource gets a later `created_at` than every earlier one on that resource in its scope, also when the clock has not moved (spec P32).
 
-**The consistency hybrid.** The protocol uses soft consistency for information sharing (observation marks decay, warnings fade, reinforcement is approximate) and hard consistency for mutual exclusion (the guard acquires a lock during conflict resolution to serialize resource claims). This is deliberate: information can tolerate eventual convergence, but "two agents must not book the same room" requires serialization. The stress test confirms this - HIGHEST_CONFIDENCE degenerates to FIRST_WRITER under the lock because the second agent finds an already-committed action, not a competing intent. The lock makes mutual exclusion reliable at the cost of reducing priority-based policies to first-come-first-served. Deferred resolution ([Spec Section 6.2](spec.md#62-deferred-resolution)) restores priority semantics by separating claim collection from allocation.
+**The consistency hybrid.** The protocol uses soft consistency for information sharing (observation marks decay, warnings fade, reinforcement is approximate) and hard consistency for mutual exclusion (the guard acquires a lock during conflict resolution to serialize resource claims). This is deliberate: information can tolerate eventual convergence, but "two agents must not book the same room" requires serialization. In an immediate scope, HIGHEST_CONFIDENCE therefore degenerates to FIRST_WRITER: the second agent finds that the first already holds the resource through a lease or an action, not a competing intent that is still waiting, so it loses even with higher confidence. The stress test showed this. The lock makes mutual exclusion reliable at the cost of reducing priority-based policies to first-come-first-served. Deferred resolution ([Spec Section 6.2](spec.md#62-deferred-resolution)) restores priority semantics by separating claim collection from allocation.
 
 ### Mark Type 2: Action
 
@@ -169,13 +169,14 @@ Loosely similar to CAS (Compare-And-Swap) in concurrent programming (read state,
 **Properties**:
 ```protobuf
 message ActionMark {
-  string                 agent_id    = 1;  // UUID
-  string                 scope       = 2;
-  string                 resource_id = 3;
-  string                 action      = 4;  // what was done
-  google.protobuf.Struct result      = 5;  // outcome (success/failure, details)
-  double                 created_at  = 6;  // unix timestamp
-  optional string        supersedes  = 7;  // mark UUID; if this action replaces a previous one
+  string                 agent_id   = 1;  // UUID
+  string                 scope      = 2;
+  optional string        resource   = 3;  // the resource that was modified
+  string                 action     = 4;  // what was done
+  google.protobuf.Struct result     = 5;  // outcome of the action
+  bool                   failed     = 6;  // true when the tool threw an exception or when `execute` could not record its action under its lease
+  double                 created_at = 7;  // unix timestamp
+  optional string        supersedes = 8;  // mark UUID; if this action replaces a previous one
 }
 ```
 
@@ -207,13 +208,16 @@ message ObservationMark {
 
 **Decay**: Observations have a freshness half-life. E.g., an observation from 6 hours ago has half the weight of a fresh one. An observation from 3 days ago is near-zero. The world changes, so stale observations should fade rather than persist at full strength.
 
-**Source trust**: Source trust introduces the adversarial model. Marks from fleet agents (`FLEET`) are trusted, since they're authenticated and from agents you built. Marks from external sources are categorized:
-- `EXTERNAL_VERIFIED`: cross-referenced against a second source or known fact
-- `EXTERNAL_UNVERIFIED`: single-source, could be adversarial
+**Source levels**: Source levels introduce the adversarial model. The source level of an observation names where its content came from:
+- `FLEET`: the fleet's own work; the writer read no content from outside the fleet
+- `EXTERNAL_VERIFIED`: content from an outside provider that the principal accepts, with its authorship proven
+- `EXTERNAL_UNVERIFIED`: any other outside content, for example a scraped web page or a customer's message; could be adversarial
 
-An agent's local rules weight observations by `source * freshness * confidence`. Fleet observations dominate while old external observations vanish. This mirrors the immune system's self vs non-self recognition, built into the mark protocol rather than added as a separate adversarial defense layer.
+The writer sets the source level, and the principal bounds it through the harness: each agent that writes observations gets a `max_source` no higher than the lowest source level of what it reads. That is `EXTERNAL_VERIFIED` for a provider that the principal accepts, `EXTERNAL_UNVERIFIED` for any other outside content, and the source level of each observation that the agent reads. The mark space refuses a higher level from that agent ([spec 8.1](spec.md#81-write)). It does not lower the bound by itself: the harness sets it from what the agent is configured to read. Agreement between providers does not raise a source level.
 
-**Reinforcement**: When multiple agents independently write similar observation marks on the same topic, the effective strength increases. The mechanism is direct pheromone reinforcement: more ants on a trail produce a stronger signal, with no voting protocol needed. Convergent independent observations naturally strengthen while divergent observations naturally weaken through low reinforcement and normal decay.
+An agent's local rules weight observations by `trust weight * freshness * confidence`. A single external observation weighs less than a `FLEET` observation of the same strength and age (P6), and old external observations vanish. This mirrors the immune system's self vs non-self recognition, built into the mark protocol rather than added as a separate adversarial defense layer.
+
+**Reinforcement**: When several agents independently write similar observation marks on the same topic, a reader can combine their strengths into one aggregate signal with `reinforce()` ([spec 5](spec.md#5-reinforcement)). The combination is sublinear and bounded. A pheromone trail is the analogy: more ants on a trail make a stronger signal. Here the signal strengthens only when a reader combines marks; the space stores each mark as written, and `read()` returns them one by one. `reinforce()` combines the strengths that the reader gives it, and it counts marks, not writers. A reader that wants agreement between independent writers to count selects the observations that agree and gives at most one for each writer; otherwise one writer's repeated observations raise the aggregate as many writers would. Observations that disagree weaken only through normal decay.
 
 ### Mark Type 4: Warning
 
@@ -229,14 +233,15 @@ message WarningMark {
   string          agent_id    = 1;  // UUID
   string          scope       = 2;
   optional string invalidates = 3;  // mark UUID being contradicted
-  string          reason      = 4;
-  Severity        severity    = 5;
-  double          created_at  = 6;  // unix timestamp
+  string          topic       = 4;  // what the warning is about
+  string          reason      = 5;
+  Severity        severity    = 6;
+  double          created_at  = 7;  // unix timestamp
   // exponential decay: strength(t) = initial * 0.5^(age / warning_half_life)
 }
 ```
 
-**Decay**: Warnings use the same exponential decay as observations, `0.5^(age / half_life)`, but with a shorter half-life (the spec recommends `warning_half_life <= observation_half_life`). A warning from 5 minutes ago is urgent. A warning from 2 days ago is context. The shorter half-life ensures warnings are noticed quickly but don't clutter the mark space permanently. The behavioral difference from observations is the invalidation mechanic: a warning referencing another mark reduces that mark's effective strength by the warning's current strength, suppressing it while the warning is fresh and releasing it as the warning decays.
+**Decay**: Warnings use the same exponential decay as observations, `0.5^(age / half_life)`, but with a shorter half-life (the spec recommends `warning_half_life <= observation_half_life`). A warning from 5 minutes ago is urgent; after 2 days it is gone from a default read, its strength below 0.01 at any half-life of 6 hours or less. With the shorter half-life, a warning loses its effect and leaves the default read set sooner than an observation. The behavioral difference from observations is the invalidation mechanic: a warning referencing another mark reduces that mark's effective strength by the warning's current strength, suppressing it while the warning is fresh and releasing it as the warning decays.
 
 **What it solves**: The "world changes while agent works" problem. No central invalidation service. No message broadcasting. Agent A discovers the merger announcement. Writes a `CRITICAL` warning that invalidates its own earlier observation mark ("Company X is independent"). All agents reading observation marks on Company X see the warning, reweight, adapt. Agents that have already completed work based on the invalidated observation won't retroactively change, but agents currently in progress will see the warning and adjust.
 
@@ -253,22 +258,22 @@ message WarningMark {
 **Properties**:
 ```protobuf
 message NeedMark {
-  string                          agent_id     = 1;  // UUID
-  string                          scope        = 2;
-  string                          question     = 3;  // what input is needed
-  google.protobuf.Struct          context      = 4;  // relevant information for the question
-  float                           priority     = 5;  // [0,1] urgency
-  optional google.protobuf.Struct alternatives = 6;  // options the agent has identified
-  bool                            blocking     = 7;  // is the agent blocked waiting?
-  double                          created_at   = 8;  // unix timestamp
-  optional string                 resolved_by  = 9;  // UUID of the action mark that resolved this
+  string                 agent_id    = 1;  // UUID
+  string                 scope       = 2;
+  string                 question    = 3;  // what input is needed
+  google.protobuf.Struct context     = 4;  // relevant information for the question
+  float                  priority    = 5;  // [0,1] urgency
+  bool                   blocking    = 6;  // is the agent blocked waiting?
+  double                 created_at  = 7;  // unix timestamp
+  optional string        resolved_by = 8;  // UUID of the action mark that resolved this
+  optional string        resolved_by_agent = 9;  // UUID of the agent that wrote the resolving action
   // no decay while unresolved; strength → 0 on resolution
 }
 ```
 
 **Decay**: Need marks don't decay while unresolved. They accumulate. A simple aggregator (not an agent, just a collector with no intelligence) batches them by priority and presents them to the principal when the principal is available.
 
-**Resolution**: The principal responds by writing an **action mark** scoped to the need. The agent polls for resolving action marks on its pending needs. When resolved, the need mark is closed by setting `resolved_by` to the action mark's UUID. `compute_strength` returns 0 for any need whose `resolved_by` is set.
+**Resolution**: The principal responds by writing an **action mark** and calling `resolve()` with the need's id and the action's id; an action mark alone closes nothing. `resolve()` writes a new version of the need mark, with `resolved_by` set to the action mark's UUID. `compute_strength` returns 0 for any need whose `resolved_by` is set.
 
 **Emergent prioritization**: If 5 agents write need marks about the same topic (e.g., "should we proceed with deal X given the merger?"), the aggregator presents one consolidated need with effective priority = max(individual priorities) + density bonus. No ranking algorithm or priority negotiation required. Mark density serves as the priority signal.
 
@@ -298,31 +303,31 @@ Each situation has distinct failure modes. The protocol addresses all six throug
 
 ### Single-Agent Validation and Trust
 
-Trust in agent output is established through layered validation. The **static enforcement layer** - authority checks, schema validation, and convergent redundancy - is access control enforced at the environment boundary with infrastructure-injected identity: per-resource least-privilege access ([NIST SP 800-207](https://csrc.nist.gov/pubs/sp/800/207/final)), deterministic schema checks ([DO-178C](https://en.wikipedia.org/wiki/DO-178C) checkpoints), and convergent redundancy (independent observations that agree strengthen the signal, as in [Byzantine fault tolerance](https://doi.org/10.1145/357172.357176)). The key property is not the checks themselves - these are standard RBAC/ACL concepts - but that the agent never touches its own identity or permissions. The guard receives an `Agent` object from the harness; the LLM sees only tool results. This is what the [comparison experiment](../experiments/comparison/analysis.md) validates: the same access control logic fails in a message-passing framework because identity is a string argument the LLM controls. The **adaptive monitoring layer** adds statistical anomaly detection ([Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm); see also [Shewhart](https://en.wikipedia.org/wiki/Control_chart)/[CUSUM](https://en.wikipedia.org/wiki/CUSUM)), progressive scope restriction ([principle of least privilege](https://en.wikipedia.org/wiki/Principle_of_least_privilege)), and active probing ([NASA fault protection](https://ntrs.nasa.gov/citations/20150011958); [Hsueh et al., 1997](https://doi.org/10.1109/2.585157)). Together the two layers form a defense-in-depth stack, but the static layer alone provides the safety guarantee.
+Trust in agent output is established through layered validation. The **static enforcement layer** - authority checks, schema validation, and convergent redundancy - is access control enforced at the environment boundary with infrastructure-injected identity: per-resource least-privilege access ([NIST SP 800-207](https://csrc.nist.gov/pubs/sp/800/207/final)), deterministic schema checks ([DO-178C](https://en.wikipedia.org/wiki/DO-178C) checkpoints), and convergent redundancy (independent observations that agree strengthen the signal, as in [Byzantine fault tolerance](https://doi.org/10.1145/357172.357176)). The key property is not the checks themselves - these are standard RBAC/ACL concepts - but that the agent never touches its own identity or permissions. The guard receives an `Agent` object from the harness; the LLM sees only tool results. This is what the [comparison experiment](../experiments/comparison/analysis.md) validates: the same access control logic fails in a message-passing framework because identity is a string argument the LLM controls. The **adaptive monitoring layer** adds statistical anomaly detection ([Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm); see also [Shewhart](https://en.wikipedia.org/wiki/Control_chart)/[CUSUM](https://en.wikipedia.org/wiki/CUSUM)), scope restriction ([principle of least privilege](https://en.wikipedia.org/wiki/Principle_of_least_privilege)), and active probing ([NASA fault protection](https://ntrs.nasa.gov/citations/20150011958); [Hsueh et al., 1997](https://doi.org/10.1109/2.585157)). Together the two layers form a defense-in-depth stack, but the static layer alone provides the safety guarantee.
 
 | Check | Stigmergic Expression | Implementation |
 |-------|----------------------|----------------|
 | Authority | What mark types and scopes this agent is allowed to write. Its "pheromone glands." | Guard + agent `can_write()`, [spec 7.3](spec.md#73-scope-authorization) |
-| Validation | Schema validation on marks before writing. Malformed marks rejected locally. | Guard `_validate_mark()`, [spec 9.2](spec.md#92-guard-operations) |
-| Redundancy | Observation reinforcement: convergent independent observations, no voting protocol. | `reinforce()`, [spec 5.1](spec.md#51-combination-rule) |
-| Statistical Envelope | Monitor this agent's mark patterns over time. Anomalous marking rate or content triggers scope restriction. | Guard `write_mark()` + `StatisticalEnvelope`, [spec 9.7](spec.md#97-statistical-envelope) |
-| Absorbing Barrier | Reduce the agent's writable mark types. Narrow its scope. Increase need-mark requirements. | `AgentBarrier.narrow()` + guard `_apply_restriction()`, [spec 9.8](spec.md#98-absorbing-barrier) |
+| Validation | Schema validation on marks before writing. Malformed marks rejected locally. | `MarkSpace._validate_mark()`, [spec 9.2](spec.md#92-guard-operations) |
+| Redundancy | Observation reinforcement: a reader can combine agreeing observations into one stronger signal. | `reinforce()`, [spec 5.1](spec.md#51-combination-rule) |
+| Statistical Envelope | Monitor this agent's mark patterns over time. An anomalous marking rate or type mix gives a verdict for the principal; nothing acts on it. | `StatisticalEnvelope` on a space write hook, [spec 9.7](spec.md#97-statistical-envelope) |
+| Absorbing Barrier | Reduce the agent's writable mark types. Narrow its scope. Increase need-mark requirements. | `AgentBarrier.narrow()`, set by the harness, the probe's caller or the principal, enforced by the guard, [spec 9.8](spec.md#98-absorbing-barrier) |
 | Diagnostic Probe | Canary mark written to diagnostics scope, read back into system prompt on agent init. All tool calls gated on acknowledgment - agents that do not acknowledge get zero actions and are flagged COMPROMISED. | `DiagnosticProbe.inject_canary()` + `acknowledge_canary`, [spec 9.9](spec.md#99-diagnostic-probe) |
-| Content Policy | Pluggable content inspection pipeline for Observation marks. Policies can ALLOW, REWRITE (sanitize content), REJECT (block write), or FLAG (allow but warn). Evaluated after rate limits, before scope validation. | Guard `_check_content_policies()` + `ContentPolicy` ABC, [spec 9.13](spec.md#913-content-policies) |
+| Content Policy | Pluggable content inspection pipeline for Observation marks. Policies can ALLOW, REWRITE (sanitize content), REJECT (block write), or FLAG (allow but warn). Evaluated after the authorization, barrier and rate-limit checks, before the write budget and the schema check. | Guard `_check_content_policies()` + `ContentPolicy` ABC, [spec 9.13](spec.md#913-content-policies) |
 
 <p align="center"><img src="../figures/single_agent.svg" alt="Single agent architecture" width="700"></p>
 
-The first three checks (authority, validation, redundancy) are the **static enforcement layer** - they reject malformed or unauthorized writes at the boundary. These are non-negotiable: every deployment needs them. The remaining four (envelope, barrier, probe, content policy) are the **adaptive monitoring layer**. Behavioral anomaly detection is hard to get right - it requires tuning thresholds to specific workloads, accepting a tradeoff between false positives and missed adversaries, and dealing with failure modes that only surface when many agents with different activity patterns interact over time. The adaptive layer is therefore optional: deployments that don't need runtime anomaly detection can use the static layer alone. All seven checks are wired through the guard's `write_mark()` enforcement boundary and post-write hooks ([spec 8.6](spec.md#86-write-hooks)).
+The first three checks (authority, validation, redundancy) are the **static enforcement layer** - authority and validation reject malformed or unauthorized writes at the boundary, while redundancy rejects nothing: a reader uses it to combine observations. These are non-negotiable: every deployment needs them. The remaining four (envelope, barrier, probe, content policy) are the **adaptive monitoring layer**. Behavioral anomaly detection is hard to get right - it requires tuning thresholds to specific workloads, accepting a tradeoff between false positives and missed adversaries, and dealing with failure modes that only surface when many agents with different activity patterns interact over time. The adaptive layer is therefore optional: deployments that don't need runtime anomaly detection can use the static layer alone. The barrier and the content policies act through the guard's `write_mark()` enforcement boundary; the probe's caller sets barriers; the envelope is a monitor on a post-write hook ([spec 8.6](spec.md#86-write-hooks)) whose verdicts nothing acts on.
 
-**How the adaptive layer works.** The **statistical envelope** gives each agent its own pluggable anomaly detector (default: `WelfordDetector`) that learns that agent's individual baseline from streaming window counts. No assumption that agents share the same activity pattern. Agents can declare expected activity in their manifest (`expected_activity`) to pre-seed the baseline. The envelope detects rate spikes, type distribution shifts, and cross-agent concentration. Detection algorithms are swappable via the `AnomalyDetector` protocol. See [spec 9.7](spec.md#97-statistical-envelope), properties P40-P43. The **absorbing barrier** narrows an agent's writable mark types and increases need-mark requirements when the envelope flags anomalies. The narrowing is monotonic - scope can shrink but not grow without principal intervention (P44-P45). See [spec 9.8](spec.md#98-absorbing-barrier). The **diagnostic probe** writes a canary mark to the diagnostics scope; the harness reads it back into the system prompt on agent init and gates all tool calls on acknowledgment - an agent that does not call `acknowledge_canary` with the correct ID gets zero actions that round. After the round, non-acknowledgers are marked COMPROMISED: the probe writes a blocking Need for principal review and the guard applies a global barrier revoking observation and action permissions (only Need marks remain writable until the principal restores access). The probe tests whether system prompt instructions survive competing injection through untrusted channels - it catches total behavioral takeover, not targeted adversarial behavior. A knowledgeable adversary that acknowledges the canary and then acts adversarially evades detection. See [spec 9.9](spec.md#99-diagnostic-probe), property P46. **Content policies** provide pluggable content inspection for Observation marks. Policies compose as a pipeline: each policy can ALLOW, REWRITE (sanitize content), REJECT (block the write), or FLAG (allow but warn). Content policies run after rate limits and before scope validation - late in the stack because they may be expensive (LLM calls). They operate independently of the envelope and barrier (P70). See [spec 9.13](spec.md#913-content-policies), properties P67-P70.
+**How the adaptive layer works.** The **statistical envelope** gives each agent its own pluggable anomaly detector (default: `WelfordDetector`) that learns that agent's individual baseline from streaming window counts. No assumption that agents share the same activity pattern. A harness can seed the baseline from a manifest's `expected_activity`. The envelope detects rate spikes, type distribution shifts, and cross-agent concentration. It is a monitor: nothing in the library acts on its verdicts, and it sees what its caller feeds it, stored marks through a write hook and refused attempts through `record_attempt()`. Detection algorithms are swappable via the `AnomalyDetector` ABC. See [spec 9.7](spec.md#97-statistical-envelope), properties P40-P41. The **absorbing barrier** narrows an agent's writable mark types and increases need-mark requirements when the harness, the probe's caller or the principal narrows it. The narrowing is monotonic - scope can shrink but not grow without principal intervention (P44-P45). See [spec 9.8](spec.md#98-absorbing-barrier). The **diagnostic probe** writes a canary mark to the diagnostics scope; the harness reads it back into the system prompt on agent init and gates all tool calls on acknowledgment - an agent that does not call `acknowledge_canary` with the correct ID gets zero actions that round. After the round, non-acknowledgers are marked COMPROMISED: the probe writes a blocking Need for principal review and a harness can apply a global barrier that revokes observations and actions, so the agent gets no new lease, and requires a need mark before warnings (the stress-test harness does; [spec 9.9](spec.md#99-diagnostic-probe) lists what the agent can still do). A restricted agent can still ask the principal: its need mark goes to the principal-only `_system` scope, one open at a time, so a compromised agent cannot use need marks to reach other agents or to flood the principal ([spec 9.8](spec.md#98-absorbing-barrier)). The probe tests whether system prompt instructions survive competing injection through untrusted channels - it catches total behavioral takeover, not targeted adversarial behavior. A knowledgeable adversary that acknowledges the canary and then acts adversarially evades detection. See [spec 9.9](spec.md#99-diagnostic-probe), property P46. **Content policies** provide pluggable content inspection for Observation marks. Policies compose as a pipeline: each policy can ALLOW, REWRITE (sanitize content), REJECT (block the write), or FLAG (allow but warn). Content policies run after the authorization, barrier and rate-limit checks and before the write budget and the schema check - late in the stack because they may be expensive (LLM calls). They operate independently of the barrier and the rate limits (P70). See [spec 9.13](spec.md#913-content-policies), properties P67-P70.
 
-**What this catches and what it doesn't.** A prompt-injected agent is structurally equivalent to a low-quality agent: checks are enforced at the mark space boundary, not inside the agent. Neither the static nor the adaptive structural layers catch well-formed lies from authorized agents. Content policies ([spec 9.13](spec.md#913-content-policies)) provide pluggable semantic inspection of Observation content - they can detect and rewrite known-bad patterns (complacent language, fabricated claims, excessive length) or reject observations that violate domain-specific constraints. However, content policies are author-provided checks, not general lie detectors: a well-formed false observation that doesn't match any policy pattern still passes at full trust weight (1.0). If multiple compromised agents write corroborating false observations, the reinforcement mechanism amplifies the signal (two observations: aggregate 1.3; three: 1.39; capped at 2.0). Slow-drift semantic poisoning - gradually shifting observation content without triggering content policy patterns, rate anomalies, or type distribution changes - remains the hardest attack to detect. The probe cannot detect semantic corruption: an agent that acknowledges canaries correctly can still write false observations. The adversarial experiments ([trials analysis](../experiments/trials/analysis.md), [defense trials](../experiments/trials/results/defense/analysis.md)) test the authorization-enforcement surface; the semantic-attack surface is partially addressed by content policies but not comprehensively exercised.
+**What this catches and what it doesn't.** A prompt-injected agent is structurally equivalent to a low-quality agent: checks are enforced at the mark space boundary, not inside the agent. Neither the static nor the adaptive structural layers catch well-formed lies from authorized agents. Content policies ([spec 9.13](spec.md#913-content-policies)) provide pluggable semantic inspection of Observation content - they can detect and rewrite known-bad patterns (complacent language, fabricated claims, excessive length) or reject observations that violate domain-specific constraints. However, content policies are author-provided checks, not general lie detectors: a well-formed false observation that doesn't match any policy pattern still passes at full trust weight (1.0). If multiple compromised agents write corroborating false observations, the reinforcement mechanism amplifies the signal (two observations: aggregate 1.3; three: 1.6; capped at 2.0). Slow-drift semantic poisoning - gradually shifting observation content without triggering content policy patterns, rate anomalies, or type distribution changes - remains the hardest attack to detect. The probe cannot detect semantic corruption: an agent that acknowledges canaries correctly can still write false observations. The adversarial experiments ([trials analysis](../experiments/trials/analysis.md), [defense trials](../experiments/trials/results/defense/analysis.md)) mostly test the authorization-enforcement surface. The defense trials' slow-drift scenario reaches the semantic surface without content policies: the guard stores well-formed false observations from an authorized agent, and the probe sees nothing wrong. Agents shown them repeat them as fact and sometimes change a choice, under a prompt that tells them to rebook on a maintenance warning. A further run at a low rate, with its decision rule committed first and the same seed, supports that agents shown such a claim avoid the room it names, also for claims the prompt does not mention. The monitor gives most of those adversaries a RESTRICTED verdict, and some normal agents too, but it does the same for adversaries whose observations were all refused, so this does not show that it sees false observations. Small trials on one model, they show that the gap is real, not how large it is in a deployment.
 
-**Algorithm rationale.** The envelope's default detector uses [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)): O(1) time and memory per update, numerically stable under long accumulation, and adaptive - a fixed rate limit cannot distinguish an agent that normally writes 20 marks per window from one that writes 2. Detection is pluggable via the `AnomalyDetector` ABC; deployments can substitute any algorithm that learns a per-agent baseline from streaming window counts. Tumbling windows (no overlap) are the simplest time division. The barrier uses a monotonic revocation set (add-only) to eliminate TOCTOU races - restrictions can only grow, so a checked-then-used permission cannot be revoked between check and use. Cooldown-based expiry was rejected because a compromised agent can simply wait out the timer. The probe uses canary injection rather than heartbeats because heartbeats test liveness, not behavioral correctness - an agent can be alive and completely ignoring the mark space.
+**Algorithm rationale.** The envelope's default detector uses [Welford's online algorithm](https://en.wikipedia.org/wiki/Welford%27s_online_algorithm) ([Welford, 1962](https://doi.org/10.1007/BF02289263)): O(1) time and memory per update, numerically stable under long accumulation, and adaptive - a fixed rate limit cannot distinguish an agent that normally writes 20 marks per window from one that writes 2. Detection is pluggable via the `AnomalyDetector` ABC; deployments can substitute any algorithm that learns a per-agent baseline from streaming window counts. Tumbling windows (no overlap) are the simplest time division. The barrier uses a monotonic revocation set (add-only): without the principal, restrictions can only grow. That does not close the window between a check and its use: a restriction that lands after the guard has checked a write does not stop that write, only a later write that the barrier checks ([spec 9.8](spec.md#98-absorbing-barrier)). Cooldown-based expiry was rejected because a compromised agent can simply wait out the timer. The probe uses canary injection rather than heartbeats because heartbeats test liveness, not behavioral correctness - an agent can be alive and completely ignoring the mark space.
 
-**Detection limits.** We chose monotonic restriction (P40) so that a restricted agent stays restricted until a principal reviews it. False positives are therefore costly - the principal must intervene - so operators should tune detector sensitivity to match their tolerance for manual review. The default `WelfordDetector` threshold derivations are documented in the code comments (`envelope.py`). Two pitfalls that apply regardless of algorithm, and what we do about them:
+**Detection limits.** The envelope's RESTRICTED verdict is monotonic (P40), so it stays until a principal reviews it. Nothing acts on it, so a false verdict costs a review, not a stop; operators tune detector sensitivity to match their tolerance for manual review. The default `WelfordDetector` threshold derivations are documented in the code comments (`envelope.py`). Two pitfalls that apply regardless of algorithm, and what we do about them:
 
-1. **Invisible rejection paths.** The envelope sees marks, not attempts. Guard paths that reject before writing any mark are detection blind spots. The guard feeds rejected attempts into the envelope via `record_attempt()` so that conflict-spam is visible to the detector.
+1. **Invisible rejection paths.** The envelope sees marks, not attempts. Guard paths that reject before writing any mark are detection blind spots. The caller feeds refused attempts into the envelope via `record_attempt()`, for example after a guard call that returns CONFLICT with no intent id, so that conflict-spam is visible to the detector.
 
 2. **Cold-start baseline poisoning.** Adversaries can burst during the cold-start period to inflate their own baseline. The default detector uses robust initialization (median/MAD) instead of raw accumulators.
 
@@ -340,24 +345,23 @@ One limit we cannot fix within a per-agent detector:
 
 ### Agent-Environment Interaction (Adversarial)
 
-**Source authentication on marks.**
+**Source levels of observations.**
 
 | Source | Weight | Condition |
 |--------|--------|-----------|
-| `FLEET` | 1.0 | authenticated, signed |
-| `EXTERNAL_VERIFIED` | 0.7 | cross-referenced against 2+ sources |
-| `EXTERNAL_UNVERIFIED` | 0.3 | single source |
-| `CONTRADICTED` | weight - contradiction_weight | conflicts with higher-trust marks |
+| `FLEET` | 1.0 | the fleet's own work; the writer read no outside content |
+| `EXTERNAL_VERIFIED` | 0.7 | outside content from a provider that the principal accepts, with its authorship proven |
+| `EXTERNAL_UNVERIFIED` | 0.3 | any other outside content |
 
-Effective weight: `trust_weight * freshness * confidence`
+Effective strength: `trust_weight * freshness` ([spec 4.2](spec.md#42-effective-strength)). A reader's local rules can also multiply it by `confidence`.
 
-This handles the "hostile internet" problem. An agent scrapes a webpage that contains prompt injection. The agent writes an observation mark with `source=EXTERNAL_UNVERIFIED`. Other agents read it at 30% weight. If the observation contradicts fleet observations, the contradiction further reduces it. No separate adversarial detection framework. Trust levels are properties of marks, enforced by local rules.
+This handles the "hostile internet" problem. An agent scrapes a webpage that contains prompt injection. The harness gave the scraping agent `max_source=EXTERNAL_UNVERIFIED`, so each observation that the agent writes has at most that source level, whatever the injected text tells it ([spec 8.1](spec.md#81-write)). Each agent that reads those observations also gets `max_source=EXTERNAL_UNVERIFIED`, so the injected text keeps its source level one agent later. Other agents read it at 30% weight. If another agent finds that it contradicts `FLEET` observations, that agent writes a warning that invalidates it, and the warning's strength is subtracted from the observation's ([spec 9.5](spec.md#95-warning-invalidation)). No separate adversarial detection framework. Source levels are properties of marks; the mark space enforces the bound, and local rules apply the weights.
 
-The immune system parallel is instructive. T-cells don't have a "threat detection committee." Each cell has receptors. If the presented antigen matches, the cell activates. If it doesn't, the cell ignores it. False positives (autoimmunity) and false negatives (immune evasion) exist, but the system works at population scale because response strength is proportional to convergence - a single T-cell recognizing an antigen produces a tiny local effect; the response becomes significant only as more cells with the same receptor independently activate and undergo [clonal expansion](https://en.wikipedia.org/wiki/Clonal_expansion). Same principle here: a single unreinforced observation mark carries less weight and decays faster; independent observations that converge strengthen the signal.
+The immune system parallel is instructive. T-cells don't have a "threat detection committee." Each cell has receptors. If the presented antigen matches, the cell activates. If it doesn't, the cell ignores it. False positives (autoimmunity) and false negatives (immune evasion) exist, but the system works at population scale because response strength is proportional to convergence - a single T-cell recognizing an antigen produces a tiny local effect; the response becomes significant only as more cells with the same receptor independently activate and undergo [clonal expansion](https://en.wikipedia.org/wiki/Clonal_expansion). Same principle here: a single observation mark gives a reader only its own strength, and independent observations that converge strengthen the signal when a reader combines them. Reinforcement does not change decay: each mark decays at its scope's half-life.
 
-The trust model is deliberately simple: three fixed levels with static weights. The primary threat model is external compromise - hostile internet content, untrusted plugins, external data sources, cross-principal agents. The trust levels ensure fleet observations dominate external ones, and unverified external input is heavily discounted. This is the threat that matters most in practice: an agent that scrapes a webpage, calls an external API, or receives input from another organization's agent should not be able to override observations from your own fleet.
+The trust model is deliberately simple: three fixed levels with static weights. The primary threat model is external compromise - hostile internet content, untrusted plugins, external data providers, cross-principal agents. The source levels make a single external observation weigh less than a `FLEET` observation of the same strength and age, and unverified external input is heavily discounted. Source levels apply to observations only: an agent's intents, actions, warnings and needs weigh 1.0 whatever its `max_source`. An agent whose warnings or actions the principal does not trust at full weight gets no permission to write them. This is the threat that matters most in practice: an agent that scrapes a webpage, calls an external API, or receives input from another organization's agent should not be able to override observations from your own fleet.
 
-The computational trust literature offers far more sophisticated approaches. [Marsh (1994)](https://dspace.stir.ac.uk/handle/1893/2010) formalized trust as a continuous value derived from experience, [Granatyr et al. (2015)](https://doi.org/10.1145/2816826) surveyed trust and reputation models for multi-agent systems across two decades. These address a different problem: differentiating reliability *within* a trust class. All FLEET agents currently get weight 1.0, even if one is consistently accurate and another frequently hallucinates. Per-agent computed trust would differentiate them, but requires a ground truth signal (was this observation correct?) that is often unavailable for LLM agents. Classical multi-agent trust models assume agents with stable, observable behavior over many interactions. LLM agents are stochastic - the same agent with the same prompt produces different outputs - making experience-based scoring harder to calibrate.
+The computational trust literature offers far more sophisticated approaches. [Marsh (1994)](https://dspace.stir.ac.uk/handle/1893/2010) formalized trust as a continuous value derived from experience, [Granatyr et al. (2015)](https://doi.org/10.1145/2816826) surveyed trust and reputation models for multi-agent systems across two decades. These address a different problem: differentiating reliability *within* a trust class. All `FLEET` observations get weight 1.0, even if one agent is consistently accurate and another frequently hallucinates. Per-agent computed trust would differentiate them, but requires a ground truth signal (was this observation correct?) that is often unavailable for LLM agents. Classical multi-agent trust models assume agents with stable, observable behavior over many interactions. LLM agents are stochastic - the same agent with the same prompt produces different outputs - making experience-based scoring harder to calibrate.
 
 Non-compliance - agents that ignore instructions, hallucinate actions, or drift - is handled by the guard layer (schema validation, authority checks) and optionally the adaptive monitoring layer (envelope, barrier, probe), not by trust scores.
 
@@ -365,7 +369,7 @@ A separate threat model is strategic deception by fleet agents. Recent work on [
 
 ### Agent-Human Interaction
 
-Agents may interact with humans who are not the principal - end users, customers, or adversarial non-owners ([Shapira et al., 2026](https://arxiv.org/abs/2602.20021)). The manifest controls *whether* an agent has human-facing scopes; the guard enforces it. But once authorized, *what the agent says and does* is agent-internal. The Agents of Chaos case studies illustrate the gap: agents complied with non-owner data requests, yielded to emotional manipulation, and accepted identity spoofing - all within authorized interactions. Agent-level safeguards (content filtering, identity verification, proportionality checks) must operate here; AgentSpec ([Wang, Poskitt & Sun, ICSE 2026](https://arxiv.org/abs/2503.18666)) is one approach. We identify this surface but do not develop it further - it is outside the protocol's scope by design.
+Agents may interact with humans who are not the principal - end users, customers, or adversarial non-owners ([Shapira et al., 2026](https://arxiv.org/abs/2602.20021)). A deployment can put human-facing tools in their own scope, so that authorized scopes control *whether* an agent may use them; the guard enforces it. But once authorized, *what the agent says and does* is agent-internal. The Agents of Chaos case studies illustrate the gap: agents complied with non-owner data requests, yielded to emotional manipulation, and accepted identity spoofing - all within authorized interactions. Agent-level safeguards (content filtering, identity verification, proportionality checks) must operate here; AgentSpec ([Wang, Poskitt & Sun, ICSE 2026](https://arxiv.org/abs/2503.18666)) is one approach. We identify this surface but do not develop it further - it is outside the protocol's scope by design.
 
 ### Principal-Fleet Interface
 
@@ -377,22 +381,34 @@ The principal never directly messages an agent. The aggregator has no AI; it sor
 
 **Batch efficiency**: A principal responding to 5 grouped needs in one session is more efficient than being interrupted 5 times. The mark model naturally batches because needs accumulate during principal absence and are presented together.
 
+**Authority over time.** Agents work asynchronously: a task pauses for hours, resumes in a new session, or passes to another agent. A resumed agent knows the principal's earlier answers. An answer can be accurate history and still no longer match what the principal wants now. Whether the agent may act now is a separate question from what the principal answered, and the protocol keeps the two apart.
+
+Marks are the history: the action that resolves a need holds the principal's answer, and actions never decay ([P2](spec.md#32-formal-properties)). Authority to act on a resource is a lease ([spec 6.5](spec.md#65-grants)). A lease has three properties that the history does not have, each with a limit:
+
+- **It expires.** A lease lasts the intent TTL of its scope, counted from the grant, whether the guard or the principal granted it (G5, G7). The guard measures it on its own lease clock: `claim_state()` reads a lease past its expiry as EXPIRED, and `post_action` with the intent id refuses to record an action under that lease (G6); without the intent id, it can record the action as a direct claim. The guard cannot stop a tool that has already run. `execute` grants and calls the tool at once, and passes the tool only the fencing token, so a harness that resumes a task under an old grant asks `claim_state()` before it calls the tool.
+- **It names its object.** A lease is for one resource in one scope. It authorizes no other resource, also when the work looks the same.
+- **It is ordered.** Each grant carries a fencing token, and an outside system rejects a token lower than one it has seen (G8). That stops a stale holder once a later grant on the resource exists; before that, only the expiry stops it.
+
+An agent can also act without a lease: a direct claim in an immediate scope that is not YIELD_ALL reaches the guard after its tool has run (G6).
+
+The protocol stops there. The guard checks conflicts, permissions and barriers, not whether an answer is still current, so an agent that acts on an old answer passes it. No conflict policy makes every action wait for the principal: under YIELD_ALL, an intent waits for the principal only when another agent's pending intent, or in an immediate scope its lease, competes with it. What an agent keeps outside the mark space (notes, its memory) carries no expiry and no token. So an agent that resumes after a pause treats an earlier answer as history: before each outside change it needs a live lease for the exact object, and where the principal must decide, it asks again with a need mark instead of acting on the old answer. A deployment that keeps answers across sessions gives each answer the same properties at its own boundary: an exact object (a resource, a commit hash), an expiry, and a check before each outside change.
+
 ### Cross-Principal Interaction
 
-The adversarial surface (above) handles external data from web scraping and APIs; your agents tag what they find. This surface handles external fleets, where another principal's agents share marks with yours.
+The adversarial surface (above) handles external data from web scraping and APIs: the agents that read it write at most the source level of its provider. This surface handles external fleets, where another principal's agents share marks with yours.
 
-Each fleet has its own mark space. You cannot authenticate another fleet's marks. Only observations cross the boundary. Intent, action, and need marks are fleet-internal; they coordinate your resources and your principal's attention.
+Each fleet has its own mark space. Without a signature on each mark from a key that the other fleet's principal publishes, you cannot authenticate another fleet's marks. Only observations cross the boundary. Intent, action, and need marks are fleet-internal; they coordinate your resources and your principal's attention.
 
 <p align="center"><img src="../figures/cross_principal.svg" alt="Cross-principal boundary" width="700"></p>
 
-At this boundary, and only at this boundary, consensus mechanisms apply:
+At this boundary, and only at this boundary, consensus mechanisms apply. The reference implementation cannot connect two fleets and includes none of the mechanisms below. They are proposed for a deployment that does connect fleets, which would have to build them:
 
-- **All incoming marks tagged `EXTERNAL_UNVERIFIED`** regardless of their source status in the originating fleet
-- **Median aggregation** of claims from multiple external agents (robust below honest majority)
+- **All incoming marks at `EXTERNAL_UNVERIFIED`** regardless of their source level in the originating fleet
+- **Median aggregation** of claims from multiple external principals (correct while fewer than half of the principals are adversarial). It counts principals, not agents: one principal can run any number of agents
 - **Peer-Agreement Drift (PAD) detection** to identify consistently deviating external agents
 - **Per-item metrics** over distributional ones (resists adaptive evasion)
 
-Incoming marks can be upgraded from `EXTERNAL_UNVERIFIED` to `EXTERNAL_VERIFIED` - for example through cross-referencing against fleet observations (manual), or cryptographic attestation via a shared trust root infrastructure (e.g., the `agent://` URI scheme, [Rodriguez, 2026](https://arxiv.org/abs/2601.14567)). The latter also enables capability-based discovery - locating cross-fleet collaborators by capability path rather than pre-configured identity - at the cost of requiring both fleets to participate in the same naming infrastructure.
+Incoming marks can be upgraded from `EXTERNAL_UNVERIFIED` to `EXTERNAL_VERIFIED` when the principal accepts their provider and the provider's authorship is proven - for example by a signature on each mark from a key that the other principal publishes for this purpose. Agreement with `FLEET` observations is no reason to upgrade. A shared naming infrastructure (e.g., the `agent://` URI scheme, [Rodriguez, 2026](https://arxiv.org/abs/2601.14567)) enables capability-based discovery - locating cross-fleet collaborators by capability path rather than pre-configured identity - at the cost of requiring both fleets to participate in the same naming infrastructure.
 
 Stigmergy handles coordination within a fleet. Consensus applies at exactly one boundary: between fleets, where you cannot trust the other party's marks.
 
@@ -477,7 +493,7 @@ The reinforcement function is sublinear. Two observations are stronger than one,
 
 ### Storage
 
-Three implementation options, from simplest to recommended:
+Four implementation options, from simplest to recommended:
 
 #### Option A: Database table
 
@@ -485,25 +501,24 @@ A single PostgreSQL table handles all mark types.
 
 ```sql
 CREATE TABLE mark (
-    id             UUID PRIMARY KEY,
-    mark_type      TEXT NOT NULL,   -- 'intent', 'action', 'observation', 'warning', 'need'
-    agent_id       UUID NOT NULL,
-    scope          TEXT NOT NULL,
-    resource_id    TEXT,
-    content        JSONB NOT NULL,
-    source         TEXT NOT NULL,   -- 'fleet', 'external_verified', 'external_unverified'
-    confidence     FLOAT,
-    strength       FLOAT NOT NULL DEFAULT 1.0,
-    created_at     FLOAT NOT NULL,  -- unixtime
-    ttl_seconds    INTEGER,         -- NULL = no expiry
-    supersedes     UUID REFERENCES mark(id),
-    invalidated_by UUID REFERENCES mark(id),
-    resolved_by    UUID REFERENCES mark(id)
+    id               UUID PRIMARY KEY,
+    mark_type        TEXT NOT NULL,   -- 'intent', 'action', 'observation', 'warning', 'need'
+    agent_id         UUID NOT NULL,
+    scope            TEXT NOT NULL,
+    resource         TEXT,
+    content          JSONB NOT NULL,
+    source           TEXT,            -- observations only: 'fleet', 'external_verified', 'external_unverified'
+    confidence       FLOAT,
+    initial_strength FLOAT NOT NULL DEFAULT 1.0 CHECK (initial_strength BETWEEN 0 AND 1),
+    created_at       FLOAT NOT NULL,  -- unixtime
+    supersedes       UUID REFERENCES mark(id),
+    invalidates      UUID REFERENCES mark(id),  -- warnings only
+    resolved_by      UUID REFERENCES mark(id)   -- needs only
 );
 
 CREATE INDEX idx_mark_scope    ON mark(scope, mark_type, created_at DESC);
 CREATE INDEX idx_mark_agent    ON mark(agent_id, created_at DESC);
-CREATE INDEX idx_mark_resource ON mark(resource_id, mark_type) WHERE resource_id IS NOT NULL;
+CREATE INDEX idx_mark_resource ON mark(resource, mark_type) WHERE resource IS NOT NULL;
 ```
 
 #### Option A': Document database
@@ -512,7 +527,7 @@ A document store (MongoDB, DynamoDB) is a natural alternative to PostgreSQL. Mar
 
 #### Option B: Redis streams
 
-Mark types as separate streams keyed by scope:
+Mark types as separate streams, keyed by scope except for need marks, which are keyed by agent:
 
 ```
 mark:intent:{scope}
@@ -538,7 +553,7 @@ Agents read from Redis (low latency). Redis handles transient state, PostgreSQL 
 
 ### Open Questions
 
-**Unbounded mark growth.** Action marks are permanent (P2). In a long-running system, the mark space grows without bound. At scale it matters: the 1,050-agent run ends with 41,559 marks in the space (22,530 intents, 18,731 actions, 163 warnings, 125 needs), scaling roughly linearly from 4,229 at 105 agents. Many of those intents are expired and observations/warnings have decayed below usefulness, but the reference implementation retains them all.
+**Unbounded mark growth.** Action marks are permanent (P2). In a long-running system, the mark space grows without bound. At scale it matters: the 1,050-agent run ends with 41,559 marks in the space (22,530 intents, 18,731 actions, 10 observations, 163 warnings, 125 needs), scaling roughly linearly from 4,229 at 105 agents. Many of those intents are expired and observations/warnings have decayed below usefulness, but the runs never call `MarkSpace.gc()`, so the space retains them all.
 
 A production system needs tiered mark management. The [hybrid architecture](#option-c-hybrid-recommended) already separates hot state (Redis) from durable record (PostgreSQL), providing the infrastructure for three tiers:
 
@@ -575,34 +590,33 @@ Marks need boundaries. A scope defines what marks an agent can write, how fast t
 Each scope defines:
 
 ```yaml
-scope: "calendar"
-  mark_permissions:
-    intent:      [book, reschedule, cancel]
-    action:      [booked, rescheduled, cancelled]
-    observation: [availability_check, conflict_detected]
-    warning:     [booking_failed, external_change]
-    need:        [approval_required, conflict_resolution]
+- name: "calendar"
+  allowed_intent_verbs: [book, reschedule, cancel]
+  allowed_action_verbs: [booked, rescheduled, cancelled]
+  observation_topics:   [availability_check, conflict_detected]
+  warning_topics:       [booking_failed, external_change]
   decay:
     observation_half_life: 1h    # calendar state changes fast
     intent_ttl: 30m              # if you don't act in 30 min, intent expires
-    warning_half_life: 4h
-  conflict_resolution: first_writer_wins
+    warning_half_life: 30m
+  conflict_policy: first_writer
 
-scope: "research/company/{company_id}"
-  mark_permissions:
-    intent:      [investigate, deep_dive, summarize]
-    action:      [investigation_complete, report_generated]
-    observation: [financial_data, news_event, market_signal]
-    warning:     [data_stale, source_unreliable, material_change]
-    need:        [direction_needed, budget_approval]
+- name: "research/company"
+  allowed_intent_verbs: [investigate, deep_dive, summarize]
+  allowed_action_verbs: [investigation_complete, report_generated]
+  observation_topics:   [financial_data, news_event, market_signal]
+  warning_topics:       [data_stale, source_unreliable, material_change]
   decay:
     observation_half_life: 12h   # research holds longer than calendar
     intent_ttl: 4h
     warning_half_life: 6h
-  conflict_resolution: merge     # multiple agents can research same company
+  conflict_policy: highest_confidence
+  deferred: true               # intents wait for a resolution boundary; the highest confidence wins
 ```
 
-Scopes are hierarchical. An agent authorized for `research/company/*` can write marks on any company. An agent authorized for `research/company/ACME` can only write marks about ACME. Authority is scope-bounded, and scope is defined independently of the agents.
+The durations are written for readability (`DecayConfig` takes seconds), and need marks have no list of allowed values.
+
+Scopes are hierarchical. An agent authorized for `research/company` can write marks on any company. An agent authorized for `research/company/ACME` can only write marks about ACME. Authority is scope-bounded, and scope is defined independently of the agents.
 
 A child scope may define its own visibility, decay and conflict policy. Each mark keeps its own scope's settings, also when read through a parent scope ([spec 7.4](spec.md#74-scope-visibility), [spec 8.2](spec.md#82-read)). Intents on one resource compete across the parent-child line, and the outer scope's intent wins ([Mark Type 1](#mark-type-1-intent)).
 
@@ -654,7 +668,7 @@ The protocol does not mandate small agents, but several features make them the n
 
 **Agent manifests.** A manifest ([spec Section 13.2](spec.md#132-agent-manifests)) declares what marks an agent reads and writes - the agent's type signature. Two inputs and two outputs is clean; twenty inputs and thirty outputs is a monolith. Explicit interfaces make complexity visible.
 
-**Watch/subscribe for reactive composition.** Agents subscribe to mark patterns ([spec Section 13.3](spec.md#133-subscription)) and activate when matching marks appear, enabling pipeline-style composition without a central orchestrator: agent A writes an observation, agent B wakes up and processes it, agent C acts on the result. Source agents at the start of a pipeline use manifest-based scheduling ([spec Section 14](spec.md#14-scheduling)): the principal sets `schedule_interval` in the manifest. Scheduling is a property of the agent, not a signal in the environment.
+**Watch/subscribe for reactive composition.** Agents subscribe to mark patterns ([spec Section 13.3](spec.md#133-subscription)): the mark space queues each matching mark of another agent, and the harness polls `get_watched_marks()` and activates the agent when marks are waiting. This enables pipeline-style composition without a central orchestrator: agent A writes an observation, agent B wakes up and processes it, agent C acts on the result. Source agents at the start of a pipeline use manifest-based scheduling ([spec Section 14](spec.md#14-scheduling)): the principal sets `schedule_interval` in the manifest. Scheduling is a property of the agent, not a signal in the environment.
 
 **Need marks as escalation boundaries.** An agent that encounters something outside its scope writes a need mark ([spec Section 2.6](spec.md#26-need)) rather than growing to handle the edge case. The protocol makes escalation cheap (write a mark) and effective (the principal sees it, aggregated with related needs ([spec Section 8.4](spec.md#84-aggregate-needs))).
 
@@ -745,6 +759,7 @@ scheduler = Scheduler(space)
 triage_agent = Agent(
     name="ticket-triager",
     scopes={"support-triage": ["observation", "intent", "action"]},
+    max_source=Source.EXTERNAL_UNVERIFIED,  # reads customer text
     manifest=AgentManifest(
         outputs=(
             ("support-triage", MarkType.OBSERVATION),
@@ -790,7 +805,7 @@ space.write(
             "window": "1h",
             "assessment": "Likely auth service degradation, not isolated complaints",
         },
-        source=Source.FLEET,
+        source=Source.EXTERNAL_UNVERIFIED,  # built from customer text
         confidence=0.75,  # LLM's judgment: probable pattern, not certain
     ),
 )
@@ -808,9 +823,9 @@ space.write(
 assessor = Agent(
     name="incident-assessor",
     scopes={
-        "support-triage": ["observation"],  # read only
         "incidents": ["observation", "intent", "action"],
     },
+    max_source=Source.EXTERNAL_UNVERIFIED,  # reads the triager's patterns
     manifest=AgentManifest(
         inputs=(
             WatchPattern(
@@ -824,7 +839,6 @@ assessor = Agent(
 escalation = Agent(
     name="escalation-agent",
     scopes={
-        "incidents": ["observation"],  # read only
         "oncall": ["intent", "action", "need"],
     },
     manifest=AgentManifest(
@@ -837,7 +851,7 @@ escalation = Agent(
     ),
 )
 
-# Wire up subscriptions - each agent activates when its input marks arrive
+# Wire up subscriptions - each agent's matching marks queue until its harness polls them
 space.subscribe(assessor, list(assessor.manifest.inputs))
 space.subscribe(escalation, list(escalation.manifest.inputs))
 ```
@@ -848,9 +862,9 @@ Because each agent does one thing, reasoning about correctness is straightforwar
 
 Agents don't have to be LLMs. A statistical anomaly detector could sit alongside the triager, writing its own pattern observations from ticket metadata. The manifest interface is the same: declare inputs, declare outputs, read marks, write marks. LLMs, ML models, and rule-based agents compose through the same mark space.
 
-**Decay handles staleness.** The 4-hour observation half-life means yesterday's pattern assessment has near-zero effective strength. Readers always see current strength at read time - no explicit cache invalidation, no TTL logic in the agent.
+**Decay handles staleness.** The 4-hour observation half-life means yesterday's triage pattern has near-zero effective strength. Readers always see current strength at read time - no explicit cache invalidation, no TTL logic in the agent.
 
-**Narrow interfaces, flexible reasoning.** Scopes and manifests constrain what an agent *can do* (which marks it writes, which scopes it touches), but within those constraints the LLM handles the open-ended judgment that rule-based systems can't. The triager judges whether tickets form a pattern, the assessor judges severity, the escalation agent judges whether to page or ask the principal. The triager can recognize a pattern nobody anticipated, as long as it writes the result as a `(support-triage, pattern)` observation. When a situation falls outside every agent's scope entirely, need marks escalate to the principal. Agent quality affects judgment quality. Agent quality cannot compromise scope boundaries, conflict resolution, or decay semantics.
+**Narrow interfaces, flexible reasoning.** Scope authorization constrains what an agent *can do* (which marks it writes, which scopes it writes in), but within those constraints the LLM handles the open-ended judgment that rule-based systems can't. The triager judges whether tickets form a pattern, the assessor judges severity, the escalation agent judges whether to page or ask the principal. The triager can recognize a pattern nobody anticipated, as long as it writes the result as a `(support-triage, pattern)` observation. When a situation falls outside every agent's scope entirely, need marks escalate to the principal. Agent quality affects judgment quality. Agent quality cannot compromise scope boundaries, conflict resolution, or decay semantics.
 
 ### Biological Parallel
 
@@ -870,22 +884,22 @@ The protocol makes specific claims about what it prevents, mitigates, and delibe
 | Failure pattern | markspace mitigation | Status |
 |---|---|---|
 | Unauthorized access / scope violations | Scope permissions, guard rejects unauthorized writes | Writes prevented: every cross-department write in the stored runs denied; reads not measured |
-| Cascading state corruption | Intent TTL (2h) prevents stale signal accumulation; decay degrades observations | Prevented (intents expired between every round pair) |
-| Unconstrained goal pursuit | Fixed manifests per agent, constrained tool space | Prevented (agents completed manifests, didn't improvise) |
-| Cross-agent propagation | No direct agent-to-agent communication; marks only | Prevented (all coordination through mark space) |
-| Resource exhaustion | Guard serialization + conflict resolution policies | Prevented: no double booking found in the stored runs (from their steps), 3 policies all functional |
+| Cascading state corruption | Intent TTL (2h) prevents stale signal accumulation; decay degrades observations | Partially mitigated: intents expired between every round pair, but colleagues repeated false observations as fact in the [defense trials](../experiments/trials/results/defense/analysis.md) |
+| Unconstrained goal pursuit | Scope authorization limits what an agent can write; the harness's work list and tool space are not protocol mechanisms, and the guard does not read a manifest's outputs | Partially mitigated: in the stored runs agents went outside their work lists, and the guard or the harness denied their cross-department writes ([trials analysis](../experiments/trials/analysis.md)) |
+| Cross-agent propagation | No direct agent-to-agent communication; marks only | Partially mitigated: all coordination goes through the mark space, but a false observation still reaches the agents that read it ([defense trials](../experiments/trials/results/defense/analysis.md)) |
+| Double booking (resource contention) | Guard serialization + conflict resolution policies | Prevented for claims through the guard, with the exception that P75 names: no double booking found in the stored runs (from their steps), 3 policies all functional |
 | Disproportionate response (CS1) | A protocol-valid action can still be harmful; no action proportionality checks | Not addressed |
-| Compliance with non-owner instructions (CS2) | Manifest can control whether an agent is authorized to interact with humans at all, but once authorized, what the agent shares is agent-internal | Not addressed |
+| Compliance with non-owner instructions (CS2) | A deployment can put human-facing tools in their own scope, so that authorized scopes control whether an agent may use them, but once authorized, what the agent shares is agent-internal | Not addressed |
 | Sensitive data disclosure (CS3) | Mark visibility controls structure, not content within agent outputs | Not addressed |
 | Resource exhaustion loop (CS4) | The direct agent-to-agent messaging channel that enabled the relay loop does not exist in markspace - agents interact only through the mark space. Watch/subscribe chains could still create mark-level loops within TTL, but the attack surface is narrower | Partially mitigated |
-| Denial of service via mass actions (CS5) | Guard enforces manifest constraints on what agents can write; optional scope-level rate limits cap per-agent and fleet-wide write rates ([Observability and Cost Controls](#observability-and-cost-controls)) | Mitigated |
+| Denial of service (CS5) | Scope authorization and optional scope-level rate limits bound mark writes and guarded tool calls ([Observability and Cost Controls](#observability-and-cost-controls)); the report's case grew a memory file on the owner's server and took the email server down with email attachments, and neither of these is a mark | Partially mitigated |
 | Provider value alignment (CS6) | Not addressed (model-internal behavior, below the protocol layer) | Not addressed |
-| Agent coercion / gaslighting (CS7) | Manifest can control whether an agent interacts with humans, but once authorized, the agent's response to social pressure is agent-internal | Not addressed |
-| Identity spoofing (CS8) | Source/trust tags identify mark authors within the protocol, but how an agent verifies human identity on its principal interface is agent-internal | Not addressed |
-| Agent corruption via prompt injection (CS10) | Protocol cannot prevent corruption, but manifest and scope constraints mean a corrupted agent can only write its granted mark types to its granted scopes - corruption degrades to a performance issue (bad output), not a safety violation | Partially mitigated |
-| Libelous broadcast (CS11) | Scope limits blast radius (agents can only write to authorized scopes); content not filtered | Partially mitigated |
+| Agent coercion / gaslighting (CS7) | A deployment can put human-facing tools in their own scope, so that authorized scopes control whether an agent may use them, but once authorized, the agent's response to social pressure is agent-internal | Not addressed |
+| Identity spoofing (CS8) | The harness supplies each mark's `agent_id`, which identifies its author within the protocol, but how an agent verifies human identity on its principal interface is agent-internal | Not addressed |
+| Agent corruption via prompt injection (CS10) | Protocol cannot prevent corruption, but scope authorization means a corrupted agent can only write its granted mark types to its granted scopes; well-formed false marks from it can still mislead other agents ([defense trials](../experiments/trials/results/defense/analysis.md)) | Partially mitigated |
+| Libelous broadcast (CS11) | Scope limits blast radius (agents can only write to authorized scopes); a content policy, if a deployment sets one, inspects observation marks only and matches only the patterns its author provides ([spec 9.13](spec.md#913-content-policies)); otherwise content is not filtered | Partially mitigated |
 
-The paper's 16 case studies include 11 failure cases (CS1-CS8 harmful, CS10-CS11 community) and 5 positive outcomes (CS9 collaboration, CS12-CS16 defensive refusals) not included in this table. Summary: 6 coordination-layer failure patterns prevented or mitigated (CS5 upgraded from partial to mitigated with scope-level rate limits), 3 partially mitigated (CS4, CS10, CS11), 6 agent-internal failure modes not addressed (CS1, CS2, CS3, CS6, CS7, CS8).
+The report groups its 16 case studies as harmful (CS1-CS8), community (CS9-CS12) and defensive (CS13-CS16). The table covers the 10 in which an agent failed (CS1-CS8, CS10, CS11), four patterns we derive across the cases, and a double-booking row that is not from the report but records what the guard does for resource contention. It leaves out the other 6: CS9 (collaboration), CS12 (a refused injection), CS13 and CS14 (refusals), CS15 (a refusal whose reasoning the report calls circular) and CS16 (a shared policy the report did not find in the agent's memory). Summary: 2 failure patterns prevented (unauthorized writes; double booking through the guard, with the exception that P75 names), 7 partially mitigated (cascading state corruption, unconstrained goal pursuit, cross-agent propagation, CS4, CS5, CS10, CS11), and 6 not addressed because they are agent-internal (CS1, CS2, CS3, CS6, CS7, CS8).
 
 The protocol is a coordination primitive, not a complete agent safety system - it guarantees that agents share a single, well-ordered view of state and that all writes conform to structural rules (schema, scope, authorization). Making agents do safe things *within* their authorized scope requires agent-level safeguards (content filtering, reasoning verification, action proportionality checks) that sit alongside the protocol, not inside it. One approach to the agent-internal layer is [AgentSpec](https://arxiv.org/abs/2503.18666) ([Wang, Poskitt & Sun, ICSE 2026](https://arxiv.org/abs/2503.18666)): structured rules with triggers, predicates, and enforcement actions that intercept agent behavior at decision points. It operates within individual agents; markspace operates between them.
 
@@ -893,22 +907,22 @@ The protocol is a coordination primitive, not a complete agent safety system - i
 
 | MAST Failure Mode | markspace Mitigation | Status |
 |---|---|---|
-| Wrong agent selection | Not addressed (agent-internal routing decision) | Not addressed |
-| Premature termination | Need marks persist until resolved (P5); TTL expiry is visible | Partially mitigated |
-| Wrong sequence of actions | Not addressed (agent-internal planning) | Not addressed |
-| Incomplete final answer | Not addressed (agent-internal reasoning quality) | Not addressed |
-| Cascading errors | Guard catches schema/scope violations; semantic errors propagate | Partially mitigated |
-| Step repetition | Action permanence (P2) - agents see prior actions exist | Mitigated |
-| Misinterpretation of instructions | Not addressed (agent-internal comprehension) | Not addressed |
-| Resource conflicts | Guard + conflict resolution (P11, P36-P39) | Prevented |
-| Ignored context from others | Marks persist in shared space; agents read at each step | Mitigated |
-| Information loss across handoffs | Marks are the handoff - no compression, no loss (P27, P30) | Prevented |
-| Inconsistent state across agents | Single mark space is the shared world state (P28) | Prevented |
-| Redundant work | Intent marks signal planned work to other agents (P39) | Mitigated |
-| Deadlock | Progress property (P12); TTL expiry as safety net | Mitigated |
-| Unrecoverable failures | Failed action marks free resources; TTL expiry handles zombie intents | Partially mitigated |
+| FM-1.1 Disobey task specification | None (agent-internal reasoning) | Not addressed |
+| FM-1.2 Disobey role specification | Scope authorization limits the mark types and scopes an agent can write; within those limits its behavior is agent-internal | Partially mitigated |
+| FM-1.3 Step repetition | Action permanence (P2): agents see that prior actions exist, and the guard refuses another agent's repeat on a held resource; an agent's repeat of its own step is agent-internal | Partially mitigated |
+| FM-1.4 Loss of conversation history | Action marks persist, and a harness can give an agent the mark space at each step; what an agent keeps of its own conversation is agent-internal | Partially mitigated |
+| FM-1.5 Unaware of termination conditions | A lifetime token budget ends a run if the harness reports tokens and makes the activation check; write budgets and scope rate limits refuse writes but do not stop the agent; recognizing the condition is agent-internal | Partially mitigated |
+| FM-2.1 Conversation reset | Agents coordinate through marks, not a conversation: a restarted agent reads the marks still within their lifetime (P27) | Mitigated |
+| FM-2.2 Fail to ask for clarification | Need marks give an agent a way to ask, and they persist until resolved (P5); whether it asks is agent-internal | Partially mitigated |
+| FM-2.3 Task derailment | None (agent-internal reasoning) | Not addressed |
+| FM-2.4 Information withholding | The guard records each action it runs, and other agents read these where the scope's visibility allows; which observations an agent writes is agent-internal | Partially mitigated |
+| FM-2.5 Ignored other agent's input | Marks persist in the shared space and the guard enforces conflicts on a resource; how an agent weighs other input is agent-internal | Partially mitigated |
+| FM-2.6 Reasoning-action mismatch | None (agent-internal reasoning) | Not addressed |
+| FM-3.1 Premature termination | Need marks persist until resolved (P5), and the intent and lease of an agent that stops end at their TTL; whether an agent ends too early is agent-internal | Partially mitigated |
+| FM-3.2 No or incomplete verification | None: the mark space checks a mark's schema and authorization, not the outcome of a task | Not addressed |
+| FM-3.3 Incorrect verification | None: the mark space checks a mark's schema and authorization, not the outcome of a task | Not addressed |
 
-Of the 14 failure modes MAST identifies, the protocol's structural guarantees - shared state, well-ordered writes, schema and scope enforcement - address roughly half. ~3 are prevented outright (resource conflicts, information loss, inconsistent state), ~4 are mitigated (step repetition, ignored context, redundant work, deadlock), and ~7 are not addressed (failures in individual agent reasoning, which the protocol does not govern).
+The protocol's structural guarantees - shared state, well-ordered writes, schema and scope enforcement - fully cover few of MAST's 14 failure modes, because many of them are failures in an agent's own reasoning: 1 is mitigated (conversation reset), 8 are partially mitigated (role specification, step repetition, conversation history, termination conditions, clarification, information withholding, ignored input, premature termination), and 5 are not addressed (task specification, task derailment, reasoning-action mismatch, and the two verification modes). MAST has no failure mode for two agents that claim one resource. For claims written through the guard, no two agents hold live leases or held actions on one resource (P71, P75, with the exception that P75 names); a tool that outlives its lease needs the fencing token (G8), because the guard refuses only the record of its action.
 
 ### Positioning Within Multi-Agent Delegation
 
@@ -917,14 +931,14 @@ A natural question is what a complete multi-agent delegation system requires and
 | Component | markspace | Notes |
 |---|---|---|
 | Task decomposition | No | The principal manually decomposes tasks by defining agent scopes and manifests. No automated task decomposition. |
-| Task assignment | No | Scheduler activates agents on fixed intervals. No capability matching, competitive bidding, or dynamic task routing. |
+| Task assignment | No | Scheduler returns agents as due on fixed intervals. No capability matching, competitive bidding, or dynamic task routing. |
 | Multi-objective optimization | No | No mechanism for balancing competing objectives. Conflict resolution policies handle contention but do not optimize across multiple objectives. |
 | Adaptive coordination | Partial | Decay and reinforcement adapt signal strength over time. Conflict resolution adapts to mark state. No runtime adaptation of coordination strategy itself (e.g., switching conflict policies based on load). |
-| Monitoring | Yes | Action marks provide an audit trail. Guard decisions are logged. Every mark has an `agent_id` for attribution. OpenTelemetry-compatible metrics, structured logs, and trace context at the guard boundary ([Observability and Cost Controls](#observability-and-cost-controls)). No agent-internal monitoring (reasoning traces, prompt compliance). |
+| Monitoring | Yes | Action marks provide an audit trail. `execute()` and `write_mark()` report each decision to the guard's telemetry sink. Every mark has an `agent_id` for attribution. OpenTelemetry-compatible metrics, structured logs, and trace context at the guard boundary ([Observability and Cost Controls](#observability-and-cost-controls)). No agent-internal monitoring (reasoning traces, prompt compliance). |
 | Trust and reputation | Partial | Three static source levels (fleet, verified, unverified). No dynamic trust updating, reputation, or experience-based trust. Sufficient for LLM non-compliance; insufficient for rational adversaries. |
 | Permission handling | Partial | Scope-based write authorization, hierarchical scope inheritance, three visibility levels (OPEN/PROTECTED/CLASSIFIED). No just-in-time authorization or privilege attenuation in sub-delegation chains. |
 | Verifiable task completion | Partial | Action marks record outcomes. Supersession chains track state transitions. No verification that the action's result is correct (the protocol records what happened, not whether it was right). |
-| Security | Yes | Guard enforces authorization independent of LLM compliance. Scope visibility controls who can read a mark, through reads, subscriptions and guard decisions. It does not control what an authorized reader writes afterwards: markspace has no write-down rule (see [CS3](#failure-mode-coverage)). A monitor can enforce such a rule, at the cost of blocking harmless writes, but not information flow itself ([Schneider, 2000](https://doi.org/10.1145/353323.353382)). Trust weighting attenuates untrusted sources. Adversarial robustness validated (171 denied attempts). |
+| Security | Yes | Guard enforces authorization independent of LLM compliance. Scope visibility controls who can read a mark, through reads, subscriptions and guard decisions. It does not control what an authorized reader writes afterwards: markspace has no write-down rule (see [CS3](#failure-mode-coverage)). A monitor can enforce such a rule, at the cost of blocking harmless writes, but not information flow itself ([Schneider, 2000](https://doi.org/10.1145/353323.353382)). Trust weighting attenuates observations from untrusted providers. Adversarial robustness validated (171 denied attempts). |
 
 The gaps are intentional. Markspace covers what can be enforced structurally through environment design - shared state, authorization, conflict resolution. The components it omits (task decomposition, assignment, multi-objective optimization) require orchestration-level capabilities or agent-internal mechanisms that operate at a different architectural level.
 
@@ -934,7 +948,7 @@ Note that markspace does provide human oversight through need marks, `aggregate_
 
 Long-running agents accumulate history - tool outputs, observations, reasoning traces, completed work. Every agent architecture faces this. In message-passing systems, each agent's private context grows independently, and sharing state requires O(N^2) communication that further inflates each agent's context. Shared-state systems (blackboard, shared databases) centralize the growth but still face the problem: the shared workspace grows with agent count and activity, and every agent must read increasingly large state. The dominant approaches to managing this growth are observation masking (hiding old tool outputs while preserving action history - [Lindenbauer et al., NeurIPS 2025](https://arxiv.org/abs/2508.21433)), LLM-driven summarization (compressing dropped context spans into persistent summaries), and hierarchical chunking (summarizing completed subgoals - [Hu et al., ACL 2025](https://arxiv.org/abs/2408.09559)). See [Hu, Y. et al. (2025)](https://arxiv.org/abs/2512.13564) for a comprehensive survey.
 
-Stigmergy reframes the problem. The mark space is both the coordination medium and the agents' shared context - agents don't carry private history that diverges, they read a common environment. Decay and TTL are the protocol's native context management: stale observations lose strength, expired intents vanish, warnings fade. This is structurally equivalent to observation masking - old signals attenuate without requiring an explicit compression step. The data itself (action marks, gathered observations, completed work) is valuable output that any system would store regardless of architecture.
+Stigmergy reframes the problem. The mark space is both the coordination medium and the agents' shared context - agents don't carry private history that diverges, they read a common environment. Decay and TTL are the protocol's native context management: stale observations lose strength, expired intents vanish, warnings fade. This resembles observation masking in one way - old signals attenuate without requiring an explicit compression step - but decay does not shrink a mark, and a decayed mark costs the same tokens until a read drops it. The data itself (action marks, gathered observations, completed work) is valuable output that any system would store regardless of architecture.
 
 This design is structurally input-heavy: agents read the mark space every round but write only a few marks, producing [input-to-output ratios of 15:1 to 62:1](../experiments/trials/results/multi_trial/analysis.md#6-token-economics) depending on model verbosity (stress tests, 100+5 agents, 20 rounds). Input token price is the dominant cost factor, and model output verbosity barely matters. A model producing 5x fewer output tokens costs about the same per trial because output is already a small fraction of total spend. A thinking budget moves cost toward output: DeepSeek V4.1 Flash 1017 with a 2048-token budget ran at 11:1 in the 10-round stress test (gpt-oss-120b: 17.8:1 there), and output was 31% of the run's cost, against 18% for gpt-oss-120b ([stress test, section 9](../experiments/stress_test/analysis.md#9-re-run-on-deepseek-v41-flash-1017)).
 
@@ -962,7 +976,7 @@ The guard emits structured events on every `write_mark()` and `execute()` call. 
 | `markspace.leases.lost` | Counter | `scope`, `resource` | guard | Intents closed as lost: refused or beaten |
 | `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | deployment | Hot-tier mark count (above strength threshold) |
 | `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | deployment | Total mark count including decayed |
-| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | deployment | Remaining token budget (input/output/total) |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | guard | Remaining token budget (input/output) |
 | `markspace.agent.round.duration` | Histogram | `agent_id` | deployment | Wall-clock time per agent round |
 | `markspace.needs.pending` | Gauge | `scope` | deployment | Unresolved need marks awaiting principal review |
 
@@ -976,7 +990,6 @@ The guard emits structured events on every `write_mark()` and `execute()` call. 
   "scope": "calendar",
   "mark_type": "observation",
   "verdict": "accepted",
-  "envelope_status": "",
   "barrier_restricted": false,
   "reason": ""
 }
@@ -988,7 +1001,7 @@ Telemetry observes the mark space boundary, not agent internals. Reasoning trace
 
 ### Token Budgets
 
-The [Context Accumulation](#context-accumulation) section establishes that input tokens dominate cost and that mark space size drives input token count. Token budgets formalize the cost control that section implies: each agent gets a configurable token allowance, and the guard enforces it.
+The [Context Accumulation](#context-accumulation) section establishes that input tokens dominate cost and that mark space size drives input token count. Token budgets formalize the cost control that section implies: each agent gets a configurable token allowance; the guard tracks its lifetime limits and the harness applies its per-round limits.
 
 **Manifest extension.** The agent manifest gains optional budget fields:
 
@@ -1011,23 +1024,23 @@ When omitted, the budget is unbounded.
 
 Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor ([15:1 to 62:1 input-to-output ratio](../experiments/trials/results/multi_trial/analysis.md#6-token-economics); [11:1](../experiments/stress_test/analysis.md#9-re-run-on-deepseek-v41-flash-1017) for a model with a 2048-token thinking budget, 10 rounds) and are driven by mark space size - something the agent doesn't control. Output tokens reflect agent verbosity and model choice - something the operator controls through model selection and prompting.
 
-**Enforcement.** The scheduler checks remaining budget before activating an agent. The guard tracks cumulative token usage across rounds.
+**Enforcement.** The guard tracks cumulative token usage across rounds, from what the harness reports with `record_round_tokens()`. The scheduler calls `check_budget_activation()` before returning an agent as due, if the harness passes it as `pre_activation_check`; a harness that activates an agent through a subscription makes the call itself before each round.
 
-1. **Read-path truncation.** When `max_input_tokens_per_round` is set, the mark space returns marks ranked by effective strength (which incorporates recency through decay) and truncates at the token limit. The agent gets the most relevant marks that fit in its budget. Marks below the cutoff are not lost - they remain in the mark space for other agents or future rounds. This turns the unbounded growth problem into a bounded cost problem per agent per round.
+1. **Read-path truncation.** When `max_input_tokens_per_round` is set, the harness passes it to `read(max_tokens=...)`, and the mark space returns marks ranked by effective strength (which incorporates recency through decay) and truncates at the token limit. The limit applies to one `read()` call and counts estimated tokens, so a harness that reads several scopes in a round must divide it between the reads, or each read gets the whole limit. The agent gets the most relevant marks that fit in its budget. Marks below the cutoff are not lost - they remain in the mark space for other agents or future rounds. This turns the unbounded growth problem into a bounded cost problem per agent per round.
 
-2. **Output capping.** When `max_output_tokens_per_round` is set, the LLM call is configured with a matching `max_tokens` parameter. The agent's generation is bounded at the model API level - the guard doesn't need to truncate after the fact.
+2. **Output capping.** When `max_output_tokens_per_round` is set, the harness configures the LLM call with a matching `max_tokens` parameter. The agent's generation is bounded at the model API level - the guard doesn't need to truncate after the fact.
 
 3. **Lifetime budget tracking.** The guard maintains running totals for input and output tokens consumed across all rounds. When a lifetime budget is set:
    - At `warning_fraction` usage (default 4/5, either dimension): the guard writes a Need mark (`blocking=False`) that surfaces to the principal through `aggregate_needs()`. The agent keeps working on its remaining budget.
-   - At 100% usage (either dimension): the guard stops activating the agent. No more rounds. The agent's marks persist; it just doesn't get scheduled again.
-   - The principal can increase the budget ceiling by updating the manifest. Cumulative consumption is preserved (P63) - the principal raises the limit, not resets the counter.
+   - At 100% usage (either dimension): `check_budget_activation()` refuses the activation. The scheduler skips the agent, and a harness that makes the check gives it no more rounds. The agent's marks persist. The guard writes a Need mark for the stop, which supersedes an open warning of that dimension, so the principal's needs show that the agent has stopped; a lower manifest alone writes none until the guard records a round. A manifest total of 0 still gets one round, because the guard has no usage record before the first recorded round; a total of 0 from `Guard.update_budget()` stops the agent at once.
+   - The principal changes the budget with `Guard.update_budget()`, which stores it for that `id`. The new `TokenBudget` replaces the old one whole, including its `warning_fraction`, so a total it leaves out has no limit and a budget with no totals removes both limits and resumes a stopped agent; `Guard.get_token_budget()` returns what the principal has stored. From then on it takes precedence over the manifest for the lifetime totals and the warning: a higher ceiling resumes the agent, a ceiling at or below what the agent has consumed stops it, and usage below the new warning line warns again when it crosses that line. The guard checks that line when it records a round, not at the call. Each call is recorded as an action mark in `_system` that resolves the agent's open token-budget Need marks, since the call answers them, and if the agent is still stopped a new Need mark says so with the new numbers; `set_write_budget` closes write-budget Need marks the same way. The guard does not apply the per-round limits, which the harness reads from the manifest, so changing those takes a new `Agent` with the same `id` (`agent.model_copy(update=...)`), handed to a scheduler with `Scheduler.update()`. An `Agent` with a new `id` starts a new count and leaves the old agent in the scheduler. Cumulative consumption is preserved (P63) - the principal moves the limit, not the counter.
 
    The warning fraction is configurable per-agent and derived from the deployment's parameters: `warning_fraction = 1 - (R * T / B)`, where R is the expected rounds before the principal responds, T is tokens per round, and B is the total budget. The default (4/5) assumes roughly one round of runway.
 
 **Scope-level rate limits.** Scopes gain an optional rate limit to address denial-of-service via mass writes ([CS5](#failure-mode-coverage)):
 
 ```yaml
-scope: "calendar"
+- name: "calendar"
   # ... existing fields ...
   rate_limit:
     max_writes_per_agent_per_window: 10   # per agent, per 5-minute window
@@ -1035,9 +1048,35 @@ scope: "calendar"
     window_seconds: 300
 ```
 
-The guard enforces rate limits at write time. An agent exceeding its per-agent limit gets a rejection (and the rejection is visible to the envelope via `record_attempt()`). The fleet-wide cap prevents distributed flooding where many agents each stay within their individual limit but collectively overwhelm the scope. When omitted, no rate limit applies - the guard enforces only manifest constraints, as it does today.
+The guard enforces rate limits at write time. An agent exceeding its per-agent limit gets a rejection. The fleet-wide cap prevents distributed flooding where many agents each stay within their individual limit but collectively overwhelm the scope. When omitted, no rate limit applies.
 
-Token budgets, rate limits, and the statistical envelope are independent controls. The envelope detects anomalous *patterns* (rate spikes, type shifts); the budget limits *total cost*; rate limits cap *write throughput*. An agent can be within its budget but behaving anomalously, or consuming its budget through normal high-volume operation. All three matter; none subsumes the others.
+Token budgets, rate limits and write budgets are independent controls, and the statistical envelope is an independent monitor. The envelope reports anomalous *patterns* (rate spikes, type shifts); the token budget limits *total cost*; rate limits cap *write throughput*; write budgets bound each agent's *volume* of each mark type against a stated contract. An agent can be within its token budget but behaving anomalously, or consuming its token budget through normal high-volume operation. None of the four subsumes the others.
+
+### Write Budgets
+
+A write budget ([spec 9.14](spec.md#914-write-budgets)) states how many marks of each type an agent may write over a trailing 30 days. Once an agent has spent the budget of a type, the guard refuses its further writes of that type until older writes have left the 30 days and it is back within the budget, or until the principal sets a new budget, which starts a new count. Before that, the guard only tells the principal that the agent is spending fast, with a need mark: a page at a rate that would spend the budget within days, a ticket when the agent is on course to spend all of it. An agent that declares 10 observations an hour gets twice that rate, 14,400 in 30 days:
+
+<p align="center"><img src="../figures/write_budget_example.svg" alt="Writes counted over 30 days for an agent that declares 10 observations an hour. At 10 an hour it uses half its budget. At 15 an hour it stays inside the budget with no alert and no refusal. At 30 an hour a ticket opens on day 2 and writes are refused from day 20 to day 30. At 400 an hour a page comes in the first hour and writes are refused from day 1.5 to day 30." width="850"></p>
+
+**Why a rule, not a learned baseline.** A learned detector, such as the statistical envelope, flags an agent when its writes deviate from its history. In intrusion detection, attacks are rare, so most alarms are false unless the false-alarm rate is very low, and that rate decides whether a detector is usable ([Axelsson, 2000](https://www.profsandhu.com/cs6393_s20/p186-axelsson.pdf)). A deviation from a learned profile also does not reliably mean an attack ([Sommer and Paxson, 2010](https://www1.icsi.berkeley.edu/pubs/networking/outsidethe10.pdf)). The [envelope simulator](../experiments/envelope_sim/analysis.md) shows the same for the envelope: its verdicts would restrict most normal synthetic agents soon after their cold start, and a large share of the agents resampled from the gpt-oss-120b defense trials.
+
+A stop that hits normal agents that often stops work. So the envelope is a monitor ([spec 9.7](spec.md#97-statistical-envelope)) that asks the principal to look and stops nothing. A write budget is stated in advance, so an agent inside its budget is never refused by it.
+
+**The budget is a contract above normal use.** A write budget is the error budget of site reliability engineering, where a service may fail a stated share of its requests over a period ([Google, The Site Reliability Workbook, chapter 5](https://sre.google/workbook/alerting-on-slos/)). An error budget sits above the normal error rate, so that ordinary operation does not use it up. A manifest's `expected_activity` states an average, and an agent writes above its average a large part of the time, so the budget taken from a manifest is twice the declared rate. A type the agent does not declare has a budget of zero, because the declared activity is its whole contract, so a manifest lists every type the agent writes, intents and actions included.
+
+**Alerts notify; only a spent budget refuses.** The workbook separates the two: burn-rate alerts, which fire on how fast a budget is being spent, notify a person, and the consequence comes from an error-budget policy, an agreement that halts changes when a service "has exceeded its error budget", until it is "back within its SLO" ([Example Error Budget Policy](https://sre.google/workbook/error-budget-policy/)). A write budget does the same: its alert tiers write need marks for the principal, and only a spent budget refuses writes. A threshold that stopped agents would need a new rule for every workload whose writes come in batches, in rounds or rarely. A false alert costs one need mark; a false stop costs the agent's work. One open need mark per agent, mark type and kind (page, ticket or exhausted) keeps the principal's queue readable, as the workbook's alert suppression does.
+
+<p align="center"><img src="../figures/write_budget_flow.svg" alt="A write_mark or pre_action call with room in the budget is stored and counted. Without room it is refused and not counted, and a need mark of kind exhausted goes to the principal once, when the exhaustion starts. A post_action call comes after the tool has run, so it is recorded and counted also over the budget, and over the budget a need mark of kind exhausted goes to the principal. A counted write fires a need mark of kind page or ticket when the agent is spending fast." width="875"></p>
+
+**What counts.** The count holds the writes that were made. A write that the budget or another check refuses before it is stored is not counted, because the error-budget policy lifts the halt when the agent is back within its budget, which an agent that keeps trying could otherwise never reach. An action reaches the guard after its tool has run, so it is recorded also over the budget: the record must match the outside world. So the action budget refuses earlier: `pre_action` refuses an intent once it is spent, because for an immediate grant that is the last point before the tool runs, and a resolution boundary refuses a lease in the same case. Open leases spend the action budget too, so an agent cannot collect leases for more actions than its budget allows; a lease that expires or that the principal releases gives its room back. [Spec 9.14](spec.md#914-write-budgets) lists the ways actions can exceed the budget.
+
+**Defaults.** The 30-day period and the alert tiers are the starting values from the workbook's [alerting chapter](https://sre.google/workbook/alerting-on-slos/); [spec 9.14](spec.md#914-write-budgets) lists them.
+
+**What it does not catch.** A write budget bounds volume, so a small flood inside an agent's normal variation passes, as it must under any rule that leaves normal agents alone. A sustained rise pages nobody below about six times the budget's rate. A rise well below twice the declared rate stays within the budget, so it opens no ticket and is not refused. A rise to about twice the declared rate opens a ticket within days and may never be refused ([simulator](../experiments/envelope_sim/analysis.md#write-budgets)).
+
+What an agent may write and what its content says are not a write budget's job; they are a matter for scope authorization ([spec 7.3](spec.md#73-scope-authorization)), content policies ([spec 9.13](spec.md#913-content-policies)) and the diagnostic probe ([spec 9.9](spec.md#99-diagnostic-probe)). A deployment that needs a tight cap per window sets scope rate limits.
+
+**Where the alerts are noisy.** An agent is paged at the first burst of a type it rarely uses, and an agent that writes in rounds at one instant is paged because an hour then holds a whole round; the workbook warns of this for low traffic. A type written only a few times per period has a budget of only a few writes, so a cluster can be refused. A deployment with such agents states budgets that cover their bursts.
 
 ## Related Work
 
@@ -1051,15 +1090,15 @@ Stigmergy isn't new to computer science, though it has seen limited adoption for
 
 **Blackboard systems** ([Hayes-Roth, 1985](https://doi.org/10.1016/0004-3702(85)90063-3)): AI architecture where multiple knowledge sources write to a shared workspace. Each knowledge source monitors the blackboard for patterns that trigger its rules. No knowledge source communicates directly with any other. The blackboard itself provides the coordination. The [HEARSAY-II](https://doi.org/10.1145/356810.356816) speech understanding system (Erman et al., 1980) is the canonical example: approximately a dozen knowledge sources (segmental, syllabic, lexical, syntactic, semantic, and others) communicate data through a shared blackboard, with a separate scheduler mediating activation order. Knowledge sources are loosely coupled - each responds to blackboard patterns rather than invoking other knowledge sources directly. [Nii (1986)](https://doi.org/10.1609/aimag.v7i2.537) described and systematized the pattern. markspace's typed marks, scoped namespaces, and strength-based reading are a direct descendant of this lineage, adapted for LLM agents.
 
-**Hoare monitors** ([Hoare, 1974](https://doi.org/10.1145/355620.361161)): the guard layer ([Section 9 of the spec](spec.md#9-guard-deterministic-enforcement-layer)) is a descendant of Hoare's monitor concept. A monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. The guard wraps the mark space: every tool call passes through `pre_action` (precondition check) before execution, with a lock ensuring atomicity. The difference is that Hoare monitors enforce programmer-specified invariants, while the guard enforces protocol-specified invariants that the LLM agent cannot override.
+**Hoare monitors** ([Hoare, 1974](https://doi.org/10.1145/355620.361161)): the guard layer ([Section 9 of the spec](spec.md#9-guard-deterministic-enforcement-layer)) is a descendant of Hoare's monitor concept. A monitor wraps shared state with procedures that enforce mutual exclusion and preconditions. The guard wraps the mark space: a tool call through the guard passes through `pre_action` (precondition check) before execution, and a lock makes each check and its write atomic. The guard releases the lock while the tool runs and a lease holds the resource; a direct claim, which reports a tool call after it ran, skips `pre_action`. The difference is that Hoare monitors enforce programmer-specified invariants, while the guard enforces protocol-specified invariants that the LLM agent cannot override.
 
-**Execution monitoring** ([Schneider, 2000](https://doi.org/10.1145/353323.353382); [Hamlen, Morrisett & Schneider, 2006](https://doi.org/10.1145/1111596.1111601)): the theory of what the guard can enforce. A monitor watches each step and stops it before it breaks a policy, so it enforces safety properties whose check on the finite history is decidable (after [Viswanathan, 2000](https://repository.upenn.edu/dissertations/AAI9989666/)). The guard is such a monitor: scope authorization, schema validation, conflict checks and rate limits decide on the mark history and the proposed call before it runs. A content policy or the statistical envelope enforces only the rule its code states, not "observations are true" or "this message causes no harm", which depend on what the guard cannot observe. Scope authorization and schema validation run inside `write()`; the other checks hold only when every call goes through the guard ([spec 9.1](spec.md#91-principle)).
+**Execution monitoring** ([Schneider, 2000](https://doi.org/10.1145/353323.353382); [Hamlen, Morrisett & Schneider, 2006](https://doi.org/10.1145/1111596.1111601)): the theory of what the guard can enforce. A monitor watches each step and stops it before it breaks a policy, so it enforces safety properties whose check on the finite history is decidable (after [Viswanathan, 2000](https://repository.upenn.edu/dissertations/AAI9989666/)). The guard is such a monitor: scope authorization, schema validation, conflict checks and rate limits decide on the mark history and the proposed call before it runs. A content policy or a write budget enforces only the rule its code states, not "observations are true" or "this message causes no harm", which depend on what the guard cannot observe. Scope authorization and schema validation run inside `write()`; the other checks hold only when every call goes through the guard ([spec 9.1](spec.md#91-principle)).
 
 **Bell-LaPadula model** ([Bell & LaPadula, 1973](https://apps.dtic.mil/sti/citations/AD0770768)): the OPEN/PROTECTED/CLASSIFIED visibility levels are a simplified Bell-LaPadula lattice. Bell-LaPadula's "no read up, no write down" becomes our "unauthorized readers see projections (PROTECTED) or nothing (CLASSIFIED)." The simplification is deliberate: the Bell-LaPadula model handles hierarchical security levels combined with compartment categories (related to [Denning's (1976)](https://doi.org/10.1145/360051.360056) lattice model of secure information flow); we need exactly three levels because the use case is coordination visibility, not military classification. The projected read (structure visible, content redacted) is the novel element. Bell-LaPadula has no analogue for "you can see that a mark exists but not what it says."
 
 **Environment as first-class abstraction** ([Weyns et al., 2007](https://doi.org/10.1007/s10458-006-0012-0)): Weyns, Omicini, and Odell argued that multi-agent system environments should be first-class architectural elements with their own responsibilities, not just passive containers. The mark space follows this prescription: it computes strength at read time, enforces visibility, and mediates all agent interaction. Agents do not interact with each other; they interact with the environment.
 
-**[Kubernetes reconciliation](https://kubernetes.io/docs/concepts/architecture/controller/)**: controllers don't talk to each other. They read desired state from etcd, compare to actual state, write corrections. The "mark space" is the Kubernetes API server. Adding a new controller changes nothing for existing controllers.
+**[Kubernetes reconciliation](https://kubernetes.io/docs/concepts/architecture/controller/)**: controllers don't talk to each other. They read desired state from the API server, compare to actual state, write corrections. The "mark space" is the Kubernetes API server. Adding a new controller changes nothing for existing controllers.
 
 **CRDTs** ([Shapiro et al., 2011](https://doi.org/10.1007/978-3-642-24550-3_29)): Conflict-free Replicated Data Types guarantee eventual consistency without coordination. Multiple writers, no locks, convergent state. The data structure's merge semantics eliminate the need for a consensus protocol. Relevant for mark conflict resolution.
 
@@ -1068,6 +1107,8 @@ Stigmergy isn't new to computer science, though it has seen limited adoption for
 **Ant Colony Optimization** ([Dorigo et al., 1996](https://doi.org/10.1109/3477.484436)): the most direct computational stigmergy. Artificial ants deposit pheromone on graph edges; subsequent ants probabilistically follow stronger trails; pheromone evaporates over time. The exponential decay model in markspace is a direct descendant. Key difference: ACO agents are stateless and homogeneous; LLM agents have internal state and heterogeneous capabilities. ACO's convergence proofs rely on assumptions (infinite iterations, stationary environment) that don't hold for LLM agent coordination.
 
 **Swarm robotics** ([Brambilla et al., 2013](https://doi.org/10.1007/s11721-012-0075-2)): decades of computational stigmergy applied to physical robot coordination. Key lessons: stigmergic coordination works well for spatially distributed tasks with simple local rules, but struggles with tasks requiring global consistency or complex sequential dependencies - exactly the pattern our stress test confirms (32-34% utilization on sequential work). Known limitations include sensitivity to parameter tuning (decay rates, sensing ranges) and difficulty analyzing emergent behavior formally.
+
+**Anomaly detection and runtime guardrails**: in intrusion detection, a re-examination argues that false positives need the same analysis as true positives ([Erbacher, 2022](https://arxiv.org/abs/2203.08801)). Work on runtime guardrails for tool-using agents has both a rule and a learned kind of monitor: relative to fixed oracle predicates, a deterministic gate enforces exactly the nonempty safety policies whose good prefixes its register model recognizes ([Ray, 2026](https://arxiv.org/abs/2607.22868)), and ProbGuard learns a model of behavior from execution traces and intervenes when its estimated probability of staying safe falls below a threshold ([Wang et al.](https://arxiv.org/abs/2508.00500)). [Write Budgets](#write-budgets) gives this design's reasons for a rule.
 
 ### LLM Multi-Agent Coordination (~2023-2026)
 
@@ -1081,7 +1122,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 **ChatDev** ([Qian et al., 2023](https://arxiv.org/abs/2307.07924)): LLM agents collaborating on software development through shared documents (design docs, code files, test reports). The documents serve as coordination artifacts - agents read shared state and write updates rather than negotiating directly. Combines direct role-based communication with shared-artifact coordination.
 
-**Pheromind** ([mariusgavrila/pheromind](https://github.com/mariusgavrila/pheromind)): LLM-native stigmergy implementation where agents coordinate through a shared `.pheromone` JSON file rather than direct messages. A dedicated "Pheromone Scribe" agent translates natural language summaries from other agents into structured JSON signals; the swarm reads the structured state, not the raw output. This design reveals a structural tension that markspace addresses differently: LLM agents produce natural language, but a shared coordination store requires structured signals. Pheromind resolves the tension by interposing a dedicated translator; markspace places the structuring obligation on the writing agent - each agent is responsible for producing well-formed marks, and the guard rejects malformed writes at the boundary. The two approaches trade off differently: a scribe centralizes translation (single point of semantic failure - a mistranslation propagates to all readers as a valid structured mark, undetectable by schema validation) but relaxes the per-agent structuring burden. Per-agent structuring distributes the responsibility and eliminates the scribe bottleneck, but requires each agent to produce schema-valid output. The guard's schema validation (`_validate_mark()`) catches structural violations; it has no semantic validation and cannot catch a structurally valid mark with incorrect content - a limit that applies to both architectures.
+**Pheromind** ([mariusgavrila/pheromind](https://github.com/mariusgavrila/pheromind)): LLM-native stigmergy implementation where agents coordinate through a shared `.pheromone` JSON file rather than direct messages. A dedicated "Pheromone Scribe" agent translates natural language summaries from other agents into structured JSON signals; the swarm reads the structured state, not the raw output. This design reveals a structural tension that markspace addresses differently: LLM agents produce natural language, but a shared coordination store requires structured signals. Pheromind resolves the tension by interposing a dedicated translator; markspace places the structuring obligation on the writing agent - each agent is responsible for producing well-formed marks, and the guard rejects malformed writes at the boundary. The two approaches trade off differently: a scribe centralizes translation (single point of semantic failure - a mistranslation propagates to all readers as a valid structured mark, undetectable by schema validation) but relaxes the per-agent structuring burden. Per-agent structuring distributes the responsibility and eliminates the scribe bottleneck, but requires each agent to produce schema-valid output. The mark space's schema validation (`_validate_mark()`) catches structural violations; it has no semantic validation and cannot catch a structurally valid mark with incorrect content - a limit that applies to both architectures.
 
 **Stigmergic Blackboard Protocol** ([AdviceNXT/sbp](https://github.com/AdviceNXT/sbp)): closest existing project. Agents deposit digital pheromones with intensity decay, sense the environment, and respond when conditions are met. Shares the core insight (coordinate through environment, not messages). Does not include typed mark taxonomy, formal properties, trust weighting, or deterministic guard enforcement.
 
@@ -1113,7 +1154,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 **dfki-asr/stigmergy-demo** ([dfki-asr/stigmergy-demo](https://github.com/dfki-asr/stigmergy-demo)): stigmergic coordination in cyber-physical production scenarios, using linked data and semantic web agents to coordinate shared factory machinery. Not LLM-related but demonstrates the pattern in industrial multi-agent settings.
 
-**Agent Identity URI Scheme** ([Rodriguez, 2026](https://arxiv.org/abs/2601.14567)): proposes `agent://` as a stable, topology-independent naming scheme for multi-agent systems, combining an organizational trust root, a hierarchical capability path for semantic discovery, and a sortable unique identifier. The capability path (e.g., `/workflow/approval`) enables agents to locate collaborators by what they can do rather than by pre-configured identity - complementing markspace's static fleet composition with a dynamic discovery layer. Cryptographic attestation via PASETO tokens tied to the trust root provides a structural basis for cross-fleet identity verification. Most directly relevant to the cross-principal surface: attestation could upgrade incoming external marks to `EXTERNAL_VERIFIED` without manual cross-referencing, and capability paths enable runtime discovery of external fleet agents. The scheme assumes the attestation layer is the threat boundary and does not address adversarial agents operating within a legitimate trust root.
+**Agent Identity URI Scheme** ([Rodriguez, 2026](https://arxiv.org/abs/2601.14567)): proposes `agent://` as a stable, topology-independent naming scheme for multi-agent systems, combining an organizational trust root, a hierarchical capability path for semantic discovery, and a sortable unique identifier. The capability path (e.g., `/workflow/approval`) enables agents to locate collaborators by what they can do rather than by pre-configured identity - complementing markspace's static fleet composition with a dynamic discovery layer. The trust root signs an attestation (a PASETO v4.public token) that names the agent and its capabilities. The attestation binds no key of the agent, and the scheme's discovery records publish it, so presenting it does not prove who sent a mark; the scheme defines no signature on a message. An upgrade of incoming marks to `EXTERNAL_VERIFIED` therefore needs a separate signature on each mark. Most directly relevant to the cross-principal surface: capability paths enable runtime discovery of external fleet agents. The scheme assumes the attestation layer is the threat boundary and does not address adversarial agents operating within a legitimate trust root.
 
 **Gap this work addresses.** Shared-state coordination is well-established (blackboard systems, tuple spaces, shared databases). Stigmergic decay and reinforcement have been studied in swarm intelligence since the 1990s. The specific gap is the combination, adapted for LLM agents: (1) a typed mark taxonomy with formal decay/trust semantics designed for probabilistic, exploitable agents, (2) a deterministic enforcement layer independent of LLM compliance, (3) systematic experimental validation across adversarial, concurrent, and multi-resource conditions, and (4) a formal specification with property tests covering normative guarantees. Several of these components draw directly from prior work - decay from pheromone evaporation (Dorigo et al., 1996), trust weighting from reputation models (Granatyr et al., 2015), the enforcement layer from Hoare monitors (1974), visibility from Bell-LaPadula (1973). What the enforcement layer can guarantee follows from execution monitoring theory ([Schneider, 2000](https://doi.org/10.1145/353323.353382); [Hamlen et al., 2006](https://doi.org/10.1145/1111596.1111601)): safety properties with a decidable check, not properties that depend on what the guard cannot observe, such as whether content is true or causes harm. The mark taxonomy (the specific 5-type decomposition oriented around coordination failure modes), projected reads (structure-visible, content-redacted access that Bell-LaPadula has no analogue for), and the empirical validation at scale under adversarial pressure are new contributions. The broader contribution is their integration into a protocol adapted for agents that are probabilistic, exploitable, and operating in environments where information goes stale - properties that prior shared-state systems did not design for. The attack surfaces documented in 2025-2026 security research - trust-authorization mismatch where static permissions decouple from runtime trustworthiness ([Shi et al., 2025](https://arxiv.org/abs/2512.06914)), prompt injection escalating through multi-stage kill chains ([Brodt et al., 2026](https://arxiv.org/abs/2601.09625)), and peer agents bypassing refusal guardrails that hold against direct prompting ([Lupinacci et al., 2025](https://arxiv.org/abs/2507.06850)) - are instances of these failure modes in deployed systems.
 
@@ -1130,8 +1171,8 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 
 ### LLM multi-agent coordination
 
-- Rodriguez, R.R. (2026). "Agent Identity URI Scheme: Topology-Independent Naming and Capability-Based Discovery for Multi-Agent Systems." [arXiv:2601.14567](https://arxiv.org/abs/2601.14567). [Proposes `agent://` URI scheme with organizational trust root, hierarchical capability paths for semantic discovery, and cryptographic attestation. Relevant to cross-principal interaction: attestation upgrades external marks structurally; capability paths enable cross-fleet agent discovery by capability.]
-- Shapira, N. et al. (2026). [Agents of Chaos](https://agentsofchaos.baulab.info/report.html). Bau Lab, Feb 2026. Red-teaming study of 6 autonomous agents documenting 16 failure case studies.
+- Rodriguez, R.R. (2026). "Agent Identity URI Scheme: Topology-Independent Naming and Capability-Based Discovery for Multi-Agent Systems." [arXiv:2601.14567](https://arxiv.org/abs/2601.14567). [Proposes `agent://` URI scheme with organizational trust root, hierarchical capability paths for semantic discovery, and cryptographic attestation. Relevant to cross-principal interaction: capability paths enable cross-fleet agent discovery by capability; the attestation is a bearer token and the scheme signs no message, so a verified author needs a separate signature on each mark.]
+- Shapira, N. et al. (2026). [Agents of Chaos](https://agentsofchaos.baulab.info/report.html). Bau Lab, Feb 2026. Red-teaming study of 6 autonomous agents documenting 16 case studies, 10 of them agent failures.
 - Kim, Y. et al. (2025). "Towards a Science of Scaling Agent Systems." [arXiv:2512.08296](https://arxiv.org/abs/2512.08296). [180 configurations, up to 4 agents, 4 benchmarks. Architecture-task alignment principle.]
 - Tomasev, N., Franklin, M., & Osindero, S. (2026). "Intelligent AI Delegation." [arXiv:2602.11865](https://arxiv.org/abs/2602.11865). [5 core requirements, 9 technical implementation areas for intelligent agent delegation.]
 - Cemri, M., Pan, M., Yang, S. et al. (2025). "Why Do Multi-Agent LLM Systems Fail?" [arXiv:2503.13657](https://arxiv.org/abs/2503.13657). [MAST taxonomy: 14 failure modes, 1,600+ annotated traces across 7 MAS frameworks.]
@@ -1160,7 +1201,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Shi, G., Du, H., Wang, Z., Liang, X., Liu, W., Bian, S., & Guan, Z. (2025). "SoK: Trust-Authorization Mismatch in LLM Agent Interactions." [arXiv:2512.06914](https://arxiv.org/abs/2512.06914). [Systematization of knowledge across the agent security landscape. Static permissions decouple from runtime trustworthiness; prompt injection and tool poisoning share a common root cause. Proposes Belief-Intention-Permission (B-I-P) framework.]
 - Brodt, O., Feldman, E., Schneier, B., & Nassi, B. (2026). "The Promptware Kill Chain: How Prompt Injections Gradually Evolved Into a Multistep Malware Delivery Mechanism." [arXiv:2601.09625](https://arxiv.org/abs/2601.09625). [Seven-stage kill chain from initial access through privilege escalation, persistence, lateral movement, and actions on objective. Analyzes 36 studies.]
 - Xu, Z., Qi, M., Wu, S., Zhang, L., Wei, Q., He, H., & Li, N. (2025). "The Trust Paradox in LLM-Based Multi-Agent Systems: When Collaboration Becomes a Security Vulnerability." [arXiv:2510.18563](https://arxiv.org/abs/2510.18563). [Higher inter-agent trust improves task success but increases over-exposure and authorization drift. Proposes Over-Exposure Rate (OER) and Authorization Drift (AD) metrics.]
-- Lupinacci, M., Pironti, F.A., Blefari, F., Romeo, F., Arena, L., & Furfaro, A. (2025). "The Dark Side of LLMs: Agent-based Attacks for Complete Computer Takeover." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [94.4% of 18 tested LLMs succumb to direct prompt injection; 83.3% to RAG backdoor; 100% to inter-agent trust exploitation, where LLMs execute payloads from peer agents with no jailbreak required.]
+- Lupinacci, M., Pironti, F.A., Blefari, F., Romeo, F., Arena, L., & Furfaro, A. (2025). "The Dark Side of LLMs: Agent-based Attack Vectors for System-level Compromise." [arXiv:2507.06850](https://arxiv.org/abs/2507.06850). [94.4% of 18 tested LLMs succumb to direct prompt injection; 83.3% to RAG backdoor; 100% to inter-agent trust exploitation, where LLMs execute payloads from peer agents with no jailbreak required.]
 - Ju, Y. et al. (2025). "TAMAS: Benchmarking Adversarial Risks in Multi-Agent LLM Systems." [arXiv:2511.05269](https://arxiv.org/abs/2511.05269). ICML 2025. [Benchmark for multi-agent adversarial risks; identifies attack classes (collusion, contradiction, compromise) with no analog in single-agent setups.]
 - He, P., Lin, Y., Dong, S., Xu, H., Xing, Y., & Liu, H. (2025). "Red-Teaming LLM Multi-Agent Systems via Communication Attacks." [arXiv:2502.14847](https://arxiv.org/abs/2502.14847). Findings of ACL 2025. [Agent-in-the-Middle attack: compromises entire multi-agent systems by manipulating inter-agent messages, without compromising any individual agent.]
 - Triedman, H., Jha, R., & Shmatikov, V. (2025). "Multi-Agent Systems Execute Arbitrary Malicious Code." [arXiv:2503.12188](https://arxiv.org/abs/2503.12188). [Adversarial content hijacks control across multi-agent systems with 58-90% success; attacks succeed even when individual agents refuse harmful actions and are not susceptible to direct prompt injection.]
@@ -1217,7 +1258,7 @@ Recent work has applied coordination protocols to LLM agent fleets, though most 
 - Shapiro, M., Preguiça, N., Baquero, C., & Zawirski, M. (2011). "Conflict-free replicated data types." *SSS 2011*, LNCS 6976, 386-400. [doi:10.1007/978-3-642-24550-3_29](https://doi.org/10.1007/978-3-642-24550-3_29). [CRDTs: convergent shared state without coordination.]
 - Heylighen, F. (2016). "Stigmergy as a universal coordination mechanism." *Cognitive Systems Research*, 38, 4-13. [doi:10.1016/j.cogsys.2015.12.002](https://doi.org/10.1016/j.cogsys.2015.12.002). [Stigmergy beyond biology: Wikipedia, open source, markets.]
 - Marsh, L. & Onof, C. (2008). "Stigmergic epistemology, stigmergic cognition." *Cognitive Systems Research*, 9(1-2), 136-149. [doi:10.1016/j.cogsys.2007.06.009](https://doi.org/10.1016/j.cogsys.2007.06.009). [Theoretical foundations.]
-- Kubernetes Contributors. "Controllers." [Kubernetes Documentation](https://kubernetes.io/docs/concepts/architecture/controller/). [Reconciliation loop: controllers read desired state from etcd, write corrections. Stigmergic coordination in infrastructure.]
+- Kubernetes Contributors. "Controllers." [Kubernetes Documentation](https://kubernetes.io/docs/concepts/architecture/controller/). [Reconciliation loop: controllers read desired state from the API server, write corrections. Stigmergic coordination in infrastructure.]
 
 ### Trust and reputation
 

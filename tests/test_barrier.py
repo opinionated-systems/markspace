@@ -12,7 +12,19 @@ import uuid
 
 import pytest
 
-from markspace.barrier import AgentBarrier
+from markspace import (
+    Agent,
+    ConflictPolicy,
+    DecayConfig,
+    Guard,
+    GuardVerdict,
+    Intent,
+    MarkSpace,
+    Scope,
+    hours,
+    minutes,
+)
+from markspace.barrier import AgentBarrier, BarrierSnapshot
 
 
 def _make_barrier() -> tuple[AgentBarrier, uuid.UUID, uuid.UUID]:
@@ -33,7 +45,6 @@ class TestAgentBarrier:
         assert barrier.is_allowed("email", "observation") is True
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "observation") is True
-        assert barrier.flag_count == 0
         assert barrier.needs_required("calendar") is False
 
     def test_narrow_blocks(self) -> None:
@@ -64,8 +75,6 @@ class TestAgentBarrier:
         # Other mutations don't affect existing revocations
         barrier.narrow("email", "observation")
         assert barrier.is_allowed_checked("calendar", "intent") is False
-        barrier.increment_flags()
-        assert barrier.is_allowed_checked("calendar", "intent") is False
         barrier.require_need("calendar")
         assert barrier.is_allowed_checked("calendar", "intent") is False
 
@@ -92,25 +101,21 @@ class TestAgentBarrier:
         assert barrier.is_allowed_checked("calendar", "intent") is True
 
     def test_restore_all(self) -> None:
-        """restore_all() clears all revocations, need requirements, and flags."""
+        """restore_all() clears all revocations and need requirements."""
         barrier, _, token = _make_barrier()
 
         barrier.narrow("calendar", "intent")
         barrier.narrow("email", "observation")
         barrier.require_need("calendar")
-        barrier.increment_flags()
-        barrier.increment_flags()
 
         assert barrier.is_allowed_checked("calendar", "intent") is False
         assert barrier.needs_required("calendar") is True
-        assert barrier.flag_count == 2
 
         result = barrier.restore_all(token)
         assert result is True
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "observation") is True
         assert barrier.needs_required("calendar") is False
-        assert barrier.flag_count == 0
 
     def test_restore_all_wrong_token(self) -> None:
         """restore_all() with wrong token fails and changes nothing."""
@@ -118,12 +123,12 @@ class TestAgentBarrier:
         wrong_token = uuid.uuid4()
 
         barrier.narrow("calendar", "intent")
-        barrier.increment_flags()
+        barrier.require_need("calendar")
 
         result = barrier.restore_all(wrong_token)
         assert result is False
         assert barrier.is_allowed_checked("calendar", "intent") is False
-        assert barrier.flag_count == 1
+        assert barrier.needs_required("calendar") is True
 
     def test_require_need(self) -> None:
         """needs_required() returns True after require_need() for that scope."""
@@ -165,16 +170,6 @@ class TestAgentBarrier:
         assert barrier.is_allowed_checked("calendar", "intent") is True
         assert barrier.is_allowed_checked("email", "intent") is True
 
-    def test_escalation_counter(self) -> None:
-        """increment_flags() increments and returns the running count."""
-        barrier, _, _ = _make_barrier()
-
-        assert barrier.flag_count == 0
-        assert barrier.increment_flags() == 1
-        assert barrier.increment_flags() == 2
-        assert barrier.increment_flags() == 3
-        assert barrier.flag_count == 3
-
     def test_isolation_between_agents(self) -> None:
         """Different barriers (different agents) do not interfere."""
         barrier_a, _, token_a = _make_barrier()
@@ -182,7 +177,7 @@ class TestAgentBarrier:
 
         barrier_a.narrow("calendar", "intent")
         barrier_b.narrow("email", "observation")
-        barrier_a.increment_flags()
+        barrier_a.require_need("calendar")
 
         # A's revocation does not affect B
         assert barrier_a.is_allowed_checked("calendar", "intent") is False
@@ -192,9 +187,9 @@ class TestAgentBarrier:
         assert barrier_b.is_allowed_checked("email", "observation") is False
         assert barrier_a.is_allowed_checked("email", "observation") is True
 
-        # Flag counts are independent
-        assert barrier_a.flag_count == 1
-        assert barrier_b.flag_count == 0
+        # Need requirements are independent
+        assert barrier_a.needs_required("calendar") is True
+        assert barrier_b.needs_required("calendar") is False
 
         # Tokens are not interchangeable
         assert barrier_a.restore("calendar", "intent", token_b) is False
@@ -252,3 +247,103 @@ class TestAgentBarrier:
             assert snap.needs_required(scope) == barrier.needs_required(scope)
         barrier.require_need_all()
         assert barrier.snapshot().needs_required("eng")
+
+
+class TestBarrierReadsPerCall:
+    """A guard call reads the barriers of the agents it judges, not every barrier."""
+
+    def _guard_with_barriers(self, n: int) -> tuple[MarkSpace, Guard]:
+        scope = Scope(
+            name="s",
+            allowed_intent_verbs=("do",),
+            allowed_action_verbs=("did",),
+            decay=DecayConfig(
+                observation_half_life=hours(1),
+                warning_half_life=minutes(30),
+                intent_ttl=hours(1),
+            ),
+            conflict_policy=ConflictPolicy.FIRST_WRITER,
+        )
+        space = MarkSpace(scopes=[scope])
+        guard = Guard(space)
+        for _ in range(n):
+            guard.get_or_create_barrier(uuid.uuid4())
+        return space, guard
+
+    def _count_snapshots(self, monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+        reads: list[uuid.UUID] = []
+        original = AgentBarrier.snapshot
+
+        def counted(barrier: AgentBarrier) -> BarrierSnapshot:
+            reads.append(barrier.agent_id)
+            return original(barrier)
+
+        monkeypatch.setattr(AgentBarrier, "snapshot", counted)
+        return reads
+
+    def test_pre_action_reads_no_barrier_of_an_agent_it_does_not_judge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, guard = self._guard_with_barriers(50)
+        agent = Agent(name="a", scopes={"s": ["intent", "action"]})
+        reads = self._count_snapshots(monkeypatch)
+
+        decision = guard.pre_action(agent, "s", "r", "do", 0.5)
+        assert decision.verdict == GuardVerdict.ALLOW
+        guard.post_action(agent, "s", "r", "did", {}, intent_id=decision.intent_id)
+        guard.post_action(agent, "s", "other", "did", {})
+
+        assert reads == []
+
+    def test_a_competitor_barrier_is_read_once_and_still_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        space, guard = self._guard_with_barriers(50)
+        rival = Agent(name="rival", scopes={"s": ["intent", "action"]})
+        agent = Agent(name="a", scopes={"s": ["intent", "action"]})
+        # The rival's intents are pending: they reach the space without a grant.
+        for _ in range(2):
+            space.write(
+                rival, Intent(scope="s", resource="r", action="do", confidence=0.9)
+            )
+        guard.get_or_create_barrier(rival.id).narrow("s", "intent")
+        reads = self._count_snapshots(monkeypatch)
+
+        decision = guard.pre_action(agent, "s", "r", "do", 0.5)
+
+        assert decision.verdict == GuardVerdict.ALLOW
+        assert reads == [rival.id]
+
+    def test_a_boundary_reads_only_the_barriers_of_its_candidates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        space, guard = self._guard_with_barriers(50)
+        deferred = Scope(
+            name="d",
+            allowed_intent_verbs=("do",),
+            allowed_action_verbs=("did",),
+            decay=DecayConfig(
+                observation_half_life=hours(1),
+                warning_half_life=minutes(30),
+                intent_ttl=hours(1),
+            ),
+            conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE,
+            deferred=True,
+        )
+        space.register_scope(deferred)
+        one = Agent(name="one", scopes={"d": ["intent", "action"]})
+        two = Agent(name="two", scopes={"d": ["intent", "action"]})
+        assert (
+            guard.pre_action(one, "d", "r", "do", 0.5).verdict == GuardVerdict.BLOCKED
+        )
+        assert (
+            guard.pre_action(two, "d", "r", "do", 0.9).verdict == GuardVerdict.BLOCKED
+        )
+        guard.get_or_create_barrier(two.id).narrow("d", "intent")
+        reads = self._count_snapshots(monkeypatch)
+
+        results = guard.resolve_deferred("d", "r")
+
+        assert results[one.id].verdict == GuardVerdict.ALLOW
+        assert results[two.id].verdict == GuardVerdict.DENIED
+        assert reads == [two.id]

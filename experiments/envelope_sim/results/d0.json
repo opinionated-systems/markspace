@@ -1,0 +1,1211 @@
+{
+  "config": {
+    "seeds": 400,
+    "windows": 15000,
+    "quick": false
+  },
+  "profiles": {
+    "batches_12_12": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 397,
+        "share": 0.9925,
+        "interval95": [
+          0.9782,
+          0.9985
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "batches_20_6": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "batches_40_4": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "batches_40_4_back_to_back": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "boundary_burst_10_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "boundary_burst_10_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 213,
+      "detected": 187,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.04,
+      "median_attack_writes_before_detection": 6
+    },
+    "daily_start_in_peak": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "daily_start_out_of_peak": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_1000_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 24,
+        "share": 0.06,
+        "interval95": [
+          0.0388,
+          0.088
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 132,
+        "share": 0.33,
+        "interval95": [
+          0.2841,
+          0.3785
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 324,
+        "share": 0.81,
+        "interval95": [
+          0.7681,
+          0.8473
+        ]
+      },
+      "restricted_by_the_end": 376
+    },
+    "first_use_1000_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 21,
+        "share": 0.0525,
+        "interval95": [
+          0.0328,
+          0.0791
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_1000_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 26,
+        "share": 0.065,
+        "interval95": [
+          0.0429,
+          0.0938
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_100_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 24,
+        "share": 0.06,
+        "interval95": [
+          0.0388,
+          0.088
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 123,
+        "share": 0.3075,
+        "interval95": [
+          0.2626,
+          0.3553
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 324,
+        "share": 0.81,
+        "interval95": [
+          0.7681,
+          0.8473
+        ]
+      },
+      "restricted_by_the_end": 374
+    },
+    "first_use_100_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_100_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_5000_burst_1": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 24,
+        "share": 0.06,
+        "interval95": [
+          0.0388,
+          0.088
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 125,
+        "share": 0.3125,
+        "interval95": [
+          0.2674,
+          0.3604
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 326,
+        "share": 0.815,
+        "interval95": [
+          0.7734,
+          0.8519
+        ]
+      },
+      "restricted_by_the_end": 375
+    },
+    "first_use_5000_burst_12": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 27,
+        "share": 0.0675,
+        "interval95": [
+          0.045,
+          0.0967
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 137,
+        "share": 0.3425,
+        "interval95": [
+          0.2961,
+          0.3913
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "first_use_5000_burst_4": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 20,
+        "share": 0.05,
+        "interval95": [
+          0.0308,
+          0.0762
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 130,
+        "share": 0.325,
+        "interval95": [
+          0.2793,
+          0.3733
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "flood_10_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_10_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 306,
+      "detected": 50,
+      "restricted_later": 44,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.0,
+      "median_attack_writes_before_detection": 0.0
+    },
+    "flood_10_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_10_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 161,
+      "detected": 239,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2
+    },
+    "flood_10_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_10_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 316,
+      "detected": 80,
+      "restricted_later": 4,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.0,
+      "median_attack_writes_before_detection": 0.0
+    },
+    "flood_20_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_20_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 297,
+      "detected": 98,
+      "restricted_later": 5,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.28,
+      "median_attack_writes_before_detection": 20.0
+    },
+    "flood_20_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_20_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 153,
+      "detected": 247,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2
+    },
+    "flood_20_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_20_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 310,
+      "detected": 90,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.03,
+      "median_attack_writes_before_detection": 5.0
+    },
+    "flood_5_over_12_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_5_over_12_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 289,
+      "detected": 35,
+      "restricted_later": 76,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.0,
+      "median_attack_writes_before_detection": 0
+    },
+    "flood_5_over_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_5_over_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 150,
+      "detected": 250,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "flood_5_over_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_5_over_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 323,
+      "detected": 45,
+      "restricted_later": 32,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.0,
+      "median_attack_writes_before_detection": 0
+    },
+    "flood_then_silence_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "flood_then_silence_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 157,
+      "detected": 243,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2
+    },
+    "idle_gaps": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "intermittent_warnings": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "new_type_burst_10_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 72,
+      "detected": 328,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "new_type_burst_10_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 0,
+      "detected": 400,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "new_type_burst_20_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 83,
+      "detected": 317,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2
+    },
+    "new_type_burst_20_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 0,
+      "detected": 400,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "new_type_burst_5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 85,
+      "detected": 315,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2
+    },
+    "new_type_burst_5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 0,
+      "detected": 400,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.01,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "overdispersed_3": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "poisoned_cold_start_1_3_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "poisoned_cold_start_1_3_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 161,
+      "detected": 209,
+      "restricted_later": 30,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.06,
+      "median_attack_writes_before_detection": 17
+    },
+    "poisoned_cold_start_random_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "poisoned_cold_start_random_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 177,
+      "detected": 82,
+      "restricted_later": 141,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.0,
+      "median_attack_writes_before_detection": 0.0
+    },
+    "ramp_10pct_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "ramp_10pct_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 280,
+      "detected": 120,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 1.93,
+      "median_attack_writes_before_detection": 2.0
+    },
+    "rare_warning": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "steady_1": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "steady_20": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "steady_5": {
+      "config": "L",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_1_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_7_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 400,
+        "share": 1.0,
+        "interval95": [
+          0.9908,
+          1.0
+        ]
+      },
+      "restricted_by_the_end": 400
+    },
+    "sustained_2x_of_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "sustained_2x_of_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 211,
+      "detected": 189,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 1.49,
+      "median_attack_writes_before_detection": 3
+    },
+    "sustained_2x_of_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "sustained_2x_of_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 352,
+      "detected": 48,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.77,
+      "median_attack_writes_before_detection": 3.0
+    },
+    "sustained_3x_of_1_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "sustained_3x_of_1_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 187,
+      "detected": 213,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.96,
+      "median_attack_writes_before_detection": 3
+    },
+    "sustained_3x_of_3.5_at1200": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 400,
+      "detected": 0,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": null,
+      "median_attack_writes_before_detection": null
+    },
+    "sustained_3x_of_3.5_at15": {
+      "config": "L",
+      "kind": "attack",
+      "agents": 400,
+      "restricted_before_the_attack": 343,
+      "detected": 57,
+      "restricted_later": 0,
+      "never_restricted": 0,
+      "median_windows_to_detection": 0.57,
+      "median_attack_writes_before_detection": 4
+    },
+    "T_resampled_normal": {
+      "config": "T",
+      "kind": "normal",
+      "agents": 400,
+      "restricted_within_10_days": {
+        "agents": 58,
+        "share": 0.145,
+        "interval95": [
+          0.112,
+          0.1834
+        ]
+      },
+      "restricted_within_20_days": {
+        "agents": 107,
+        "share": 0.2675,
+        "interval95": [
+          0.2247,
+          0.3137
+        ]
+      },
+      "restricted_within_30_days": {
+        "agents": 131,
+        "share": 0.3275,
+        "interval95": [
+          0.2817,
+          0.3759
+        ]
+      },
+      "restricted_by_the_end": 157
+    }
+  },
+  "replays": {
+    "rate_spike": {
+      "normal_agents": 100,
+      "normal_restricted": 19,
+      "adversaries": 5,
+      "adversaries_restricted": 0,
+      "agents_compared_with_stored": 105,
+      "differences_from_stored": []
+    },
+    "type_shift": {
+      "normal_agents": 100,
+      "normal_restricted": 9,
+      "adversaries": 5,
+      "adversaries_restricted": 2,
+      "agents_compared_with_stored": 105,
+      "differences_from_stored": []
+    },
+    "escalation": {
+      "normal_agents": 100,
+      "normal_restricted": 13,
+      "adversaries": 5,
+      "adversaries_restricted": 3,
+      "agents_compared_with_stored": 105,
+      "differences_from_stored": []
+    },
+    "probe_evasion": {
+      "normal_agents": 100,
+      "normal_restricted": 10,
+      "adversaries": 5,
+      "adversaries_restricted": 0,
+      "agents_compared_with_stored": 105,
+      "differences_from_stored": []
+    },
+    "slow_drift": {
+      "normal_agents": 100,
+      "normal_restricted": 21,
+      "adversaries": 5,
+      "adversaries_restricted": 0,
+      "agents_compared_with_stored": 100,
+      "differences_from_stored": []
+    },
+    "defense_combined": {
+      "normal_agents": 100,
+      "normal_restricted": 26,
+      "adversaries": 5,
+      "adversaries_restricted": 4,
+      "agents_compared_with_stored": 105,
+      "differences_from_stored": []
+    }
+  }
+}
