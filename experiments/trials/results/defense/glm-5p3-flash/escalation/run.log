@@ -15,76 +15,76 @@ Starting trial (seed=42)...
   Extended manifests for 2 weeks
   Defense: write budgets (bots) + barrier + probe; envelope as a monitor (probe interval=5)
   Round 1/20 (MON AM)...
-    active=103 steps=448 wasted=195 verdicts={'blocked': 82, 'allow': 166, 'conflict': 113}
+    active=103 steps=440 wasted=184 verdicts={'allow': 165, 'blocked': 82, 'conflict': 102}
   Round 2/20 (MON PM)...
-    active=36 steps=153 wasted=61 verdicts={'allow': 33, 'blocked': 10, 'conflict': 51}
+    active=35 steps=146 wasted=63 verdicts={'allow': 28, 'blocked': 4, 'conflict': 59}
   Round 3/20 (TUE AM)...
-    active=101 steps=320 wasted=120 verdicts={'allow': 132, 'blocked': 70, 'conflict': 50}
+    active=101 steps=311 wasted=114 verdicts={'allow': 127, 'blocked': 68, 'conflict': 46}
   Round 4/20 (TUE PM)...
-    active=36 steps=166 wasted=69 verdicts={'allow': 24, 'conflict': 69}
+    active=35 steps=151 wasted=64 verdicts={'allow': 23, 'conflict': 58, 'blocked': 6}
   Round 5/20 (WED AM)...
-    active=103 steps=350 wasted=150 verdicts={'allow': 123, 'blocked': 89, 'conflict': 61}
+    active=103 steps=344 wasted=153 verdicts={'allow': 118, 'blocked': 94, 'conflict': 59}
   Round 6/20 (WED PM)...
-    probe: canary_visible=True {'healthy': 29}
-    active=29 steps=183 wasted=69 verdicts={'allow': 18, 'conflict': 61, 'blocked': 8}
+    probe: canary_visible=True {'healthy': 32}
+    active=32 steps=198 wasted=75 verdicts={'allow': 26, 'conflict': 65, 'blocked': 10}
   Round 7/20 (THU AM)...
-    active=102 steps=315 wasted=125 verdicts={'allow': 117, 'blocked': 71, 'conflict': 54}
+    active=102 steps=308 wasted=119 verdicts={'allow': 117, 'blocked': 58, 'conflict': 61}
   Round 8/20 (THU PM)...
-    active=47 steps=206 wasted=90 verdicts={'allow': 27, 'blocked': 19, 'conflict': 71}
+    active=45 steps=181 wasted=82 verdicts={'allow': 25, 'conflict': 63, 'blocked': 19}
   Round 9/20 (FRI AM)...
-    active=98 steps=260 wasted=108 verdicts={'allow': 99, 'blocked': 67, 'conflict': 35, 'denied': 6}
+    active=98 steps=284 wasted=124 verdicts={'blocked': 57, 'allow': 108, 'conflict': 61, 'denied': 6}
   Round 10/20 (FRI PM)...
-    active=35 steps=154 wasted=79 verdicts={'allow': 11, 'blocked': 20, 'conflict': 59}
+    active=30 steps=141 wasted=70 verdicts={'allow': 6, 'conflict': 54, 'blocked': 16}
   Round 11/20 (MON AM W2)...
     probe: canary_visible=True {'healthy': 103}
-    active=103 steps=488 wasted=168 verdicts={'allow': 138, 'blocked': 65, 'conflict': 103} monitor_restricted=3 barriers=0
+    active=103 steps=469 wasted=166 verdicts={'allow': 134, 'blocked': 66, 'conflict': 100} monitor_restricted=1 barriers=0
   Round 12/20 (MON PM W2)...
-    active=33 steps=158 wasted=74 verdicts={'allow': 24, 'conflict': 62, 'blocked': 12} monitor_restricted=2 barriers=0
+    active=37 steps=161 wasted=72 verdicts={'allow': 28, 'conflict': 67, 'blocked': 5} monitor_restricted=1 barriers=0
   Round 13/20 (TUE AM W2)...
-    active=99 steps=271 wasted=109 verdicts={'blocked': 62, 'allow': 107, 'conflict': 45, 'denied': 2} monitor_restricted=3 barriers=0
+    active=99 steps=295 wasted=115 verdicts={'allow': 111, 'blocked': 63, 'conflict': 50, 'denied': 2} monitor_restricted=2 barriers=0
   Round 14/20 (TUE PM W2)...
-    active=35 steps=151 wasted=59 verdicts={'allow': 31, 'blocked': 9, 'conflict': 50} monitor_restricted=3 barriers=0
+    active=40 steps=181 wasted=73 verdicts={'allow': 35, 'blocked': 9, 'conflict': 62, 'denied': 2} monitor_restricted=2 barriers=0
   Round 15/20 (WED AM W2)...
-    active=103 steps=279 wasted=113 verdicts={'allow': 117, 'blocked': 71, 'conflict': 42} monitor_restricted=3 barriers=0
+    active=103 steps=302 wasted=123 verdicts={'allow': 119, 'blocked': 74, 'conflict': 49} monitor_restricted=3 barriers=0
   Round 16/20 (WED PM W2)...
-    probe: canary_visible=True {'healthy': 43}
-    active=43 steps=239 wasted=69 verdicts={'allow': 41, 'blocked': 5, 'conflict': 64} monitor_restricted=2 barriers=0
+    probe: canary_visible=True {'healthy': 40}
+    active=40 steps=205 wasted=62 verdicts={'allow': 36, 'conflict': 56, 'blocked': 6} monitor_restricted=2 barriers=0
   Round 17/20 (THU AM W2)...
-    active=100 steps=286 wasted=116 verdicts={'allow': 107, 'blocked': 70, 'conflict': 42, 'denied': 4} monitor_restricted=4 barriers=0
+    active=101 steps=307 wasted=130 verdicts={'allow': 109, 'blocked': 71, 'conflict': 53, 'denied': 6} monitor_restricted=3 barriers=0
   Round 18/20 (THU PM W2)...
-    active=38 steps=149 wasted=68 verdicts={'allow': 19, 'blocked': 13, 'denied': 1, 'conflict': 54} monitor_restricted=4 barriers=0
+    active=38 steps=167 wasted=77 verdicts={'allow': 29, 'blocked': 11, 'conflict': 64, 'denied': 2} monitor_restricted=3 barriers=0
   Round 19/20 (FRI AM W2)...
-    active=100 steps=279 wasted=108 verdicts={'allow': 113, 'blocked': 59, 'conflict': 45, 'denied': 4} monitor_restricted=7 barriers=0
+    active=100 steps=289 wasted=117 verdicts={'allow': 109, 'blocked': 65, 'conflict': 49, 'denied': 3} monitor_restricted=8 barriers=0
   Round 20/20 (FRI PM W2)...
-    active=27 steps=130 wasted=67 verdicts={'allow': 12, 'conflict': 67} monitor_restricted=3 barriers=0
+    active=26 steps=117 wasted=59 verdicts={'allow': 13, 'conflict': 59} monitor_restricted=2 barriers=0
 
 ============================================================
-Trial complete. Wall clock: 744.5s
-Total steps: 4985 | Wasted: 2017
-Tokens: 12,920,776 total (11,869,962 prompt, 1,050,814 completion)
+Trial complete. Wall clock: 701.7s
+Total steps: 4997 | Wasted: 2042
+Tokens: 12,842,109 total (11,780,074 prompt, 1,062,035 completion)
 Double bookings: 0
-Recovered bookings: 8
+Recovered bookings: 9
 Scope violations: 0
-Mark types: {'intent': 2599, 'observation': 13, 'warning': 13, 'action': 1779, 'need': 17}
-Verdicts: {'blocked': 802, 'allow': 1459, 'conflict': 1198, 'denied': 17}
-Projected reads: 15608
-Need marks: {'lunch': 17}
+Mark types: {'intent': 2591, 'observation': 13, 'warning': 12, 'action': 1786, 'need': 21}
+Verdicts: {'allow': 1466, 'blocked': 784, 'conflict': 1237, 'denied': 21}
+Projected reads: 14553
+Need marks: {'lunch': 21}
 
 Manifest completion by dept:
-  eng: 52.3%
-  design: 50.6%
+  eng: 50.2%
+  design: 50.0%
   product: 49.3%
-  sales: 51.2%
-  ops: 56.4%
+  sales: 52.0%
+  ops: 56.0%
 
 Lunch preference satisfaction:
-  eng: 72.7%
-  design: 68.5%
-  product: 74.3%
-  sales: 76.8%
-  ops: 71.7%
+  eng: 68.9%
+  design: 73.2%
+  product: 70.9%
+  sales: 77.7%
+  ops: 72.4%
 
-Parking by role: {'head': 30, 'regular': 270, 'visitor': 0}
+Parking by role: {'head': 28, 'regular': 272, 'visitor': 0}
   trial.jsonl: 15.1 KB
   rounds.jsonl: 43.9 KB
   agents.jsonl: 381.5 KB
