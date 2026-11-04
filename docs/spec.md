@@ -92,7 +92,7 @@ A Python reference implementation and property tests accompany this specificatio
 
 **Verification level.** Python property-based tests (pytest + [Hypothesis](https://github.com/HypothesisWorks/hypothesis)) verify the 47 mandatory properties (P1-P39, P42, P47 and P71-P76) empirically. The verification does not use formal model checking (for example, [MCMAS](https://doi.org/10.1007/s10009-015-0378-x), [PRISM](https://doi.org/10.1007/978-3-642-22110-1_47) or [TLA+](https://lamport.azurewebsites.net/tla/tla.html)). The tests apply randomized inputs and edge cases to each property.
 
-The [stress test](../experiments/stress_test/analysis.md) tests P1-P39 and P47 under a realistic concurrent load. Its stored runs are older than P71-P76. It uses up to 1,050 agents across 20 rounds, with adversarial participants. The [trial results](../experiments/trials/analysis.md) show no double booking across all 21 trial runs and 4,010 agent instances (from their stored steps).
+The [stress test](../experiments/stress_test/analysis.md) tests P1-P39 and P47 under a realistic concurrent load. Its stored runs do not cover P71-P76. It uses up to 1,050 agents across 20 rounds, with adversarial participants. The [trial results](../experiments/trials/analysis.md) show no double booking across all 21 trial runs and 4,010 agent instances (from their stored steps).
 
 This evidence gives high confidence that the properties hold in practice. It is not a formal proof. A formal verification effort would make the safety guarantees stronger, particularly for P11 (Determinism) and P12 (Progress). These two properties make claims about all possible states.
 
