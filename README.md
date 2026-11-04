@@ -16,7 +16,7 @@ If you're coordinating multiple LLM agents, you've likely hit some of these:
 
 Coordination guarantees should hold independent of agent behavior. Markspace is a [coordination protocol](docs/framework.md) for agent fleets built on [stigmergy](https://en.wikipedia.org/wiki/Stigmergy) - a mechanism by which biological systems coordinate at scale. Agents leave traces in a shared environment rather than messaging each other. A deterministic guard layer at the environment boundary enforces identity, scope, and conflict resolution. These constraints live in infrastructure the agent cannot influence. Coordination emerges without being configured; the fleet adapts as the world changes. Over time, the environment becomes a model of the world the agents operate in.
 
-The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, trust-weighted decay, and [78 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
+The protocol defines five mark types, three visibility levels, three conflict policies, conflict resolution across a scope tree, leases with fencing tokens, per-agent write budgets, trust-weighted decay, and [78 formal properties](docs/spec.md). The included Python package is a reference implementation used to verify those properties experimentally.
 
 ## Motivation
 

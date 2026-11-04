@@ -18,7 +18,7 @@ from importlib.metadata import version, PackageNotFoundError
 try:
     __version__ = version("markspace")
 except PackageNotFoundError:
-    __version__ = "0.3.0-beta"
+    __version__ = "0.4.0-beta"
 
 from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.compose import validate_manifest_permissions, validate_pipeline
