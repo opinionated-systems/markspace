@@ -249,14 +249,19 @@ class History:
                 else:
                     assert iid not in self.ended, c
             # P75: two held actions of different agents compete only when a
-            # warning hid the earlier one as the later one was recorded.
+            # warning hid the earlier one as the later one was recorded. An
+            # allowed pair holds the record order; created_at does not, because
+            # the clock steps back, so the check looks for the pair either way.
             for r in RESOURCES:
-                held = sorted(self.held_actions(r), key=lambda a: a.created_at)
+                held = self.held_actions(r)
                 for i, x in enumerate(held):
                     for y in held[i + 1 :]:
                         if x.agent_id == y.agent_id or not competes(x.scope, y.scope):
                             continue
-                        assert warnings and (y.id, x.id) in self.allowed_pairs, (x, y)
+                        assert warnings and (
+                            (y.id, x.id) in self.allowed_pairs
+                            or (x.id, y.id) in self.allowed_pairs
+                        ), (x, y)
 
 
 @pytest.mark.parametrize("seed", range(12))
@@ -264,6 +269,43 @@ def test_random_histories_keep_p71_to_p75(seed: int) -> None:
     h = History(seed)
     for _ in range(400):
         h.step(h.rng)
+        h.check()
+
+
+def _two_held_actions_with_the_later_one_dated_first(
+    h: History,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """The earlier action is hidden while the later one is recorded, at a clock
+    stepped back, and then the warning goes, so both are held. The two scopes
+    compete but differ: within one scope and resource, the space keeps
+    created_at increasing, so the dates invert only across scopes."""
+    first, second = h.agents[:2]
+    earlier = h.space.write(
+        first, Action(scope="corp/a/x", resource="r1", action="used", result="ok")
+    )
+    warning = h.space.write(h.ops, Warning(scope="corp/a/x", invalidates=earlier))
+    h.now -= 3600
+    h.space.set_clock(h.now)
+    later = h.space.write(
+        second, Action(scope="corp/a", resource="r1", action="used", result="ok")
+    )
+    h.space.write(h.ops, Warning(scope="corp", supersedes=warning))
+    held = {a.id: a for a in h.held_actions("r1")}
+    assert set(held) == {earlier, later}
+    assert held[later].created_at < held[earlier].created_at
+    return later, earlier
+
+
+def test_the_p75_check_follows_the_record_order_not_the_clock() -> None:
+    h = History(0)
+    h.allowed_pairs.add(_two_held_actions_with_the_later_one_dated_first(h))
+    h.check()
+
+
+def test_the_p75_check_rejects_held_actions_that_no_warning_allowed() -> None:
+    h = History(0)
+    _two_held_actions_with_the_later_one_dated_first(h)
+    with pytest.raises(AssertionError):
         h.check()
 
 
