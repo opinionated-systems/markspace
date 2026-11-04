@@ -164,6 +164,25 @@ class BudgetTracker:
             return True
         return False
 
+    def rearm_warnings(self, budget: TokenBudget) -> None:
+        """Usage below the budget's warning line has not crossed that line, so
+        crossing it writes a warning, also after a warning for an earlier
+        budget (P60). A dimension without a total has no line, so a later total
+        warns again. Usage at or above the line keeps its state: a warning
+        already written is not repeated."""
+        if (
+            budget.max_input_tokens_total is None
+            or self.total_input_consumed
+            < budget.max_input_tokens_total * budget.warning_fraction
+        ):
+            self.warning_emitted_input = False
+        if (
+            budget.max_output_tokens_total is None
+            or self.total_output_consumed
+            < budget.max_output_tokens_total * budget.warning_fraction
+        ):
+            self.warning_emitted_output = False
+
     def try_clear_exhaustion(self, budget: TokenBudget) -> bool:
         """Clear exhaustion if the budget has been increased past consumption.
 

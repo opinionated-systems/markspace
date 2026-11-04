@@ -12,6 +12,7 @@ P63: Budget Tracking Accuracy
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -31,6 +32,7 @@ from markspace import (
 )
 from markspace.budget import BudgetStatus, BudgetTracker, TokenBudget
 from markspace.schedule import Scheduler
+from markspace.telemetry import METRIC_BUDGET_REMAINING, FailingSink, InMemorySink
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +359,65 @@ class TestP61BudgetHardStop:
 # ---------------------------------------------------------------------------
 
 
+def _manifest(total: int) -> AgentManifest:
+    return AgentManifest(budget=TokenBudget(max_input_tokens_total=total))
+
+
+def _with_budget(total: int) -> Agent:
+    return Agent(
+        name="budget-agent",
+        scopes={"test": ["observation"]},
+        manifest=_manifest(total),
+    )
+
+
+def _dimension_budget(
+    dimension: str, total: int, warning_fraction: float = 4 / 5
+) -> TokenBudget:
+    if dimension == "input":
+        return TokenBudget(
+            max_input_tokens_total=total, warning_fraction=warning_fraction
+        )
+    return TokenBudget(max_output_tokens_total=total, warning_fraction=warning_fraction)
+
+
+def _with_dimension_budget(
+    dimension: str, total: int, warning_fraction: float = 4 / 5
+) -> Agent:
+    return Agent(
+        name="budget-agent",
+        scopes={"test": ["observation"]},
+        manifest=AgentManifest(
+            budget=_dimension_budget(dimension, total, warning_fraction)
+        ),
+    )
+
+
+def _record(guard: Guard, agent: Agent, dimension: str, tokens: int) -> None:
+    if dimension == "input":
+        guard.record_round_tokens(agent, tokens, 0)
+    else:
+        guard.record_round_tokens(agent, 0, tokens)
+
+
+def _budget_warnings(space: MarkSpace) -> list[tuple[str, int, int]]:
+    """The budget warnings as (dimension, usage, total), sorted."""
+    return sorted(
+        (m.context["dimension"], m.context["consumed"], m.context["total"])
+        for m in space.read(scope="_system", mark_type=MarkType.NEED)
+        if isinstance(m, Need)
+    )
+
+
+def _remaining(sink: InMemorySink, agent: Agent) -> dict[str, float]:
+    """The last remaining-budget gauge of each dimension."""
+    return {
+        labels["dimension"]: value
+        for name, value, labels in sink.gauges
+        if name == METRIC_BUDGET_REMAINING and labels["agent_id"] == str(agent.id)
+    }
+
+
 class TestP62BudgetResumption:
     def test_principal_increases_budget(self, guard: Guard) -> None:
         budget = TokenBudget(max_input_tokens_total=100)
@@ -402,6 +463,411 @@ class TestP62BudgetResumption:
         # Increase to 100 (same as consumed) - still exhausted
         same_budget = TokenBudget(max_input_tokens_total=100)
         guard.update_budget(agent, same_budget, guard._principal_token)
+        assert guard.check_budget_activation(agent) is not None
+
+    def test_a_raise_resumes_the_same_agent(self, guard: Guard) -> None:
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 100, 0)
+        raised = TokenBudget(max_input_tokens_total=200)
+        assert guard.update_budget(agent, raised, guard._principal_token) is True
+        assert guard.check_budget_activation(agent) is None
+
+    def test_a_lowered_budget_applies_to_the_same_agent(self, guard: Guard) -> None:
+        agent = _with_budget(1000)
+        guard.record_round_tokens(agent, 100, 0)
+        assert guard.check_budget_activation(agent) is None
+        lowered = TokenBudget(max_input_tokens_total=50)
+        assert guard.update_budget(agent, lowered, guard._principal_token) is True
+        assert guard.check_budget_activation(agent) is not None
+
+    def test_a_check_of_the_old_agent_does_not_stop_it_again(
+        self, guard: Guard
+    ) -> None:
+        old = _with_budget(100)
+        guard.record_round_tokens(old, 100, 0)
+        raised = TokenBudget(max_input_tokens_total=1000)
+        new = old.model_copy(update={"manifest": AgentManifest(budget=raised)})
+        guard.update_budget(old, raised, guard._principal_token)
+        assert guard.check_budget_activation(old) is None
+        assert guard.check_budget_activation(new) is None
+
+    def test_the_stored_budget_takes_precedence_over_any_manifest(
+        self, guard: Guard
+    ) -> None:
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 60, 0)
+        lowered = TokenBudget(max_input_tokens_total=50)
+        guard.update_budget(agent, lowered, guard._principal_token)
+        generous = agent.model_copy(update={"manifest": _manifest(1000)})
+        assert guard.check_budget_activation(generous) is not None
+        assert guard.record_round_tokens(generous, 1, 0) is BudgetStatus.WARNING_INPUT
+
+    def test_a_wrong_token_changes_no_budget(self, guard: Guard) -> None:
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 100, 0)
+        raised = TokenBudget(max_input_tokens_total=200)
+        assert guard.update_budget(agent, raised, uuid.uuid4()) is False
+        assert guard.check_budget_activation(agent) is not None
+        spare = _with_budget(1000)
+        guard.record_round_tokens(spare, 100, 0)
+        lowered = TokenBudget(max_input_tokens_total=50)
+        assert guard.update_budget(spare, lowered, uuid.uuid4()) is False
+        assert guard.check_budget_activation(spare) is None
+        fresh = _with_budget(1000)
+        zero = TokenBudget(max_input_tokens_total=0)
+        assert guard.update_budget(fresh, zero, uuid.uuid4()) is False
+        assert guard.get_budget_status(fresh.id) is None
+        assert guard.check_budget_activation(fresh) is None
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_a_raise_warns_again_at_the_new_line(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        _record(guard, agent, dimension, 90)
+        assert _budget_warnings(space) == [(dimension, 90, 100)]
+        guard.update_budget(
+            agent, _dimension_budget(dimension, 1000), guard._principal_token
+        )
+        _record(guard, agent, dimension, 10)
+        assert _budget_warnings(space) == [(dimension, 90, 100)]
+        _record(guard, agent, dimension, 800)
+        assert _budget_warnings(space) == [
+            (dimension, 90, 100),
+            (dimension, 900, 1000),
+        ]
+        _record(guard, agent, dimension, 10)
+        assert len(_budget_warnings(space)) == 2
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_usage_above_the_new_line_does_not_repeat_a_warning(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        _record(guard, agent, dimension, 90)
+        guard.update_budget(
+            agent, _dimension_budget(dimension, 110), guard._principal_token
+        )
+        _record(guard, agent, dimension, 1)
+        assert _budget_warnings(space) == [(dimension, 90, 100)]
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_usage_on_the_new_line_has_crossed_it(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        _record(guard, agent, dimension, 90)
+        guard.update_budget(
+            agent,
+            _dimension_budget(dimension, 180, warning_fraction=0.5),
+            guard._principal_token,
+        )
+        _record(guard, agent, dimension, 0)
+        assert _budget_warnings(space) == [(dimension, 90, 100)]
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_the_rearm_uses_the_new_budgets_fraction(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        budget = _dimension_budget(dimension, 100, warning_fraction=0.5)
+        agent = _with_dimension_budget(dimension, 100, warning_fraction=0.5)
+        _record(guard, agent, dimension, 60)
+        guard.update_budget(agent, budget, guard._principal_token)
+        _record(guard, agent, dimension, 1)
+        assert _budget_warnings(space) == [(dimension, 60, 100)]
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_a_removed_limit_warns_again_under_a_later_limit(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        _record(guard, agent, dimension, 90)
+        guard.update_budget(agent, TokenBudget(), guard._principal_token)
+        guard.update_budget(
+            agent, _dimension_budget(dimension, 100), guard._principal_token
+        )
+        _record(guard, agent, dimension, 1)
+        assert _budget_warnings(space) == [
+            (dimension, 90, 100),
+            (dimension, 91, 100),
+        ]
+
+    @pytest.mark.parametrize(
+        ("raised", "other"), [("input", "output"), ("output", "input")]
+    )
+    def test_each_dimension_rearms_alone(
+        self, guard: Guard, space: MarkSpace, raised: str, other: str
+    ) -> None:
+        budget = TokenBudget(max_input_tokens_total=100, max_output_tokens_total=100)
+        agent = Agent(
+            name="budget-agent",
+            scopes={"test": ["observation"]},
+            manifest=AgentManifest(budget=budget),
+        )
+        _record(guard, agent, "input", 90)
+        _record(guard, agent, "output", 90)
+        new_budget = TokenBudget(
+            max_input_tokens_total=1000 if raised == "input" else 100,
+            max_output_tokens_total=1000 if raised == "output" else 100,
+        )
+        guard.update_budget(agent, new_budget, guard._principal_token)
+        _record(guard, agent, other, 1)
+        _record(guard, agent, raised, 800)
+        assert _budget_warnings(space) == sorted(
+            [(raised, 90, 100), (other, 90, 100), (raised, 890, 1000)]
+        )
+
+    def test_the_call_writes_no_warning(self, guard: Guard, space: MarkSpace) -> None:
+        agent = _with_budget(1000)
+        guard.record_round_tokens(agent, 100, 0)
+        lowered = TokenBudget(max_input_tokens_total=120)
+        guard.update_budget(agent, lowered, guard._principal_token)
+        assert _budget_warnings(space) == []
+        guard.record_round_tokens(agent, 1, 0)
+        assert _budget_warnings(space) == [("input", 101, 120)]
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_a_call_that_stops_the_agent_writes_no_warning(
+        self,
+        guard: Guard,
+        space: MarkSpace,
+        caplog: pytest.LogCaptureFixture,
+        dimension: str,
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 1000)
+        _record(guard, agent, dimension, 100)
+        with caplog.at_level("INFO", logger="markspace.guard"):
+            guard.update_budget(
+                agent, _dimension_budget(dimension, 50), guard._principal_token
+            )
+        assert guard.check_budget_activation(agent) is not None
+        assert _budget_warnings(space) == []
+        assert "used up" in caplog.text
+
+    def test_only_a_call_that_stops_the_agent_logs_a_stop(
+        self, guard: Guard, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 100, 0)
+        raised = TokenBudget(max_input_tokens_total=1000)
+        lowered = TokenBudget(max_input_tokens_total=500)
+        with caplog.at_level("INFO", logger="markspace.guard"):
+            guard.update_budget(agent, raised, guard._principal_token)
+            guard.update_budget(agent, lowered, guard._principal_token)
+        assert "used up" not in caplog.text
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_a_warned_agent_stopped_by_the_call_is_not_warned_again(
+        self, guard: Guard, space: MarkSpace, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        _record(guard, agent, dimension, 90)
+        guard.update_budget(
+            agent, _dimension_budget(dimension, 90), guard._principal_token
+        )
+        _record(guard, agent, dimension, 0)
+        assert _budget_warnings(space) == [(dimension, 90, 100)]
+
+    def test_the_warning_fraction_is_replaced_too(
+        self, guard: Guard, space: MarkSpace
+    ) -> None:
+        agent = _with_dimension_budget("input", 100, warning_fraction=0.5)
+        guard.record_round_tokens(agent, 10, 0)
+        raised = TokenBudget(max_input_tokens_total=1000)
+        guard.update_budget(agent, raised, guard._principal_token)
+        guard.record_round_tokens(agent, 590, 0)
+        assert _budget_warnings(space) == []
+        guard.record_round_tokens(agent, 200, 0)
+        assert _budget_warnings(space) == [("input", 800, 1000)]
+
+    def test_a_budget_with_no_totals_removes_the_limits_and_resumes(
+        self, guard: Guard
+    ) -> None:
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 100, 0)
+        assert guard.check_budget_activation(agent) is not None
+        only_a_round_limit = TokenBudget(max_input_tokens_per_round=10)
+        guard.update_budget(agent, only_a_round_limit, guard._principal_token)
+        guard.record_round_tokens(agent, 1_000_000, 1_000_000)
+        assert guard.check_budget_activation(agent) is None
+
+    @pytest.mark.parametrize("dimension", ["input", "output"])
+    def test_the_guard_applies_only_the_totals(
+        self, guard: Guard, dimension: str
+    ) -> None:
+        agent = _with_dimension_budget(dimension, 100)
+        budget = TokenBudget(
+            max_input_tokens_per_round=10,
+            max_output_tokens_per_round=10,
+            max_input_tokens_total=1000 if dimension == "input" else None,
+            max_output_tokens_total=1000 if dimension == "output" else None,
+        )
+        assert guard.update_budget(agent, budget, guard._principal_token) is True
+        _record(guard, agent, dimension, 500)
+        assert guard.check_budget_activation(agent) is None
+
+    def test_a_manifest_total_of_zero_gets_one_round(self, guard: Guard) -> None:
+        agent = _with_budget(0)
+        assert guard.check_budget_activation(agent) is None
+        assert guard.get_budget_status(agent.id) is None
+        guard.record_round_tokens(agent, 5, 0)
+        assert guard.check_budget_activation(agent) is not None
+
+    def test_get_token_budget_returns_what_the_principal_set(
+        self, guard: Guard
+    ) -> None:
+        agent = _with_budget(100)
+        assert guard.get_token_budget(agent.id) is None
+        budget = TokenBudget(max_input_tokens_total=50)
+        assert guard.update_budget(agent, budget, uuid.uuid4()) is False
+        assert guard.get_token_budget(agent.id) is None
+        guard.update_budget(agent, budget, guard._principal_token)
+        assert guard.get_token_budget(agent.id) == budget
+
+    def test_a_new_budget_replaces_the_whole_budget(
+        self, guard: Guard, space: MarkSpace
+    ) -> None:
+        budget = TokenBudget(
+            max_input_tokens_total=100,
+            max_output_tokens_total=100,
+            warning_fraction=0.5,
+        )
+        agent = Agent(
+            name="budget-agent",
+            scopes={"test": ["observation"]},
+            manifest=AgentManifest(budget=budget),
+        )
+        guard.record_round_tokens(agent, 100, 0)
+        raised = TokenBudget(max_input_tokens_total=200)
+        guard.update_budget(agent, raised, guard._principal_token)
+        guard.record_round_tokens(agent, 0, 100_000)
+        assert guard.check_budget_activation(agent) is None
+        assert _budget_warnings(space) == [("input", 100, 100)]
+
+    def test_a_total_of_zero_from_the_call_stops_an_agent_before_its_first_round(
+        self, guard: Guard
+    ) -> None:
+        agent = _with_budget(1000)
+        zero = TokenBudget(max_input_tokens_total=0)
+        guard.update_budget(agent, zero, guard._principal_token)
+        assert guard.check_budget_activation(agent) is not None
+        assert guard.get_budget_status(agent.id) == (0, 0, True)
+
+    def test_a_lowered_budget_shows_in_the_status_at_once(self, guard: Guard) -> None:
+        agent = _with_budget(1000)
+        guard.record_round_tokens(agent, 100, 0)
+        assert guard.get_budget_status(agent.id) == (100, 0, False)
+        lowered = TokenBudget(max_input_tokens_total=50)
+        guard.update_budget(agent, lowered, guard._principal_token)
+        assert guard.get_budget_status(agent.id) == (100, 0, True)
+
+    def test_the_gauge_follows_the_stored_budget(self, space: MarkSpace) -> None:
+        sink = InMemorySink()
+        guard = Guard(space, telemetry=sink)
+        budget = TokenBudget(max_input_tokens_total=1000, max_output_tokens_total=1000)
+        agent = Agent(
+            name="budget-agent",
+            scopes={"test": ["observation"]},
+            manifest=AgentManifest(budget=budget),
+        )
+        guard.record_round_tokens(agent, 100, 20)
+        lowered = TokenBudget(max_input_tokens_total=150, max_output_tokens_total=70)
+        guard.update_budget(agent, lowered, guard._principal_token)
+        assert _remaining(sink, agent) == {"input": 50, "output": 50}
+        guard.record_round_tokens(agent, 10, 30)
+        assert _remaining(sink, agent) == {"input": 40, "output": 20}
+
+    def test_a_removed_limit_gets_no_gauge(self, space: MarkSpace) -> None:
+        sink = InMemorySink()
+        guard = Guard(space, telemetry=sink)
+        agent = _with_budget(100)
+        guard.record_round_tokens(agent, 10, 0)
+        before = len(sink.gauges)
+        guard.update_budget(agent, TokenBudget(), guard._principal_token)
+        guard.record_round_tokens(agent, 10, 0)
+        assert len(sink.gauges) == before
+
+    def test_a_failing_sink_does_not_stop_the_call(self, space: MarkSpace) -> None:
+        guard = Guard(space, telemetry=FailingSink())
+        agent = _with_budget(100)
+        budget = TokenBudget(max_input_tokens_total=50)
+        assert guard.update_budget(agent, budget, guard._principal_token) is True
+        assert guard.get_token_budget(agent.id) == budget
+
+    def test_every_use_of_the_stored_budgets_holds_the_lock(self, guard: Guard) -> None:
+        """A check that read the budget before the lock could use a budget that
+        update_budget had just replaced, and a store after the lock could let a
+        check stop the agent that the call had resumed."""
+
+        class LockChecked(dict[uuid.UUID, TokenBudget]):
+            uses = 0
+
+            def _held(self) -> None:
+                assert guard._budget_lock.locked()
+                LockChecked.uses += 1
+
+            def get(self, *args: Any, **kwargs: Any) -> Any:
+                self._held()
+                return super().get(*args, **kwargs)
+
+            def __getitem__(self, key: uuid.UUID) -> TokenBudget:
+                self._held()
+                return super().__getitem__(key)
+
+            def __setitem__(self, key: uuid.UUID, value: TokenBudget) -> None:
+                self._held()
+                super().__setitem__(key, value)
+
+            def __contains__(self, key: object) -> bool:
+                self._held()
+                return super().__contains__(key)
+
+        class LockCheckedTracker(BudgetTracker):
+            """A budget read under the lock and used after it would fail here."""
+
+            def is_exhausted(self, budget: TokenBudget) -> bool:
+                assert guard._budget_lock.locked()
+                return super().is_exhausted(budget)
+
+            def check_lifetime(self, budget: TokenBudget) -> BudgetStatus:
+                assert guard._budget_lock.locked()
+                return super().check_lifetime(budget)
+
+            def try_clear_exhaustion(self, budget: TokenBudget) -> bool:
+                assert guard._budget_lock.locked()
+                return super().try_clear_exhaustion(budget)
+
+            def rearm_warnings(self, budget: TokenBudget) -> None:
+                assert guard._budget_lock.locked()
+                super().rearm_warnings(budget)
+
+        guard._token_budgets = LockChecked()
+        agent = _with_budget(100)
+        guard._budget_trackers[agent.id] = LockCheckedTracker()
+        budget = TokenBudget(max_input_tokens_total=1000)
+        for use, call in enumerate(
+            (
+                lambda: guard.check_budget_activation(agent),
+                lambda: guard.record_round_tokens(agent, 1, 0),
+                lambda: guard.update_budget(agent, budget, guard._principal_token),
+                lambda: guard.get_token_budget(agent.id),
+            ),
+            start=1,
+        ):
+            before = LockChecked.uses
+            call()
+            assert LockChecked.uses > before, f"call {use} used no stored budget"
+
+    def test_a_budget_for_an_agent_without_one_counts_from_the_call(
+        self, guard: Guard
+    ) -> None:
+        agent = Agent(name="no-budget", scopes={"test": ["observation"]})
+        guard.record_round_tokens(agent, 500, 0)
+        assert guard.check_budget_activation(agent) is None
+        budget = TokenBudget(max_input_tokens_total=100)
+        guard.update_budget(agent, budget, guard._principal_token)
+        assert guard.check_budget_activation(agent) is None
+        guard.record_round_tokens(agent, 100, 0)
         assert guard.check_budget_activation(agent) is not None
 
 

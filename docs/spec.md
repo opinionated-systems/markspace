@@ -1317,14 +1317,14 @@ message AgentManifest {
 1. **Per-round input budget.** When the manifest sets `max_input_tokens_per_round`, the harness passes that limit to `read(max_tokens=...)`. The mark space returns marks ranked by effective strength. Effective strength includes recency through decay. The mark space truncates the list at the token limit.
 2. **Per-round output budget.** When the manifest sets `max_output_tokens_per_round`, the harness gives the LLM call a matching `max_tokens` parameter.
 3. **Lifetime tracking.** The guard keeps running totals of the input and output tokens across all rounds. Usage is monotonically non-decreasing (P63).
-4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking need mark (`blocking=False`). The guard writes exactly one such need mark for each dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where:
+4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking need mark (`blocking=False`). The guard writes exactly one such need mark for each crossing in each dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where:
    - R is the expected number of rounds before the principal responds.
    - T is the number of tokens per round.
    - B is the total budget.
 
    The default 4/5 assumes approximately one round of runway.
 5. **Hard stop at limit.** When lifetime usage reaches the total budget in either dimension, the guard rejects all further activations (P61). The existing marks of the agent stay in the mark space.
-6. **Principal resumption.** The principal MAY increase the budget. The principal gives the harness an `Agent` with the same `id` and the new budget in its manifest, and then calls `Guard.update_budget()`. If the new total is more than the consumption, the agent resumes (P62).
+6. **Budget update.** The principal MAY raise or lower the budget with `Guard.update_budget()`. The new `TokenBudget` replaces the whole budget, also its `warning_fraction`. A total that it leaves out has no limit. So a budget with no totals removes both limits, and a stopped agent resumes. The guard stores the new budget for the agent's `id`, and `Guard.get_token_budget()` returns it. For the lifetime totals and the warning, the stored budget takes precedence over the budget in any manifest of that `id`. The next call replaces it. If the new totals are more than the consumption in each dimension, the agent resumes (P62). If the consumption has reached a new total, the guard rejects further activations (P61). For an agent that had no budget, the tracking starts at that call. The guard does not apply the per-round limits of the new budget. To change them, the principal gives the harness an `Agent` with the same `id` and the new limits in its manifest.
 
 Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor. The size of the mark space drives them. Output tokens reflect agent verbosity and model choice.
 
@@ -1334,15 +1334,15 @@ The protocol controls tokens. Tokens are the measurable quantity at the guard. C
 
 **P58: Telemetry Completeness**: Every `write_mark()` and `execute()` call through the guard MUST emit a structured log event, whether the guard accepted or rejected the operation.
 
-**P59: Budget Backward Compatibility**: An AgentManifest with no `budget` field MUST behave identically to the pre-budget protocol. There is no enforcement and no tracking.
+**P59: Budget Backward Compatibility**: An AgentManifest with no `budget` field MUST behave identically to the pre-budget protocol, unless the principal has set a budget for the agent (P62). Without such a budget, there is no enforcement and no tracking.
 
-**P60: Budget Warning Threshold**: When lifetime token usage crosses `warning_fraction` of the total budget in any dimension, the guard MUST write exactly one non-blocking need mark for that dimension. The need mark MUST have `blocking=False`.
+**P60: Budget Warning Threshold**: When lifetime token usage crosses `warning_fraction` of the total budget in any dimension, the guard MUST write exactly one non-blocking need mark for that dimension. The need mark MUST have `blocking=False`. The guard checks the warning line when it records a round. It writes no need mark for a call of `Guard.update_budget()`. A new budget (P62) can put the usage below the warning line or remove the total. The guard then writes one more need mark at the next crossing.
 
-**P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. After the stop, the agent stays stopped until the principal increases the budget.
+**P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. After the stop, the agent stays stopped until the principal increases the budget. A manifest total of 0 is an exception: the guard has no usage record before the first recorded round, so the agent gets that round. A total of 0 from `Guard.update_budget()` stops the agent at once.
 
-**P62: Budget Resumption**: A principal MAY increase the budget of an agent. The principal gives the harness an `Agent` with the same `id` and the new budget in its manifest, and then calls `Guard.update_budget()`. After a budget increase makes the new total more than the cumulative usage, the agent MUST be eligible for activation again.
+**P62: Budget Resumption**: A principal MAY change the budget of an agent with `Guard.update_budget()`. The guard MUST store the new budget and MUST use it for the lifetime checks of every `Agent` with that `id`. After a budget increase makes the new totals more than the cumulative usage, the agent MUST be eligible for activation again. A call with a wrong principal token MUST change nothing.
 
-**P63: Budget Tracking Accuracy**: The cumulative token tracking of the guard MUST be monotonically non-decreasing. The guard MUST NOT decrement token usage after it records it. A principal increases the budget ceiling. A principal does not reset consumption. The agent resumes with its full history intact.
+**P63: Budget Tracking Accuracy**: The cumulative token tracking of the guard MUST be monotonically non-decreasing. The guard MUST NOT decrement token usage after it records it. A principal changes the budget ceiling. A principal does not reset consumption. The agent resumes with its full history intact.
 
 Ref: [`markspace/budget.py`](../markspace/budget.py), [`markspace/guard.py::record_round_tokens`](../markspace/guard.py), [`tests/test_budget.py`](../tests/test_budget.py)
 
@@ -1366,7 +1366,7 @@ Telemetry goes to a configurable sink. Telemetry does not go into the mark space
 | `markspace.leases.lost` | Counter | `scope`, `resource` | guard |
 | `markspace.space.active_marks` | Gauge | `scope`, `mark_type` | deployment |
 | `markspace.space.total_marks` | Gauge | `scope`, `mark_type` | deployment |
-| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | deployment |
+| `markspace.agent.budget.remaining` | Gauge | `agent_id`, `dimension` | guard |
 | `markspace.agent.round.duration` | Histogram | `agent_id` | deployment |
 | `markspace.needs.pending` | Gauge | `scope` | deployment |
 
@@ -1607,12 +1607,12 @@ The harness assigns the `id` of an agent. The agent does not choose it. The mark
 
 An agent with a new `id` has none of that state. A harness that gives a restricted agent a new `id` lifts the restriction without the principal (compare P44).
 
-The reference implementation keeps this state in memory, so a restart loses it, also when the `id` stays the same. The right to supersede is the exception: it comes from the `agent_id` of the stored marks. A deployment that keeps marks across a restart gives each agent its old `id` again. It also saves the barrier snapshots from `Guard.get_barrier` and loads them with `Guard.set_barrier` and the principal token. It saves and loads the detector state of the statistical envelope with `StatisticalEnvelope.save_state` and `StatisticalEnvelope.load_state`.
+The reference implementation keeps this state in memory, so a restart loses it, also when the `id` stays the same. The right to supersede is the exception: it comes from the `agent_id` of the stored marks. A deployment that keeps marks across a restart gives each agent its old `id` again. It also saves the barrier snapshots from `Guard.get_barrier` and loads them with `Guard.set_barrier` and the principal token. It saves the principal's token budgets from `Guard.get_token_budget` and loads them with `Guard.update_budget` and the principal token. It saves and loads the detector state of the statistical envelope with `StatisticalEnvelope.save_state` and `StatisticalEnvelope.load_state`.
 
 The reference implementation has no save or load methods for these:
 
 - The leases.
-- The token budgets.
+- The token usage.
 - The scope rate limits.
 - The guard's table of write budgets.
 - The counted writes, the alert state and the record of open need marks.

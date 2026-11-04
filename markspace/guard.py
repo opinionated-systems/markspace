@@ -345,6 +345,7 @@ class Guard:
         self._barrier_lock = threading.Lock()
         # Budget trackers: per-agent token budget state
         self._budget_trackers: dict[uuid.UUID, BudgetTracker] = {}
+        self._token_budgets: dict[uuid.UUID, TokenBudget] = {}
         self._budget_lock = threading.Lock()
         # Rate limit tracker: shared across all scopes, protected by its own lock
         self._rate_limit_tracker = RateLimitTracker()
@@ -832,10 +833,13 @@ class Guard:
         P59: agents without a budget always return None.
         P61: exhausted agents are rejected deterministically.
         """
-        budget = self._get_agent_budget(agent)
-        if budget is None:
-            return None
         with self._budget_lock:
+            budget = self._get_agent_budget(agent)
+            if budget is None:
+                return None
+            # shortcut: a manifest total of 0 gets one round, because no tracker
+            # exists before the first recorded round; refuse it here if a
+            # deployment needs that round refused (P61).
             tracker = self._budget_trackers.get(agent.id)
             if tracker is None:
                 return None
@@ -859,7 +863,7 @@ class Guard:
         Returns the most severe budget status after recording.
 
         P59: no-op for agents without a budget.
-        P60: emits exactly one Need per dimension at warning threshold.
+        P60: emits exactly one Need per crossing of the warning line, per dimension.
         P63: monotonically non-decreasing tracking.
         """
         # Emit token counters for all agents, regardless of budget
@@ -877,10 +881,6 @@ class Guard:
         except Exception:
             logger.debug("Token metric emission failed", exc_info=True)
 
-        budget = self._get_agent_budget(agent)
-        if budget is None:
-            return BudgetStatus.OK
-
         # Hold the lock for the entire check-and-flag sequence so that
         # concurrent calls for the same agent cannot both see
         # warning_emitted as False and emit duplicate Need marks.
@@ -890,6 +890,9 @@ class Guard:
         output_consumed = 0
 
         with self._budget_lock:
+            budget = self._get_agent_budget(agent)
+            if budget is None:
+                return BudgetStatus.OK
             tracker = self._budget_trackers.get(agent.id)
             if tracker is None:
                 tracker = BudgetTracker()
@@ -922,7 +925,60 @@ class Guard:
             dimension = "input" if status == BudgetStatus.EXHAUSTED_INPUT else "output"
             logger.info("Agent '%s' %s budget exhausted", agent.name, dimension)
 
-        # Emit budget remaining gauges
+        self._emit_budget_remaining(agent, budget, input_consumed, output_consumed)
+
+        return status
+
+    def update_budget(
+        self, agent: Agent, new_budget: TokenBudget, principal_token: uuid.UUID
+    ) -> bool:
+        """Set an agent's token budget (principal action). The new budget
+        replaces the old one whole, also its warning_fraction: a total it
+        leaves out has no limit, so a budget with no totals removes both limits
+        and resumes a stopped agent. It takes precedence over any manifest's
+        for the lifetime totals and the warning, for every Agent with this id.
+        The guard does not apply its per-round limits; the harness reads those
+        from the manifest.
+
+        The call writes no warning, also when it stops the agent: the principal
+        has just acted. A recorded round checks the warning line.
+
+        P62: if the new budget exceeds consumption, the agent resumes.
+        Returns False for a wrong token.
+        """
+        if principal_token != self._principal_token:
+            return False
+        with self._budget_lock:
+            self._token_budgets[agent.id] = new_budget
+            tracker = self._budget_trackers.setdefault(agent.id, BudgetTracker())
+            tracker.try_clear_exhaustion(new_budget)
+            stopped = tracker.is_exhausted(new_budget)
+            tracker.rearm_warnings(new_budget)
+            input_consumed = tracker.total_input_consumed
+            output_consumed = tracker.total_output_consumed
+        if stopped:
+            logger.info(
+                "Agent '%s' stopped: its new token budget is used up", agent.name
+            )
+        self._emit_budget_remaining(agent, new_budget, input_consumed, output_consumed)
+        return True
+
+    def get_token_budget(self, agent_id: uuid.UUID) -> TokenBudget | None:
+        """The token budget that the principal set for this id with
+        update_budget. None means that each check uses the manifest of the
+        Agent it gets."""
+        with self._budget_lock:
+            return self._token_budgets.get(agent_id)
+
+    def _emit_budget_remaining(
+        self,
+        agent: Agent,
+        budget: TokenBudget,
+        input_consumed: int,
+        output_consumed: int,
+    ) -> None:
+        """Emit the budget's remaining gauges. A dimension without a limit gets
+        no gauge, so a sink keeps the last value of a limit that was removed."""
         try:
             if budget.max_input_tokens_total is not None:
                 self._telemetry.record_gauge(
@@ -939,29 +995,13 @@ class Guard:
         except Exception:
             logger.debug("Budget metric emission failed", exc_info=True)
 
-        return status
-
-    def update_budget(
-        self, agent: Agent, new_budget: TokenBudget, principal_token: uuid.UUID
-    ) -> bool:
-        """Update an agent's budget (principal action).
-
-        P62: if the new budget exceeds consumption, the agent resumes.
-        Returns True if the update was applied.
-        """
-        if principal_token != self._principal_token:
-            return False
-        # Update the manifest on the agent (requires creating a new agent
-        # since Agent is frozen). The caller is responsible for using the
-        # returned agent going forward. Here we just update the tracker.
-        with self._budget_lock:
-            tracker = self._budget_trackers.get(agent.id)
-            if tracker is not None:
-                tracker.try_clear_exhaustion(new_budget)
-        return True
-
     def _get_agent_budget(self, agent: Agent) -> TokenBudget | None:
-        """Extract budget from agent's manifest, if any."""
+        """The principal's budget for this id, else the manifest's, if any. The
+        caller holds _budget_lock, so a check cannot use a budget that
+        update_budget has just replaced."""
+        budget = self._token_budgets.get(agent.id)
+        if budget is not None:
+            return budget
         if agent.manifest is None:
             return None
         return agent.manifest.budget
@@ -975,7 +1015,7 @@ class Guard:
     ) -> None:
         """Write a non-blocking Need mark when budget warning threshold is crossed.
 
-        P60: exactly one Need per dimension.
+        P60: exactly one Need per crossing, per dimension.
         """
         total = (
             budget.max_input_tokens_total
