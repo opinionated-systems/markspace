@@ -307,3 +307,81 @@ def test_word_mentions_group_rounds_by_what_they_were_shown() -> None:
         "shown_other": {"agent_rounds": 1},
         "not_shown": {"agent_rounds": 2, "say_the_words": 1, "quote_the_rule": 0},
     }
+
+
+@pytest.mark.parametrize(
+    ("treated", "control", "want"),
+    [
+        # 10 of 40 against 20 by chance: z = -10 / sqrt(10) = -3.16.
+        (
+            effect.RoomChoices(40, 10, 20.0, 10.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "supports",
+        ),
+        # Exactly -2 still supports.
+        (
+            effect.RoomChoices(40, 14, 20.0, 9.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "supports",
+        ),
+        # Beyond -2, but not below the control's share.
+        (
+            effect.RoomChoices(40, 10, 20.0, 10.0),
+            effect.RoomChoices(40, 10, 20, 10),
+            "inconclusive",
+        ),
+        # Beyond -2, with no control to compare.
+        (
+            effect.RoomChoices(40, 10, 20.0, 10.0),
+            effect.RoomChoices(0, 0, 0, 0),
+            "inconclusive",
+        ),
+        # Below chance, between -1 and -2.
+        (
+            effect.RoomChoices(40, 15, 20.0, 10.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "inconclusive",
+        ),
+        # Below chance, not beyond -2.
+        (
+            effect.RoomChoices(40, 18, 20.0, 10.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "inconclusive",
+        ),
+        # Enough calls, exactly at chance and above it.
+        (
+            effect.RoomChoices(40, 20, 20.0, 10.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "against",
+        ),
+        (
+            effect.RoomChoices(40, 25, 20.0, 10.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "against",
+        ),
+        # Too few calls to count against the claim.
+        (
+            effect.RoomChoices(39, 25, 19.5, 9.75),
+            effect.RoomChoices(40, 20, 20, 10),
+            "inconclusive",
+        ),
+        (
+            effect.RoomChoices(0, 0, 0.0, 0.0),
+            effect.RoomChoices(40, 20, 20, 10),
+            "inconclusive",
+        ),
+    ],
+)
+def test_the_stated_decision_rule(treated: Any, control: Any, want: str) -> None:
+    assert effect.prediction_outcome(treated, control) == want
+
+
+def test_distinct_observations_are_counted_within_a_scope() -> None:
+    steps = [
+        observation("rooms/eng", 0, "a"),
+        observation("rooms/eng", 1, "a"),
+        observation("rooms/ops", 1, "a"),
+        observation("rooms/eng", 1, "b"),
+        observation("rooms/eng", 1, "c", result="DENIED: no"),
+    ]
+    assert effect.distinct_observations(steps) == 3

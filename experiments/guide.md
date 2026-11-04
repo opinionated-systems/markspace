@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 756 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
+pytest  # 770 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -112,7 +112,7 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--pace-cooldown-seconds` | 300 | No step for this long after a rate-limit signal |
 | `--output-dir` | auto | Output directory |
 | `--adversarial` | 0 | Number of adversarial agents |
-| `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift` |
+| `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift`, `low_rate_drift` |
 | `--scale-resources` | false | Scale resources proportionally with agents |
 | `--defense` | false | Enable the defenses (bot write budgets, barrier, probe) and the envelope as a monitor |
 | `--probe-interval` | 5 | Run diagnostic probe every N rounds (requires `--defense`) |

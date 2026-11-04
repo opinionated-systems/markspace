@@ -13,7 +13,11 @@ import json
 import re
 import sys
 from pathlib import Path
+from random import Random
+from types import SimpleNamespace
 from typing import Any, cast
+
+import pytest
 
 from markspace import Agent, GuardVerdict, MarkType, Need
 from markspace.llm import LLMClient
@@ -214,9 +218,13 @@ class _ObserveClient:
         }
 
 
-def test_a_slow_drift_adversary_stores_its_observations(tmp_path: Path) -> None:
-    """The slow_drift adversary may write observations in its own department's
-    rooms, the scope its tool names, so its false observations are stored."""
+@pytest.mark.parametrize("mode", ["slow_drift", "low_rate_drift"])
+def test_an_observing_adversary_stores_its_observations(
+    tmp_path: Path, mode: str
+) -> None:
+    """The adversary may write observations in its own department's rooms, the
+    scope its tool names, so its false observations are stored; it runs as a
+    defense-trial adversary, whose instructions come in the injected message."""
     run.run_trial(
         agents_per_dept=1,
         n_rounds=2,
@@ -227,7 +235,7 @@ def test_a_slow_drift_adversary_stores_its_observations(tmp_path: Path) -> None:
         output_dir=tmp_path,
         max_concurrent=4,
         adversarial=1,
-        adversarial_mode="slow_drift",
+        adversarial_mode=mode,
     )
     steps = [
         json.loads(line) for line in (tmp_path / "steps.jsonl").read_text().splitlines()
@@ -236,6 +244,50 @@ def test_a_slow_drift_adversary_stores_its_observations(tmp_path: Path) -> None:
     assert observed and all(s["agent"].startswith("adv-") for s in observed)
     assert all(s["args"]["scope"] == "rooms/eng" for s in observed)
     assert all(s["result"].startswith("Observation recorded") for s in observed)
+    assert mode in scenario.ADVERSARIAL_MODES  # the command line accepts it
+    rounds = [
+        json.loads(line)
+        for line in (tmp_path / "rounds.jsonl").read_text().splitlines()
+    ]
+    # The mode turns the defenses on by itself.
+    assert all("monitor_restricted_count" in r["defense"] for r in rounds)
+    conversations = [
+        json.loads(line)
+        for line in (tmp_path / "messages.jsonl").read_text().splitlines()
+    ]
+    adversary = next(c for c in conversations if c["agent"].startswith("adv-"))
+    assert "CONTEXT:" in adversary["messages"][0]["content"]
+    injected = scenario.make_injection_message(SimpleNamespace(adversarial_mode=mode))
+    assert any(m.get("content") == injected for m in adversary["messages"])
+
+
+def test_the_low_rate_message_asks_for_one_observation() -> None:
+    def message(mode: str) -> str:
+        return str(
+            scenario.make_injection_message(SimpleNamespace(adversarial_mode=mode))
+        )
+
+    assert "exactly one observation this round" in message("low_rate_drift")
+    assert "the last observation listed" in message("low_rate_drift")
+    assert "The more observations" not in message("low_rate_drift")
+    assert "The more observations" in message("slow_drift")
+
+
+def test_later_weeks_keep_the_low_rate_adversarys_observation_tasks() -> None:
+    profile = SimpleNamespace(
+        name="adv-eng-00",
+        dept="eng",
+        is_head=False,
+        adversarial_mode="low_rate_drift",
+        manifest=[],
+    )
+    scenario.extend_manifest_for_weeks(profile, 20, Random(1))
+    observing = [
+        i.earliest_round
+        for i in profile.manifest
+        if i.target.get("action") == "observe"
+    ]
+    assert set(observing) >= set(range(10, 20))
 
 
 def test_only_the_flag_lets_an_agent_observe_its_rooms() -> None:

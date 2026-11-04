@@ -87,6 +87,7 @@ from scenario import (
     SHARED_ROOMS,
     TASK_DEPS,
     ADVERSARIAL_MODES,
+    OBSERVATION_WRITING_MODES,
     AgentProfile,
     ManifestItem,
     extend_manifest_for_weeks,
@@ -621,7 +622,7 @@ class OfficeEnv:
                             lines.append(f"{room} {day} {block}: BOOKED by {booker}")
                     else:
                         lines.append(f"{room} {day} {block}: available")
-        # Observations in the department's rooms: only slow_drift adversaries
+        # Observations in the department's rooms: only OBSERVATION_WRITING_MODES
         # may write them, so in the other modes this section never appears.
         # A projected observation (another department's) is not shown.
         observations = [
@@ -832,7 +833,7 @@ class OfficeEnv:
         scope: str,
         description: str,
     ) -> tuple[bool, str]:
-        """Write an Observation mark via guard. Used by slow_drift agents."""
+        """Write an Observation mark via guard. Used by OBSERVATION_WRITING_MODES."""
         try:
             self.guard.write_mark(
                 agent,
@@ -2392,6 +2393,7 @@ _DEFENSE_MODES = frozenset(
         "escalation",
         "probe_evasion",
         "slow_drift",
+        "low_rate_drift",
         "defense_combined",
     }
 )
@@ -2434,6 +2436,7 @@ def run_trial(
         "escalation": generate_escalation_manifest,
         "probe_evasion": generate_probe_evasion_manifest,
         "slow_drift": generate_slow_drift_manifest,
+        "low_rate_drift": generate_slow_drift_manifest,
     }
     if adversarial > 0:
         adv_depts = [DEPTS[i % len(DEPTS)] for i in range(adversarial)]
@@ -2452,7 +2455,10 @@ def run_trial(
                 mode = combined_modes[i % len(combined_modes)]
                 name = f"adv-{dept}-{i:02d}"
                 agent = make_agent(
-                    name, dept, is_head=False, writes_observations=mode == "slow_drift"
+                    name,
+                    dept,
+                    is_head=False,
+                    writes_observations=mode in OBSERVATION_WRITING_MODES,
                 )
                 manifest = _manifest_generators[mode](dept, rng=rng)
                 profiles.append(
@@ -2473,7 +2479,7 @@ def run_trial(
                     name,
                     dept,
                     is_head=False,
-                    writes_observations=adversarial_mode == "slow_drift",
+                    writes_observations=adversarial_mode in OBSERVATION_WRITING_MODES,
                 )
                 manifest = manifest_gen(dept, rng=rng)
                 confidence = 1.0 if adversarial_mode == "confidence" else None
