@@ -1123,6 +1123,8 @@ A warning at full strength fully cancels a mark of equal base strength. As the w
 
 A warning that invalidates an action MUST come from an agent that is authorized to write warnings in the action's own scope. Otherwise, an agent could hide a booking from any scope where it is authorized to write warnings. Then it could take the resource (Section 6.5). If a deployment requires that warnings cannot invalidate actions, the guard SHOULD reject warnings where `invalidates` references an action mark.
 
+An agent that is restricted in an action's scope (Section 9.8) MUST NOT hide the action. `write_mark` refuses its warning that invalidates the action and its mark that supersedes the action, from any scope. Without this rule, the agent could free a resource that the action holds. A failed action holds nothing, so this rule does not apply to it. This rule covers recorded actions and not leases: a restricted agent can still give up a lease with a mark that supersedes its own intent.
+
 A warning MUST NOT invalidate a mark in `_system` unless the guard's own agent writes it. Those marks are the guard's marks for the principal (Sections 9.8, 9.14), and no agent hides them.
 
 Ref: [`markspace/core.py::effective_strength_with_warnings`](../markspace/core.py), [`tests/test_properties.py::TestP34InvalidationBound`](../tests/test_properties.py), [`tests/test_properties.py::TestP35InvalidationDecay`](../tests/test_properties.py), [`tests/test_hypothesis.py::TestWarningInvalidationProperties`](../tests/test_hypothesis.py)
@@ -1229,6 +1231,7 @@ restore_all(token)                 -- clear all restrictions (principal-only)
 - A resolution boundary reads the barrier of each intent's agent by agent id, with or without the agents mapping. It refuses the agent's intent, and the intent is lost (Section 6.2.3, G4).
 - The principal's `grant()` returns DENIED (G5).
 - A pending intent of a restricted agent does not beat or block another agent's intent (G3 steps 4 and 5) or direct claim (G6).
+- `write_mark` refuses a mark of the agent that hides a held action in that scope (Section 9.5).
 
 What has happened is still recorded: an action under a lease granted before the barrier, a failed action, and a direct claim.
 
@@ -1531,6 +1534,7 @@ Any mark type MAY include an `optional string supersedes` field. When a mark set
 - The effective strength of a superseded mark is 0 on all later reads.
 - The lifecycle (decay, TTL) of the superseding mark applies normally.
 - Supersession chains: if A supersedes B, and C supersedes A, then A and B are both invisible.
+- An agent restricted in a held action's scope MUST NOT supersede that action (Section 9.5).
 - Only the author of a mark MAY supersede it. An implementation MUST refuse a mark that supersedes a mark of another agent. Without this rule, an agent could erase another agent's action, or the warning that hides an action. It could do this from any scope where it has permission to write (Section 6.5, G10).
 
 **When to use supersession vs warnings**: Supersession replaces a mark quietly. The old version becomes invisible. A warning declares openly that something is wrong. The invalidation is itself a mark that other agents can read. Use supersession for routine updates ("new price observation"). Use warnings for important corrections ("previous data was wrong").

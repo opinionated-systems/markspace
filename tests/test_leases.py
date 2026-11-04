@@ -629,6 +629,125 @@ class TestRound11:
             guard.write_mark(w, Warning(scope="corp/b", invalidates=action_id))
         assert [x.agent_id for x in s.get_actions("corp/a", "r")] == [a.id]
 
+    def _restricted_holder(
+        self, revoked: str = "intent"
+    ) -> tuple[MarkSpace, Guard, Agent, uuid.UUID, uuid.UUID]:
+        """An agent that holds an action in corp/a and is then restricted there."""
+        s = tree()
+        token = uuid.uuid4()
+        guard = Guard(s, principal_token=token)
+        a = Agent(
+            name="a",
+            scopes={"corp/a": ["intent", "action", "warning", "observation"]},
+            max_source=Source.FLEET,
+        )
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        guard.get_or_create_barrier(a.id).narrow("corp/a", revoked)
+        return s, guard, a, action_id, token
+
+    @pytest.mark.parametrize("revoked", ["intent", "action"])
+    def test_a_restricted_agent_cannot_free_its_own_action_with_a_warning(
+        self, revoked: str
+    ) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder(revoked)
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/a", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_cannot_free_its_own_action_with_a_supersede(
+        self,
+    ) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder()
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/a", supersedes=action_id))
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(
+                a,
+                Observation(
+                    scope="corp/a",
+                    topic="t",
+                    content="c",
+                    confidence=0.5,
+                    source=Source.FLEET,
+                    supersedes=action_id,
+                ),
+            )
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_cannot_free_its_action_from_another_scope(
+        self,
+    ) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = Agent(
+            name="a",
+            scopes={"corp/a": ["intent", "action", "warning"], "corp/b": ["warning"]},
+        )
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        guard.get_or_create_barrier(a.id).narrow("corp/a", "intent")
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(a, Warning(scope="corp/b", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_can_still_give_up_a_lease(self) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = Agent(name="a", scopes={"corp/a": ["intent", "action", "warning"]})
+        b = agent("b", "corp/a")
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        guard.get_or_create_barrier(a.id).narrow("corp/a", "intent")
+        assert d.intent_id is not None
+        guard.write_mark(a, Warning(scope="corp/a", supersedes=d.intent_id))
+        assert state(guard, d.intent_id) == ClaimState.RELEASED
+        assert guard.pre_action(b, "corp/a", "r", "use").verdict == GuardVerdict.ALLOW
+
+    def test_a_restricted_agent_cannot_hide_another_agents_action(self) -> None:
+        s = tree()
+        guard = Guard(s)
+        a = agent("a", "corp/a")
+        d = guard.pre_action(a, "corp/a", "r", "use")
+        action_id = guard.post_action(
+            a, "corp/a", "r", "used", "ok", intent_id=d.intent_id
+        )
+        w = Agent(name="w", scopes={"corp/a": ["intent", "action", "warning"]})
+        guard.get_or_create_barrier(w.id).narrow("corp/a", "action")
+        with pytest.raises(ScopeError, match="hides an action"):
+            guard.write_mark(w, Warning(scope="corp/a", invalidates=action_id))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restricted_agent_can_warn_on_what_holds_nothing(self) -> None:
+        s, guard, a, action_id, _ = self._restricted_holder()
+        failed_id = guard.post_action(a, "corp/a", "other", "used", "boom", failed=True)
+        guard.write_mark(a, Warning(scope="corp/a", invalidates=failed_id))
+        guard.write_mark(a, Warning(scope="corp/a", reason="a plain warning"))
+        assert [x.id for x in s.get_actions("corp/a", "r")] == [action_id]
+
+    def test_a_restriction_elsewhere_does_not_stop_a_warning_on_this_action(
+        self,
+    ) -> None:
+        s, guard, _, action_id, _ = self._restricted_holder()
+        b = Agent(
+            name="b",
+            scopes={"corp/a": ["warning"], "corp/b": ["intent", "action"]},
+        )
+        guard.get_or_create_barrier(b.id).narrow("corp/b", "intent")
+        guard.write_mark(b, Warning(scope="corp/a", invalidates=action_id))
+        assert s.get_actions("corp/a", "r") == []
+
+    def test_the_principal_ends_the_restriction_and_the_agent_can_warn_again(
+        self,
+    ) -> None:
+        s, guard, a, action_id, token = self._restricted_holder()
+        assert guard.get_or_create_barrier(a.id).restore("corp/a", "intent", token)
+        guard.write_mark(a, Warning(scope="corp/a", invalidates=action_id))
+        assert s.get_actions("corp/a", "r") == []
+
     def test_a_boundary_does_not_grant_an_intent_waiting_for_the_principal(
         self,
     ) -> None:

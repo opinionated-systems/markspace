@@ -1033,20 +1033,10 @@ class Guard:
             )
             raise ScopeError(reason)
 
-        # Barrier check. A warning that hides an action must also pass the
-        # barrier of the action's own scope (Section 9.5): a restricted agent
-        # could otherwise hide a booking there from another scope.
+        # Barrier check, of the mark's scope and of any action that it hides.
         barrier_result = self._check_barrier(agent, mark.scope, mark.mark_type)
-        if (
-            barrier_result is None
-            and isinstance(mark, Warning)
-            and mark.invalidates is not None
-        ):
-            target = self.space.get_mark(mark.invalidates)
-            if isinstance(target, Action) and target.scope != mark.scope:
-                barrier_result = self._check_barrier(
-                    agent, target.scope, MarkType.WARNING
-                )
+        if barrier_result is None:
+            barrier_result = self._hidden_action_refusal(agent, mark)
         if barrier_result is not None:
             self._emit_write_metric(agent, mark.scope, mark.mark_type.value, "rejected")
             self._emit_telemetry(
@@ -1490,6 +1480,32 @@ class Guard:
         with self._barrier_lock:
             self._barriers[agent_id] = barrier
         return True
+
+    def _hidden_action_refusal(self, agent: Agent, mark: AnyMark) -> str | None:
+        """Why the barrier refuses a mark because of an action that the mark
+        hides, or None. A warning on an action must pass the barrier of the
+        action's own scope (Section 9.5): a restricted agent could otherwise
+        hide a booking there from another scope. And no mark of an agent
+        restricted in the action's scope hides the action: that would free
+        what the action holds (Section 9.8). A failed action holds nothing."""
+        invalidates = mark.invalidates if isinstance(mark, Warning) else None
+        for target_id in (mark.supersedes, invalidates):
+            target = self.space.get_mark(target_id) if target_id is not None else None
+            if not isinstance(target, Action):
+                continue
+            if not target.failed:
+                revoked = self._revoked_to_act(self.get_barrier(agent.id), target.scope)
+                if revoked is not None:
+                    return (
+                        f"Agent '{agent.name}' blocked by barrier: {revoked.value} "
+                        f"revoked in scope '{target.scope}', and this mark hides an "
+                        f"action there"
+                    )
+            if target_id == invalidates and target.scope != mark.scope:
+                refusal = self._check_barrier(agent, target.scope, MarkType.WARNING)
+                if refusal is not None:
+                    return refusal
+        return None
 
     def _check_barrier(
         self, agent: Agent, scope: str, mark_type: MarkType
