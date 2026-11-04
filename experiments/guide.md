@@ -27,7 +27,7 @@ These run locally without API keys or network access.
 ### Unit Tests
 
 ```bash
-pytest  # 770 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
+pytest  # 771 tests (tests/, experiments/stress_test/, experiments/envelope_sim/ and experiments/trials/)
 ```
 
 Covers mark algebra, decay, trust weighting, conflict resolution (also across scope trees), guard enforcement and scope visibility, composition properties, scheduling, thread safety, hypothesis property-based tests, the LLM client, the stress-test pacer, and the stress test's safety metrics.
@@ -110,7 +110,7 @@ python experiments/stress_test/run.py --resume --output results_stress_v1_202602
 | `--pace-min-rps` | 0.05 | Lowest rate after cuts |
 | `--pace-target-fraction` | 0.6 | Stop stepping once this run's generated tokens in the last minute reach this share of the provider's reported limit |
 | `--pace-cooldown-seconds` | 300 | No step for this long after a rate-limit signal |
-| `--output-dir` | auto | Output directory |
+| `--output-dir` | auto | Output directory; a relative path is taken from `experiments/stress_test/` |
 | `--adversarial` | 0 | Number of adversarial agents |
 | `--adversarial-mode` | `confidence` | `confidence`, `flood`, `injection`, `rate_spike`, `type_shift`, `escalation`, `probe_evasion`, `slow_drift`, `low_rate_drift` |
 | `--scale-resources` | false | Scale resources proportionally with agents |

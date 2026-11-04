@@ -95,7 +95,7 @@ The reference implementation and experiments verify that the protocol's properti
 <p align="center"><img src="experiments/trials/results/scaling_proportional/gpt-oss-120b/n_500/stress_test.gif" alt="525-agent stress test visualization"/></p>
 <p align="center"><sub>525 agents (105 per department, 25 adversarial) coordinating across 7 resource types over 10 simulated rounds. Model: <a href="https://fireworks.ai/models/fireworks/gpt-oss-120b">OpenAI gpt-oss-120b</a> via Fireworks. Left: agent activity by department. Center: marks accumulating in the shared space. Right: per-resource contention.</sub></p>
 
-**Unit tests (770):**
+**Unit tests (771):**
 
 - **Core mark operations** - algebra, immutability, uniqueness, ordering
 - **Protocol mechanics** - decay functions, trust weighting, conflict resolution, deferred resolution
@@ -131,7 +131,7 @@ Scenario design in [`design.md`](experiments/stress_test/design.md). Detailed an
 - **Scaling** - up to 1,050 agents with proportionally scaled resources: per-agent step count nearly flat (1.2x at 10x scale), no double booking found at any scale point
 - **Resource contention** - 5x more agents competing for the same resources: completion drops to 13.3% from resource scarcity, not protocol failure
 
-**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + barrier + diagnostic probe, with the statistical envelope as a monitor; on glm-5p3-flash the monitor gave a RESTRICTED verdict to 2 to 10 of 100 normal agents per scenario, and nothing acted on it. In the earlier gpt-oss-120b runs the envelope restricted agents through the guard, 9 to 26 of 100 normal agents per scenario, so the library now uses it as a monitor only; the two run sets differ in model and harness, so the counts do not compare directly. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). In slow drift, at a rate well above a low-rate attack, the guard stored the adversaries' false observations; colleagues shown them repeated them, and some acted on them, under a prompt that says to rebook on a maintenance warning. That is the gap the protocol states; the size of the effect is not established. Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
+**[Defense stack trials:](experiments/trials/results/defense/analysis.md)** 6 attack modes (rate spike, type shift, privilege escalation, probe evasion, slow drift, combined) against the static enforcement layer + barrier + diagnostic probe, with the statistical envelope as a monitor; on glm-5p3-flash the monitor gave a RESTRICTED verdict to 2 to 10 of 100 normal agents per scenario, and nothing acted on it. In the earlier gpt-oss-120b runs the envelope restricted agents through the guard, 9 to 26 of 100 normal agents per scenario, so the library now uses it as a monitor only; the two run sets differ in model and harness, so the counts do not compare directly. 150 rounds, 105 agents per trial (5 adversarial). No double booking found across all attack modes (from the stored steps). In slow drift, at a rate well above a low-rate attack, the guard stored the adversaries' false observations; colleagues shown them repeated them, and some acted on them, under a prompt that says to rebook on a maintenance warning. That is the gap the protocol states. A further run at one observation a round, with its decision rule committed first, supports that agents shown such a claim avoid the room (15% of fallback calls to a named room against 45% by chance), on one run, one model and the first run's seed; the prompt's rule covers maintenance warnings, and most of those calls rest on broken-equipment claims. Full analysis in the [defense writeup](experiments/trials/results/defense/analysis.md).
 
 **[Comparison experiment:](experiments/comparison/analysis.md)** Markspace vs a message-passing framework ([Microsoft Agent Framework](https://github.com/microsoft/agent-framework)) on a shared resource booking scenario. 10 agents, 12 slots, 10 seeds per arm.
 
@@ -150,7 +150,7 @@ The `markspace` package is a Python 3.11+ reference implementation. The protocol
 
 ```bash
 poetry install    # core package
-pytest            # 770 tests, no API key needed
+pytest            # 771 tests, no API key needed
 ```
 
 ### Use the protocol

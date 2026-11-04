@@ -385,3 +385,20 @@ def test_distinct_observations_are_counted_within_a_scope() -> None:
         observation("rooms/eng", 1, "c", result="DENIED: no"),
     ]
     assert effect.distinct_observations(steps) == 3
+
+
+def test_a_word_limits_the_claims_that_name_a_room() -> None:
+    steps = [view("- eng-huddle-1 is broken\n"), book("eng-huddle-2")]
+    assert effect.room_choices(steps, word="broken").calls == 1
+    assert effect.room_choices(steps, word="maintenance").calls == 0
+    capitalised = [view("- eng-huddle-1 is BROKEN\n"), book("eng-huddle-2")]
+    assert effect.room_choices(capitalised, word="broken").calls == 1
+    other_day = [
+        view("- eng-huddle-1 is broken on tue\n"),
+        book("eng-huddle-2", day="mon"),
+    ]
+    assert effect.room_choices(other_day, "sentence", "other", word="broken").calls == 1
+    assert (
+        effect.room_choices(other_day, "sentence", "other", word="maintenance").calls
+        == 0
+    )

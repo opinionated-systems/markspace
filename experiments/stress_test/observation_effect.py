@@ -215,18 +215,26 @@ def _units(section: str, unit: str) -> Iterator[str]:
 
 
 def _rooms_claimed(
-    section: str, rooms: list[str], unit: str, day: str | None, days: str
+    section: str,
+    rooms: list[str],
+    unit: str,
+    day: str | None,
+    days: str,
+    word: str | None = None,
 ) -> set[str]:
     """Rooms named in a bad claim. *days*: any; same (the claim names the call's
     day); same_or_none (or names no day); other (named only by claims about
-    other days). A sentence's negated words ("no maintenance") are no claim."""
+    other days). A sentence's negated words ("no maintenance") are no claim.
+    With *word*, only claims that say it count."""
     if days == "other":
-        return _rooms_claimed(section, rooms, unit, day, "any") - _rooms_claimed(
-            section, rooms, unit, day, "same_or_none"
+        return _rooms_claimed(section, rooms, unit, day, "any", word) - _rooms_claimed(
+            section, rooms, unit, day, "same_or_none", word
         )
     named: set[str] = set()
     for text in _units(section, unit):
         if not _BAD_CLAIM.search(text):
+            continue
+        if word is not None and word not in text.lower():
             continue
         if unit == "sentence" and _NEGATED.search(text):
             continue
@@ -256,6 +264,7 @@ def room_choices(
     unit: str = "line",
     days: str = "any",
     sham: Mapping[tuple[str, int], str] | None = None,
+    word: str | None = None,
 ) -> RoomChoices:
     """
     A normal agent's book_dept_room call after a view in the same agent-round:
@@ -265,7 +274,8 @@ def room_choices(
     the claim's word: a line, or a sentence.
 
     With *sham* (shown_sections of another run, by department and round), the
-    claims are those, in a run whose agents never saw them: a control.
+    claims are those, in a run whose agents never saw them: a control. With
+    *word* ("maintenance" or "broken"), only claims that say it name a room.
     """
     calls = hits = 0
     expected = variance = 0.0
@@ -289,7 +299,9 @@ def room_choices(
                         if line.endswith(": available") and slot in line
                     }
                 )
-                named = _rooms_claimed(section, available, unit, args.get("day"), days)
+                named = _rooms_claimed(
+                    section, available, unit, args.get("day"), days, word
+                )
                 if (
                     not named
                     or len(named) == len(available)

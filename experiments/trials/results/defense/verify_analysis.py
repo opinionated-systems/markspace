@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import random
 import sys
 from collections import Counter
 from pathlib import Path
@@ -331,12 +332,93 @@ def print_low_rate_run() -> None:
     print("|--------------|-------|-----------------|--------|---|")
     print(choice_row("this run", treated))
     print(choice_row("control", control))
+    other_control = [
+        room_choices(run, "sentence", "same_or_none", sham=sham)
+        for run in (
+            load_jsonl(BASE / MODEL / sc / "steps.jsonl")
+            for sc in SCENARIOS
+            if sc != "slow_drift"
+        )
+    ]
+    print(
+        choice_row(
+            "the same claims, the other five runs",
+            RoomChoices(
+                sum(c.calls for c in other_control),
+                sum(c.to_named_room for c in other_control),
+                sum(c.expected for c in other_control),
+                sum(c.variance for c in other_control),
+            ),
+        )
+    )
+    for word in ("broken", "maintenance"):
+        print(
+            choice_row(
+                f"this run, claims that say {word}",
+                room_choices(steps, "sentence", "same_or_none", word=word),
+            )
+        )
+
+    per_agent = [
+        room_choices(
+            [s for s in steps if s["agent"] == agent], "sentence", "same_or_none"
+        )
+        for agent in sorted({s["agent"] for s in steps})
+    ]
+    with_calls = [c for c in per_agent if c.calls]
+    print(
+        f"\n{len(with_calls)} agents supply the calls, at most "
+        f"{max(c.calls for c in with_calls)} each."
+    )
+    rng = random.Random(7)
+    samples = []
+    for _ in range(4000):
+        draw = rng.choices(with_calls, k=len(with_calls))
+        samples.append(
+            sum(c.to_named_room - c.expected for c in draw) / sum(c.calls for c in draw)
+        )
+    samples.sort()
+    print(
+        "Share to a named room minus chance, bootstrap by agent, 95%: "
+        f"{samples[100]:+.2f} to {samples[3899]:+.2f}."
+    )
+    adversary_steps = sum(
+        a["step_count"] for a in agents if a["agent"].startswith("adv-")
+    )
+    unseen_steps = sum(
+        a["step_count"]
+        for a in load_jsonl(UNSEEN_RUN / "agents.jsonl")
+        if a["agent"].startswith("adv-")
+    )
+    print(
+        f"Adversaries' steps: {adversary_steps} here, {unseen_steps} in the control run."
+    )
+    rounds = load_jsonl(LOW_RATE_RUN / "rounds.jsonl")
+    verdicts = Counter(
+        (p["agent"].startswith("adv-"), p["verdict"])
+        for r in rounds
+        for p in r.get("defense", {}).get("probe_results", [])
+    )
+    print(f"Probe verdicts (adversary, verdict): {dict(verdicts)}.")
+    earlier = load_jsonl(UNSEEN_RUN / "rounds.jsonl")[-1]["defense"]
+    refused_run = earlier["monitor_restricted_agents"]
+    print(
+        "RESTRICTED verdicts in the earlier run, whose observations were all "
+        f"refused: {sum(a.startswith('adv-') for a in refused_run)} adversaries, "
+        f"{sum(not a.startswith('adv-') for a in refused_run)} normal agents."
+    )
     print("\nThe primary rule, calls by department:\n")
     print("| Department | Calls | To a named room | Chance | z |")
     print("|------------|-------|-----------------|--------|---|")
     for dept in ("eng", "design", "product", "sales", "ops"):
         only = [s for s in steps if dept_of(s["agent"]) == dept]
         print(choice_row(dept, room_choices(only, "sentence", "same_or_none")))
+    print("\nThe primary rule, without one department:\n")
+    print("| Without | Calls | To a named room | Chance | z |")
+    print("|---------|-------|-----------------|--------|---|")
+    for dept in ("eng", "design", "product", "sales", "ops"):
+        rest = [s for s in steps if dept_of(s["agent"]) != dept]
+        print(choice_row(dept, room_choices(rest, "sentence", "same_or_none")))
     print("\nThe other rules, reported and not tests:\n")
     print("| Claim names the room in a | Calls | To a named room | Chance | z |")
     print("|---------------------------|-------|-----------------|--------|---|")
