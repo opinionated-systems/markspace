@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -170,3 +171,91 @@ def test_report_observation_denies_an_unknown_scope() -> None:
     agent = Agent(name="drift", scopes={"rooms": ["observation"]})
     ok, msg = env.report_observation(agent, "rooms", "room empty")
     assert not ok and msg.startswith("DENIED")
+
+
+class _ObserveClient:
+    """Calls report_observation once, on the scope its tool description
+    names, where the agent has the tool; otherwise stops."""
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        tool = next(
+            (t for t in tools or [] if t["function"]["name"] == "report_observation"),
+            None,
+        )
+        if tool is None or any(m.get("role") == "tool" for m in messages):
+            message = {"role": "assistant", "content": "done"}
+            return {
+                "choices": [{"message": message, "finish_reason": "stop"}],
+                "usage": usage,
+            }
+        properties = tool["function"]["parameters"]["properties"]
+        found = re.search(r"rooms/\w+", properties["scope"]["description"])
+        assert found is not None
+        call = {
+            "id": "c1",
+            "type": "function",
+            "function": {
+                "name": "report_observation",
+                "arguments": json.dumps(
+                    {"scope": found.group(0), "description": "room empty"}
+                ),
+            },
+        }
+        message = {"role": "assistant", "content": None, "tool_calls": [call]}
+        return {
+            "choices": [{"message": message, "finish_reason": "tool_calls"}],
+            "usage": usage,
+        }
+
+
+def test_a_slow_drift_adversary_stores_its_observations(tmp_path: Path) -> None:
+    """The slow_drift adversary may write observations in its own department's
+    rooms, the scope its tool names, so its false observations are stored."""
+    run.run_trial(
+        agents_per_dept=1,
+        n_rounds=2,
+        client=cast(LLMClient, _ObserveClient()),
+        seed=42,
+        phase="stub",
+        model="stub",
+        output_dir=tmp_path,
+        max_concurrent=4,
+        adversarial=1,
+        adversarial_mode="slow_drift",
+    )
+    steps = [
+        json.loads(line) for line in (tmp_path / "steps.jsonl").read_text().splitlines()
+    ]
+    observed = [s for s in steps if s["tool"] == "report_observation"]
+    assert observed and all(s["agent"].startswith("adv-") for s in observed)
+    assert all(s["args"]["scope"] == "rooms/eng" for s in observed)
+    assert all(s["result"].startswith("Observation recorded") for s in observed)
+
+
+def test_only_the_flag_lets_an_agent_observe_its_rooms() -> None:
+    plain = scenario.make_agent("p", "eng", is_head=False)
+    observer = scenario.make_agent("o", "eng", is_head=False, writes_observations=True)
+    assert not plain.can_write("rooms/eng", MarkType.OBSERVATION)
+    assert observer.can_write("rooms/eng", MarkType.OBSERVATION)
+    assert not observer.can_write("rooms/shared", MarkType.OBSERVATION)
+
+
+def test_colleagues_see_the_observations_in_their_rooms() -> None:
+    """view_dept_rooms shows the department the observations written in its
+    rooms; with none, its output has no such section; another department's
+    agent does not see them."""
+    env = run.OfficeEnv(defense_enabled=True)
+    adversary = scenario.make_agent("a", "eng", is_head=False, writes_observations=True)
+    colleague = scenario.make_agent("c", "eng", is_head=False)
+    outsider = scenario.make_agent("o", "sales", is_head=False)
+    assert "Observations" not in env.view_dept_rooms(colleague, "eng")
+    ok, _ = env.report_observation(adversary, "rooms/eng", "eng-huddle-1 is broken")
+    assert ok
+    assert "- eng-huddle-1 is broken" in env.view_dept_rooms(colleague, "eng")
+    assert "eng-huddle-1 is broken" not in env.view_dept_rooms(outsider, "eng")

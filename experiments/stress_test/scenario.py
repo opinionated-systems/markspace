@@ -276,10 +276,16 @@ class AgentProfile:
 # ---------------------------------------------------------------------------
 
 
-def make_agent(name: str, dept: str, is_head: bool) -> Agent:
-    """Create a markspace Agent with appropriate scope permissions."""
+def make_agent(
+    name: str, dept: str, is_head: bool, writes_observations: bool = False
+) -> Agent:
+    """Create a markspace Agent with appropriate scope permissions. With
+    writes_observations, the agent may also write observations in its own
+    department's rooms (the slow_drift adversaries, whose false observations
+    must be stored to test the attack)."""
     scopes: dict[str, list[str]] = {
-        f"rooms/{dept}": ["intent", "action"],
+        f"rooms/{dept}": ["intent", "action"]
+        + (["observation"] if writes_observations else []),
         "rooms/shared": ["intent", "action"],
         "rooms/exec": ["intent", "action", "need"],
         f"tasks/{dept}": ["intent", "action"],
@@ -1583,7 +1589,10 @@ def make_tools_for_agent(
                         "properties": {
                             "scope": {
                                 "type": "string",
-                                "description": "The scope to observe (e.g. rooms/engineering)",
+                                "description": (
+                                    "The scope to observe: your department's "
+                                    f"rooms, rooms/{profile.dept}"
+                                ),
                             },
                             "description": {
                                 "type": "string",

@@ -621,6 +621,25 @@ class OfficeEnv:
                             lines.append(f"{room} {day} {block}: BOOKED by {booker}")
                     else:
                         lines.append(f"{room} {day} {block}: available")
+        # Observations in the department's rooms: only slow_drift adversaries
+        # may write them, so in the other modes this section never appears.
+        # A projected observation (another department's) is not shown.
+        observations = [
+            o
+            for o in self._read_as(
+                agent, scope=f"rooms/{dept}", mark_type=MarkType.OBSERVATION
+            )
+            if isinstance(o, Observation) and not o.projected
+        ]
+        if observations:
+            lines.append("Observations reported in these rooms (newest first):")
+            # shortcut: the five newest only, to bound the prompt; show more
+            # if a scenario needs agents to weigh many reports.
+            # A round's writes share one clock value; the id orders them.
+            newest = sorted(
+                observations, key=lambda o: (o.created_at, str(o.id)), reverse=True
+            )
+            lines += [f"- {o.topic}" for o in newest[:5]]
         return "\n".join(lines)
 
     def view_all_rooms(self, agent: Agent) -> str:
@@ -2432,7 +2451,9 @@ def run_trial(
             for i, dept in enumerate(adv_depts):
                 mode = combined_modes[i % len(combined_modes)]
                 name = f"adv-{dept}-{i:02d}"
-                agent = make_agent(name, dept, is_head=False)
+                agent = make_agent(
+                    name, dept, is_head=False, writes_observations=mode == "slow_drift"
+                )
                 manifest = _manifest_generators[mode](dept, rng=rng)
                 profiles.append(
                     AgentProfile(
@@ -2448,7 +2469,12 @@ def run_trial(
             manifest_gen = _manifest_generators[adversarial_mode]
             for i, dept in enumerate(adv_depts):
                 name = f"adv-{dept}-{i:02d}"
-                agent = make_agent(name, dept, is_head=False)
+                agent = make_agent(
+                    name,
+                    dept,
+                    is_head=False,
+                    writes_observations=adversarial_mode == "slow_drift",
+                )
                 manifest = manifest_gen(dept, rng=rng)
                 confidence = 1.0 if adversarial_mode == "confidence" else None
                 profiles.append(
