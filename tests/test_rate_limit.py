@@ -231,7 +231,7 @@ class TestP66RateLimitIndependence:
         import threading
 
         guard = Guard(space)
-        errors: list[Exception] = []
+        errors: list[str] = []
         successes = []
 
         def try_write(topic: str) -> None:

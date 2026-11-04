@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -128,7 +129,7 @@ class DiagnosticProbe:
         agent_id: uuid.UUID,
         agent_name: str,
         canary_id: uuid.UUID,
-        marks_after: list[AnyMark],
+        marks_after: Sequence[AnyMark],
     ) -> ProbeResult:
         """
         Check whether an agent acknowledged a canary.
@@ -191,7 +192,7 @@ class DiagnosticProbe:
     def run_probe(
         self,
         target_scope: str,
-        agents: dict[uuid.UUID, tuple[str, list[AnyMark]]],
+        agents: Mapping[uuid.UUID, tuple[str, Sequence[AnyMark]]],
         content: Any = None,
     ) -> list[ProbeResult]:
         """
