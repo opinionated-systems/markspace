@@ -269,6 +269,10 @@ class WatchPattern(BaseModel):
         return True
 
 
+# A manifest's expected rate is an average, so a write budget allows twice it.
+EXPECTED_ACTIVITY_HEADROOM = 2.0
+
+
 class AgentManifest(BaseModel):
     """
     Declared input/output contract for an agent.
@@ -294,12 +298,15 @@ class AgentManifest(BaseModel):
 
     @model_validator(mode="after")
     def _check_expected_activity(self) -> AgentManifest:
-        """Keys are mark type values; rates are finite and >= 0 (the guard
-        builds a write budget from them, Section 9.14)."""
+        """Keys are mark type values; rates are >= 0, and finite also after the
+        headroom of the guard's write budget (Section 9.14)."""
         for name, rate in (self.expected_activity or {}).items():
             MarkType(name)  # raises ValueError for an unknown type
-            if not math.isfinite(rate) or rate < 0:
-                raise ValueError(f"expected_activity[{name!r}] must be finite and >= 0")
+            if not math.isfinite(rate * EXPECTED_ACTIVITY_HEADROOM) or rate < 0:
+                raise ValueError(
+                    f"expected_activity[{name!r}] must be >= 0, and finite "
+                    f"also at {EXPECTED_ACTIVITY_HEADROOM:g} times its value"
+                )
         return self
 
     def produces(self, scope: str, mark_type: MarkType) -> bool:

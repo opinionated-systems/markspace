@@ -47,7 +47,7 @@ from markspace import (
     minutes,
 )
 from markspace.barrier import AgentBarrier, BarrierSnapshot
-from markspace.guard import ClaimState
+from markspace.guard import ClaimState, _BarrierView
 from markspace.rate_limit import ScopeRateLimit
 from markspace.space import ScopeError, ValidationError
 from markspace.write_budget import WriteBudget
@@ -2941,13 +2941,16 @@ class TestPerIntentCompetingSets:
                 self,
                 intent: Intent,
                 agents: dict[uuid.UUID, Agent] | None,
-                barriers: dict[uuid.UUID, BarrierSnapshot | None],
+                barriers: _BarrierView,
                 now: float,
+                lease_now: float,
             ) -> str | None:
                 checks[intent.id] = checks.get(intent.id, 0) + 1
                 if intent.agent_id == x.id and checks[intent.id] > 1:
                     return "blocked by barrier at resolution time"
-                return super()._deferred_refusal(intent, agents, barriers, now)
+                return super()._deferred_refusal(
+                    intent, agents, barriers, now, lease_now
+                )
 
         guard = ChangingGuard(s)
         guard.pre_action(x, "corp", "r", "use", 0.5)

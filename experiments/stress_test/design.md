@@ -503,7 +503,7 @@ class OfficeEnv:
     def snapshot_metrics(self) -> dict[str, Any]: ...
 ```
 
-**Key implementation detail for YIELD_ALL boardroom**: When `guard.execute()` returns `BLOCKED`, the guard has already written a NEED mark. The environment returns: `"BLOCKED: Multiple departments want the boardroom at this time. The conflict has been escalated. Try a different time or use a shared room instead."`
+**Key implementation detail for YIELD_ALL boardroom**: When `guard.execute()` returns `BLOCKED` in a deferred scope such as `rooms/exec`, the guard has written no NEED mark. In an immediate scope, a NEED mark already exists: the agent's own, or the guard's question in `_system`. The environment returns: `"BLOCKED: Multiple departments want the boardroom at this time. The conflict has been escalated. Try a different time or use a shared room instead."`
 
 **Key implementation detail for `my_status`**: Reads the agent's own action marks across all scopes, then checks for warnings targeting those marks. Returns structured output showing bookings and any warnings/invalidations.
 

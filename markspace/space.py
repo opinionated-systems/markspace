@@ -759,7 +759,7 @@ class MarkSpace:
         made inside the block wait as in hooks_deferred(). Lock order: a
         guard's resource lock, then its need-mark lock, then this one, then
         its lease-table lock, then its barrier and write-budget locks, which
-        take no other lock (Section 6.2.3). While holding it, the space calls
+        take no other lock. While holding it, the space calls
         only its guard's ClaimTable methods; a guard reads barriers and write
         budgets, and it takes no resource or need-mark lock.
         """

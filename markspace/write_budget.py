@@ -15,7 +15,8 @@ The guard follows that workbook as written:
 - Error-budget policy ("Example Error Budget Policy"): when an agent has
   spent its budget of a type over the trailing period, the guard refuses its
   further writes of that type until the count over the trailing period is
-  back below the budget. This is the only automatic action. A write is
+  back below the budget. This is the only automatic action; a spent action
+  budget also refuses intents and leases (Section 9.14). A write is
   reserved before it is made and released if another check refuses it, so
   the count holds the writes that were stored.
 - Burn-rate alerts (chapter 5, "Alerting on SLOs", Table 5-8): a tier fires
@@ -46,10 +47,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from markspace.core import MarkType
+from markspace.core import EXPECTED_ACTIVITY_HEADROOM, MarkType
 
 DAY = 86_400.0
-EXPECTED_ACTIVITY_HEADROOM = 2.0
+
+
+def _snap(writes: float) -> float:
+    """A count of writes within float error of a whole number is that number:
+    a rate of N per period allows N writes."""
+    if not math.isfinite(writes):
+        return writes
+    nearest = round(writes)
+    return float(nearest) if math.isclose(writes, nearest, rel_tol=1e-12) else writes
 
 
 class BurnTier(BaseModel):
@@ -130,14 +139,14 @@ class WriteBudget(BaseModel):
 
     def budget(self, mark_type: MarkType) -> float:
         """Writes of mark_type allowed over the trailing period."""
-        return self.per_hour.get(mark_type, 0.0) * self.period_seconds / 3600.0
+        return _snap(self.per_hour.get(mark_type, 0.0) * self.period_seconds / 3600.0)
 
     def threshold(
         self, tier: BurnTier, mark_type: MarkType, window_seconds: float
     ) -> float:
         """Writes of mark_type in a window at the tier's burn rate."""
         burn = tier.budget_fraction * self.period_seconds / tier.long_window_seconds
-        return burn * self.per_hour.get(mark_type, 0.0) * window_seconds / 3600.0
+        return _snap(burn * self.per_hour.get(mark_type, 0.0) * window_seconds / 3600.0)
 
 
 @dataclass(frozen=True)
@@ -192,7 +201,8 @@ class WriteBudgetMeter:
     _times: dict[tuple[uuid.UUID, MarkType], _Times] = field(default_factory=dict)
     # (agent, mark type, tier) for tiers firing on the agent's last write
     _firing: set[tuple[uuid.UUID, MarkType, BurnTier]] = field(default_factory=set)
-    # (agent, mark type) whose last write was refused for a spent budget
+    # (agent, mark type) in an exhaustion: a write was refused or recorded over
+    # the budget, and no check has found room since
     _exhausted: set[tuple[uuid.UUID, MarkType]] = field(default_factory=set)
 
     def reserve(
@@ -202,12 +212,14 @@ class WriteBudgetMeter:
         mark_type: MarkType,
         now: float,
         force: bool = False,
+        open_writes: int = 0,
     ) -> Reservation:
         """Reserve one write of mark_type at time now. A write that would
         bring the count over the trailing period above the budget is refused
         and not counted, unless `force` (a write that has already happened,
         such as an action whose tool has run): then it is counted and reported
-        as over the budget."""
+        as over the budget. An exhaustion ends only when `open_writes` (as in
+        spent()) also leave room."""
         times = self._times.setdefault((agent_id, mark_type), _Times())
         times.prune(now, budget.period_seconds)
         period_count = times.count_since(now - budget.period_seconds)
@@ -216,7 +228,7 @@ class WriteBudgetMeter:
         started_now = over and self.note_refusal(agent_id, mark_type)
         if over and not force:
             return Reservation(True, period_count, allowed, None, started_now)
-        if not over:
+        if period_count + open_writes + 1 <= allowed:
             self._exhausted.discard((agent_id, mark_type))
         bisect.insort(times.times, now, lo=times.start)
         return Reservation(False, period_count + 1, allowed, now, started_now)
@@ -229,6 +241,10 @@ class WriteBudgetMeter:
             return False
         self._exhausted.add(key)
         return True
+
+    def clear_refusal(self, agent_id: uuid.UUID, mark_type: MarkType) -> None:
+        """End an exhaustion: a write not made started it, or room is back."""
+        self._exhausted.discard((agent_id, mark_type))
 
     def release(self, agent_id: uuid.UUID, mark_type: MarkType, at: float) -> None:
         """Remove a reserved write that was not made."""
@@ -279,13 +295,19 @@ class WriteBudgetMeter:
         return tuple(started)
 
     def spent(
-        self, agent_id: uuid.UUID, budget: WriteBudget, mark_type: MarkType, now: float
+        self,
+        agent_id: uuid.UUID,
+        budget: WriteBudget,
+        mark_type: MarkType,
+        now: float,
+        open_writes: int = 0,
     ) -> bool:
-        """Whether one more write of mark_type would exceed the budget; counts
-        nothing."""
+        """Whether one more write of mark_type would exceed the budget, with
+        `open_writes` counted as writes to come (an agent's open leases, for
+        actions); counts nothing."""
         times = self._times.get((agent_id, mark_type))
         count = times.count_since(now - budget.period_seconds) if times else 0
-        return count + 1 > budget.budget(mark_type)
+        return count + open_writes + 1 > budget.budget(mark_type)
 
     def forget(self, agent_id: uuid.UUID) -> None:
         """Clear the agent's counted writes (the principal set a new budget)."""

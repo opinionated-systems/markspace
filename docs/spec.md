@@ -453,7 +453,7 @@ In this section, an intent, a lease or an action **blocks** an intent when it pr
 
 This order has these consequences:
 
-- Among waiting claims, an intent in an outer scope pre-empts the intents in inner scopes. The order and the confidence of the intents do not change this result.
+- Among waiting claims, an intent in an outer scope pre-empts the intents in inner scopes. The order and the confidence of the intents do not change this result. A pending intent of an agent restricted in its scope does not pre-empt (Section 9.8). A pending intent in a deferred scope does not pre-empt when its agent's action budget is spent (Section 9.14).
 - Nothing pre-empts a granted claim. A guard grants a lease to the winning intent (Section 6.5). An intent that would beat the live lease of another agent waits until that lease ends, or it yields.
 - An intent cannot proceed if its competing set holds a completed action of another agent (P39). The guard closes this intent permanently. Thus this intent blocks no other intent.
 
@@ -463,7 +463,7 @@ These are the policies:
 
 **HIGHEST_CONFIDENCE**: The intent with the highest `confidence` wins. If two intents have the same confidence, the intent with the earliest `created_at` wins. The agents that lose MUST yield.
 
-**YIELD_ALL**: Each agent whose intent goes to the principal (step 3) MUST write a need mark that requests a resolution from the principal. If another competitor beats an intent, that intent loses, and its agent writes no need mark. No agent of such a pair proceeds until the principal decides.
+**YIELD_ALL**: In an immediate scope, an intent can go to the principal (step 3). For each agent, scope and resource where it does, an open need mark MUST request a resolution from the principal. The agent writes it, or the guard writes it when the agent cannot (G3 step 5). In a deferred scope, the guard writes no need mark (Section 6.2.2). If another competitor beats an intent, that intent loses, and no need mark is written for it. No agent of such a pair proceeds until the principal decides, or until a check refuses one of the two intents and the pair ends.
 
 "Yield" means that the agent MUST NOT write an action mark on the contested resource. The agent MAY do any of these:
 
@@ -538,10 +538,10 @@ The deployment defines the delivery mechanism. The harness MAY use callbacks, po
 
 A boundary judges only pending intents (Section 6.5). An intent that `pre_action`, an earlier boundary or the principal granted or closed does not receive a verdict again. The mapping holds one verdict for each agent, for the best of its intents. Each verdict names its `intent_id`. The other pending intents of the agent get their verdicts at a later boundary, or they expire.
 
-**Re-verification.** A boundary checks the barrier of the agent of each compared intent, by the agent's id. An intent whose agent is restricted in the intent's scope (Section 9.8) fails this check. A boundary MAY also check each agent again against the agent registry of the caller. That check covers the authorization of the agent for the scope of the intent, and a need mark that its barrier requires there. A boundary checks each intent once. The checks use these copies:
+**Re-verification.** A boundary checks the barrier of the agent of each compared intent, by the agent's id. An intent whose agent is restricted in the intent's scope (Section 9.8) fails this check. A pending intent in a deferred scope also fails when its agent's action budget is spent (Section 9.14). A boundary MAY also check each agent again against the agent registry of the caller. That check covers the authorization of the agent for the scope of the intent, and a need mark that its barrier requires there. A boundary checks each intent once. The checks use these copies:
 
 - One copy of the agent registry of the caller. The boundary takes this copy when it starts.
-- One copy of the barrier of each agent. The boundary takes this copy after it holds its resource lock.
+- One copy of the barrier of each agent that it judges. The boundary takes this copy on first use, while it holds the mark space.
 
 An intent whose agent fails a check receives DENIED. That intent has no part in any comparison.
 
@@ -553,7 +553,7 @@ The boundary cannot check the registry entry of an agent that is missing from th
 2. The guard holds the mark space.
 3. The guard reads the barrier of each agent that it judges, once for the boundary.
 
-Thus, if a barrier gets a restriction while the boundary waits for these locks, that restriction counts. A thread that holds the mark space waits only for the lease table and for the barrier lock. The barrier lock takes no other lock, so these waits cannot form a cycle.
+Thus, if a barrier gets a restriction while the boundary waits for these locks, that restriction counts. A thread that holds the mark space waits only for the lease table, the barrier lock and the write budget lock. These last two locks take no other lock, so these waits cannot form a cycle.
 
 **Wildcard topic matching.** If the `observation_topics` or the `warning_topics` of a scope contains `"*"`, any topic string matches. The `"*"` is a literal wildcard, not a glob or a regex. It means "this scope accepts any topic." When `"*"` is in a list, the named topics in that list are redundant. They are not an error.
 
@@ -588,7 +588,7 @@ Under YIELD_ALL, the agents wait until the principal gives input. Progress depen
 
 **P13: Consistency (Yield Recovery)**: Agent A yields to the intent of agent B. Later, agent B abandons its plan, and its intent expires. In this case, the protocol MUST NOT make agent A permanently unable to act on that resource. Specifically, consider the condition that no higher-priority intent, lease or action exists on (scope, resource). When this condition is true, the guard MUST be able to evaluate a new intent from A without reference to the expired yield history.
 
-**P14: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL pending intents on `(scope, resource)` at the resolution boundary. These are the active intents that no guard granted or closed (Section 6.5). The batch resolution step MUST NOT exclude from the comparison an intent written before the boundary and still within its TTL.
+**P14: Deferred Completeness**: Under deferred resolution, the batch resolution step MUST consider ALL pending intents on `(scope, resource)` at the resolution boundary. These are the active intents that no guard granted or closed (Section 6.5). The batch resolution step MUST NOT exclude from the comparison an intent written before the boundary and still within its TTL. The exception is an intent that a check of the boundary refuses (Section 6.2.3).
 
 **P15: Deferred Priority Fidelity**: Under deferred resolution with HIGHEST_CONFIDENCE, the winning intent among the candidates in one scope MUST be the one with the highest confidence. An intent in an outer scope still wins against the intents in inner scopes (Section 6.1). The result MUST be identical to the result that HIGHEST_CONFIDENCE gives when it evaluates all intents at the same time (no serialization effects).
 
@@ -606,7 +606,7 @@ If N agents in one scope compete only with each other, at most one of them wins.
 - A completed action holds the resource.
 - The intent that would win belongs to an agent that the boundary cannot check (Section 6.2.3, Re-verification).
 
-**P18: Deferred Inclusion**: The comparison MUST include all pending intents (strength > 0, not granted or closed) on (scope, resource) at the boundary. An implementation MUST NOT exclude an intent that an agent wrote before the boundary and that is still within its TTL.
+**P18: Deferred Inclusion**: The comparison MUST include all pending intents (strength > 0, not granted or closed) on (scope, resource) at the boundary. An implementation MUST NOT exclude an intent that an agent wrote before the boundary and that is still within its TTL. The exception is an intent that a check of the boundary refuses (Section 6.2.3).
 
 Note: the protocol does not prevent an agent that outbids the other agents perpetually. Such an agent always writes a higher-confidence intent just before each boundary. This is an acknowledged limitation, similar to priority inversion in real-time systems. TTL expiry gives the safety net. If such an agent never executes, its intent eventually expires.
 
@@ -657,32 +657,33 @@ The guard still reads marks at the time of the mark space. A forward clock step 
 
 1. Check the authorization, the barrier and the scope rate limit. The barrier refuses the intent when the agent is restricted in the scope (Section 9.8). The barrier also refuses the intent when it requires a need mark that the agent does not hold there.
 2. If another agent has a held action, return CONFLICT. Do not write an intent.
-3. Write the intent.
+3. If the write budget refuses the intent (Section 9.14), return DENIED. Do not write an intent. Otherwise, write the intent.
 4. If one of these beats the intent, return CONFLICT and close the intent as lost:
    - A live lease of another agent.
    - A pending intent of another agent in an ancestor deferred scope.
 
    Before this check, close as lost each such pending intent that a held action blocks. That pending intent does not count.
 
-5. If the intent makes a YIELD_ALL pair with a pending intent of another agent, or with a live lease of another agent, return BLOCKED. Write a need mark. The intent stays pending.
+5. If the intent makes a YIELD_ALL pair with a pending intent of another agent, or with a live lease of another agent, return BLOCKED. Write a need mark. The guard writes the question in `_system` for the principal when the agent's permissions or barrier do not allow a need mark. The guard also writes it when the agent's budget or the space refuses the need mark. At most one question, the agent's or the guard's, is open per agent, scope and resource, so a retry adds none. The intent stays pending.
 6. If another agent has a live lease that the intent would beat, return CONFLICT and close the intent as lost. Nothing pre-empts a lease.
-7. Otherwise, grant the intent. Return ALLOW with the fencing token and the expiry.
+7. If the agent's action budget is spent (Section 9.14), return DENIED and close the intent as lost. Otherwise, grant the intent. Return ALLOW with the fencing token and the expiry.
 
-In steps 4 and 5, a pending intent of an agent restricted in its scope does not count.
+In steps 4 and 5, a pending intent of an agent restricted in its scope does not count. A pending intent in a deferred scope does not count when its agent's action budget is spent (Section 9.14).
 
 Thus, in an immediate HIGHEST_CONFIDENCE scope, the first granted claim holds the resource. A later intent with higher confidence receives CONFLICT.
 
 **G4 (deferred boundary).** A resolution boundary judges the pending intents in its scope, its ancestors and its descendants. It judges them atomically (Section 6.2.3). It grants only intents in deferred scopes. These rules apply at the boundary:
 
 - An intent pending in an immediate scope went to the principal (G3 step 5). This intent still counts, and only the principal grants it. The intent is lost when its agent fails the checks of the boundary.
+- The boundary refuses an intent in a deferred scope when its agent's action budget is spent (Section 9.14).
 - A refused intent is lost. There is one exception: if the boundary cannot check the agent of an intent against the registry, the boundary denies the intent. The intent then stays pending, unless the agent is restricted in the intent's scope.
 - If a held action of another agent blocks an intent, the intent is lost.
 - If a live lease of another agent blocks a winner, the winner waits.
 - At each boundary, the guard grants at most one winner of each agent. It orders the winners of one agent by scope (the outermost first), then by time (the earliest first), then by id. It grants the first winner. The other winners of the agent wait.
 - If a granted intent beats an intent, that intent is lost. If only waiting intents beat an intent, that intent waits.
-- The boundary writes no marks.
+- The boundary writes no marks, apart from the need mark that starts an exhaustion of an action budget (Section 9.14).
 
-**G5 (principal).** The principal grants a pending intent if G1 holds and the agent of the intent is not restricted in the intent's scope (Section 9.8). For a restricted agent, `grant()` returns DENIED and names the revoked type. The principal restores the barrier before it grants such an intent. A barrier that only requires a need mark does not stop the principal's grant. The principal also releases a lease or a pending intent.
+**G5 (principal).** The principal grants a pending intent if G1 holds and the agent of the intent is not restricted in the intent's scope (Section 9.8). An action budget does not refuse a grant (Section 9.14). For a restricted agent, `grant()` returns DENIED and names the revoked type. The principal restores the barrier before it grants such an intent. A barrier that only requires a need mark does not stop the principal's grant. The principal also releases a lease or a pending intent.
 
 **G6 (fencing at the action).** `post_action` always records a failed action. A failed action holds nothing, and it ends the lease. With an intent id, it supersedes the given intent only when that intent is the agent's own on the same scope and resource. With no intent id, it supersedes the intent of the agent's live lease on the same scope and resource, if the agent holds one. For any other action, `post_action` does these steps:
 
@@ -695,7 +696,7 @@ Thus, in an immediate HIGHEST_CONFIDENCE scope, the first granted claim holds th
    - The scope is immediate.
    - The scope is not YIELD_ALL.
    - G1 holds.
-   - No pending intent of another agent competes. A pending intent of an agent restricted in its scope does not count.
+   - No pending intent of another agent competes. A pending intent of an agent restricted in its scope does not count. A pending intent in a deferred scope does not count when its agent's action budget is spent (Section 9.14).
 4. Otherwise, write nothing and raise `NotGrantedError`.
 
 A barrier refuses a direct claim when the agent is restricted in the scope (Section 9.8). It also refuses a direct claim when the agent lacks a need mark that the barrier requires there. Under step 3, `post_action` still records a claim that the barrier refuses, because its tool has run. The guard then writes a need mark in `_system` for the principal, one open per agent and registered scope (Section 9.8). The guard writes no such need mark for an action under a lease or for a failed action.
@@ -755,6 +756,7 @@ An ended lease never becomes live again. This is also true when the clock moves 
 - Only live leases block the intent.
 - No pending intent beats the intent.
 - The agent of the intent is not restricted in the intent's scope (Section 9.8).
+- The action budget of the agent has room (Section 9.14).
 
 The guard grants this intent at a boundary after those leases end. It is the first such boundary at which the agent of the intent receives no other grant.
 
@@ -1036,7 +1038,8 @@ pre_action(agent, scope, resource, action, confidence) → GuardDecision
      type; then a required need mark) and scope rate
   2. Check for held action marks on (scope, resource) from OTHER agents
      - If found: return CONFLICT (the resource is already claimed); no intent is written
-  3. Write an intent mark on behalf of the agent
+  3. Write budget (Section 9.14): DENIED if it refuses; otherwise write an intent mark on
+     behalf of the agent
   4. Deferred scope: return BLOCKED (pending the resolution boundary)
   5. Immediate scope, in order (Section 6.5, G3):
      - Another agent's live lease, or another agent's pending intent in an ancestor deferred scope,
@@ -1044,6 +1047,7 @@ pre_action(agent, scope, resource, action, confidence) → GuardDecision
      - YIELD_ALL pair with another agent's pending intent or lease: return BLOCKED,
        auto-write need mark for principal
      - Another agent's live lease: return CONFLICT (a lease is not pre-empted)
+     - The agent's action budget is spent (Section 9.14): return DENIED
      - Otherwise: grant a lease, return ALLOW with the fencing token and expiry
 
 post_action(agent, scope, resource, action, result, intent_id?, failed?) → mark_id
@@ -1476,30 +1480,51 @@ message WriteBudget {
 }
 ```
 
-The budget of a type is `per_hour x period / 3600` writes over the trailing period.
+The budget of a type is `per_hour x period / 3600` writes over the trailing period. A value within float error of a whole number is that number.
 
 **Counting.** The guard counts a write when it is made. The guard reserves the write after the checks that can refuse it outright. It releases the reservation when the write is not made:
 
 - In `write_mark`, the guard reserves a write that the agent's permissions allow, after the barrier, the scope rate limit and the content policies. It releases the reservation when the space refuses the write or the guard refuses a restricted agent's need mark (Section 9.8).
 - In `pre_action`, the guard reserves the intent after the authorization, barrier, rate-limit and held-resource checks. It releases the reservation when the space refuses the intent.
-- In `post_action`, the guard reserves an action that the agent's permissions allow. It releases the reservation when it records no action.
+- For a YIELD_ALL conflict, `pre_action` also reserves its need mark (G3 step 5). When the budget or the space refuses the need mark, the guard writes the question in `_system` for the principal (G3 step 5).
+- In `post_action`, the guard reserves an action that the agent's permissions allow, after the lease checks, in the hold that writes the action. It releases the reservation when the space refuses the action. A write that the guard does not record starts no exhaustion.
 
 A reservation counts while the write is made, so concurrent writes of one agent do not exceed the budget. `execute()` counts one action for each tool run.
 
 **Exhaustion.** The guard refuses a write that would bring the agent's count of its type over the trailing period above the budget. The guard does not count that write. It refuses and does not count every further write of that type, until the count over the trailing period is below the budget again.
 
-When the agent's action budget is spent, `pre_action` also refuses its intents, without counting them. `pre_action` checks the action budget against the agent's counted actions. It does not count the agent's leases that have no action yet. `post_action` counts each action that it records. It records an action also over the budget, because its tool has run.
+**The action budget and leases.** An agent's action budget is spent when its counted actions over the trailing period and its open leases leave no room for one more action. A lease is open from its grant until one of these happens:
 
-So the agent's actions can exceed the action budget in these ways:
+- An action under the lease is recorded.
+- A failed action or the principal releases the lease.
+- A mark of its agent supersedes its intent.
+- The lease expires.
 
-- By its leases that had no action yet when the budget was spent.
-- By leases that a resolution boundary or the principal's `grant()` gives later.
+A retry on a resource under the agent's own open lease counts as one more lease. At the last of the budget, the guard refuses the retry until the lease ends.
+
+The reservation of an action and the end of its lease happen in one hold of the mark space. Each check of the action budget reads the count and the leases in a hold of the mark space, so it counts the action once.
+
+While the action budget is spent:
+
+- `pre_action` refuses the agent's intents, without counting them.
+- `pre_action` makes this check again when it grants, in the hold that grants, because another call of the agent can have taken a lease. An intent that this check refuses is stored and counted, and it is lost.
+- A resolution boundary refuses a lease in a deferred scope, and the intent is lost.
+- A pending intent of the agent in a deferred scope does not beat or block another agent's intent or direct claim (G3, G6). This is also true in a deferred YIELD_ALL scope, where the principal can still grant the intent. If another agent has taken the resource by then, that grant returns CONFLICT.
+- An intent that waits for the principal in an immediate scope stays pending and still counts. The principal's `grant()` is the principal's own decision, so the action budget does not refuse it. A lease from `grant()` counts as open.
+
+`post_action` counts each action that it records. It records an action also over the budget, because its tool has run.
+
+So, for an agent with one manifest for its id, the actions can exceed the action budget only in these ways:
+
+- By a lease that the principal's `grant()` gives.
+- By a new budget from the principal. It starts a new count, and a lease open at that time stands.
+- By an intent that reached the space without the guard, at a boundary without the agents mapping: the guard has not seen the agent's manifest.
 - By its failed actions.
 - By its direct claims.
 
-Every lease has an intent that `pre_action` counted, so the intent budget bounds the leases. Nothing in the write budget bounds the failed actions and the direct claims.
+Nothing in the write budget bounds the failed actions and the direct claims. The guard records them and writes a need mark for the principal when an exhaustion starts.
 
-An exhaustion of a type starts after the agent's last counted write of that type within the budget. It starts at the first later write of that type that the guard refuses or records over the budget. An exhaustion of actions also starts at the first later intent that the guard refuses because the action budget is spent. Exhaustion is the only refusal of a write budget. A write budget restricts no scope.
+An exhaustion of a type starts after the agent's last counted write of that type within the budget. It starts at the first later write of that type that the guard refuses or records over the budget. An exhaustion of actions also starts at the first later intent or lease that the guard refuses because the action budget is spent. It ends at the first check that finds room, and a later refusal starts a new exhaustion. Exhaustion is the only refusal of a write budget. A write budget restricts no scope.
 
 **Burn-rate alerts.** The burn rate is the speed at which the agent spends its budget, relative to the period. A burn rate of 1 spends exactly the budget over the period. A tier that spends `budget_fraction` of the budget in its long window has the burn rate `budget_fraction x period / long_window_seconds`. Its threshold for a window is `burn rate x per_hour x window / 3600` writes.
 
@@ -1517,7 +1542,7 @@ The guard writes none while the last one of the same kind for that agent and typ
 
 `set_write_budget` forgets the agent's counted writes, its alert state and this record. So a new budget is a fresh start. After this call, the guard can write a need mark of a kind while an earlier one of that kind is still open.
 
-**P77: Write Budget Exhaustion**: An over-budget write is a write that would bring an agent's count of a mark type over the trailing period above its budget. The guard MUST refuse an over-budget write in `write_mark` and `pre_action`. The guard MUST NOT count the refused write. The guard MUST refuse further writes of that type until the count over the trailing period is below the budget. `pre_action` MUST refuse an intent while the agent's action budget is spent. The guard MUST NOT count a write that another check refuses.
+**P77: Write Budget Exhaustion**: An over-budget write is a write that would bring an agent's count of a mark type over the trailing period above its budget. The guard MUST refuse an over-budget write in `write_mark` and `pre_action`. The guard MUST NOT count the refused write. The guard MUST refuse further writes of that type until the count over the trailing period is below the budget. The agent's action budget is spent when its counted actions and its open leases leave no room for one more action. `pre_action` MUST refuse an intent while that budget is spent, and a resolution boundary MUST refuse a lease in a deferred scope. The guard MUST NOT count a write that another check refuses.
 
 **P78: Write Budget Room**: The write budget MUST NOT refuse a write that keeps the agent's count of its type over the trailing period within the budget. The exception is an intent that P77 refuses because the action budget is spent. A burn-rate tier MUST NOT refuse any write.
 
