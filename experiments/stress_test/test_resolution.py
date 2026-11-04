@@ -98,6 +98,17 @@ def test_the_boardroom_winner_is_granted_and_the_rest_released() -> None:
     assert_every_intent_closed(env)
 
 
+def test_the_boardroom_holder_asking_again_is_not_granted_again() -> None:
+    env = run.OfficeEnv()
+    holder = profile("holder", "rooms/exec", {"day": "mon", "block": "AM"})
+    env.book_boardroom(holder.agent, "mon", "AM", 0.9)
+    run.resolve_boardroom_conflicts(env, [holder])
+    ok, msg = env.book_boardroom(holder.agent, "mon", "AM", 0.9)
+    assert not ok and msg.startswith("ALREADY YOURS")
+    assert run.resolve_boardroom_conflicts(env, [holder]) == []
+    assert [a.agent_id for a in actions(env, "rooms/exec")] == [holder.agent.id]
+
+
 def test_a_second_resolution_on_one_day_books_only_new_requests() -> None:
     env = run.OfficeEnv()
     first, second = (profile(n, "parking", {"day": "mon"}) for n in ("a", "b"))

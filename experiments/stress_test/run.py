@@ -911,8 +911,19 @@ class OfficeEnv:
         Guard writes intent and returns BLOCKED. Between rounds,
         resolve_boardroom_conflicts picks the winner from collected intents.
         If the slot was already resolved (action exists), guard returns CONFLICT.
+        The guard counts no agent's own action as a conflict, so a request
+        from the slot's holder is answered here; submitted, the next
+        resolution would grant the holder the slot again.
         """
         resource = f"{EXEC_ROOM}/{self._wday(day)}/{block}"
+        held = self.space.read(
+            scope="rooms/exec", resource=resource, mark_type=MarkType.ACTION
+        )
+        if any(
+            isinstance(a, Action) and a.agent_id == agent.id and not a.failed
+            for a in held
+        ):
+            return False, f"ALREADY YOURS: You hold the boardroom on {day} {block}."
 
         # Phase 1 (Spec 6.2.1): guard checks auth, existing actions,
         # writes intent, returns BLOCKED (deferred scope)
@@ -1742,6 +1753,8 @@ def _dispatch_tool(
         if not all([day, block]):
             return "ERROR: Missing required arguments (day, block).", None
         ok, msg = env.book_boardroom(agent, day, block, confidence)
+        if msg.startswith("ALREADY YOURS"):
+            return msg, None  # answered by the harness; the guard was not asked
         verdict = "allow" if ok else ("blocked" if "BLOCKED" in msg else "conflict")
         return msg, verdict
 
