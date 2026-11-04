@@ -49,7 +49,7 @@
   <rect x="40" y="238" width="200" height="50" rx="4" class="bg" opacity="0.05"/>
   <rect x="40" y="238" width="200" height="50" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
   <text x="140" y="260" font-size="10" font-weight="500" class="fg" text-anchor="middle">Self-monitoring</text>
-  <text x="140" y="276" font-size="8" class="fg" opacity="0.4" text-anchor="middle">write budgets, canary probe, anomaly monitor</text>
+  <text x="140" y="276" font-size="8" class="fg" opacity="0.4" text-anchor="middle">write budgets, canary probe, monitor</text>
 
   <!-- Self-restriction (bottom right) -->
   <rect x="320" y="238" width="200" height="50" rx="4" class="accent" opacity="0.06"/>
