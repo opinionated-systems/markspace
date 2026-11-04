@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 226" width="875" height="283" font-family="'IBM Plex Mono', monospace">
+  <style>
+    .fg { fill: #1a1a2e; }
+    .fg-stroke { stroke: #1a1a2e; }
+    .bg { fill: #1a1a2e; }
+    .accent { fill: #c23616; }
+    .accent-stroke { stroke: #c23616; }
+    .arr-fill { fill: #1a1a2e; }
+    .arr-accent { fill: #c23616; }
+    @media (prefers-color-scheme: dark) {
+      .fg { fill: #d4d4dc; }
+      .fg-stroke { stroke: #d4d4dc; }
+      .bg { fill: #d4d4dc; }
+      .accent { fill: #e8664a; }
+      .accent-stroke { stroke: #e8664a; }
+      .arr-fill { fill: #d4d4dc; }
+      .arr-accent { fill: #e8664a; }
+    }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-fill"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arr-accent"/>
+    </marker>
+  </defs>
+  <rect x="190" y="12" width="130" height="48" rx="4" class="accent" opacity="0.06"/>
+  <rect x="190" y="12" width="130" height="48" rx="4" fill="none" class="accent-stroke" stroke-width="1"/>
+  <text x="255.0" y="33.0" font-size="10" font-weight="500" class="accent" text-anchor="middle">refused</text>
+  <text x="255.0" y="47.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">not counted</text>
+  <rect x="524" y="12" width="156" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="524" y="12" width="156" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="602.0" y="33.0" font-size="10" font-weight="500" class="fg" text-anchor="middle">need mark: exhausted</text>
+  <text x="602.0" y="47.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">once, when it starts</text>
+  <rect x="10" y="90" width="140" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="10" y="90" width="140" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="80.0" y="111.0" font-size="10" font-weight="500" class="fg" text-anchor="middle">write_mark, pre_action</text>
+  <text x="80.0" y="125.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">nothing has happened yet</text>
+  <rect x="190" y="90" width="130" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="190" y="90" width="130" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="255.0" y="117.5" font-size="10" font-weight="500" class="fg" text-anchor="middle">room in the budget?</text>
+  <rect x="360" y="90" width="130" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="360" y="90" width="130" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="425.0" y="117.5" font-size="10" font-weight="500" class="fg" text-anchor="middle">stored and counted</text>
+  <rect x="524" y="90" width="156" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="524" y="90" width="156" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="602.0" y="111.0" font-size="10" font-weight="500" class="fg" text-anchor="middle">need mark: page or ticket</text>
+  <text x="602.0" y="125.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">when spending fast</text>
+  <rect x="10" y="168" width="140" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="10" y="168" width="140" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="80.0" y="189.0" font-size="10" font-weight="500" class="fg" text-anchor="middle">post_action</text>
+  <text x="80.0" y="203.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">the tool has run</text>
+  <rect x="190" y="168" width="300" height="48" rx="4" class="bg" opacity="0.04"/>
+  <rect x="190" y="168" width="300" height="48" rx="4" fill="none" class="fg-stroke" stroke-width="1"/>
+  <text x="340.0" y="189.0" font-size="10" font-weight="500" class="fg" text-anchor="middle">recorded and counted</text>
+  <text x="340.0" y="203.0" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">also over the budget: the record matches the outside world</text>
+  <line x1="320" y1="36" x2="522" y2="36" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="150" y1="114" x2="188" y2="114" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="320" y1="114" x2="358" y2="114" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="339" y="108" font-size="8.5" class="fg" opacity="0.65" text-anchor="middle">yes</text>
+  <line x1="490" y1="114" x2="522" y2="114" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="255" y1="90" x2="255" y2="62" class="accent-stroke" stroke-width="1" marker-end="url(#arr-red)"/>
+  <text x="262" y="80" font-size="8.5" class="accent">no</text>
+  <line x1="150" y1="192" x2="188" y2="192" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <polyline points="490,182 602,182 602,140" fill="none" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <polyline points="490,204 692,204 692,36 682,36" fill="none" class="fg-stroke" stroke-width="1" marker-end="url(#arr)"/>
+  <text x="686" y="199" font-size="8.5" class="fg" opacity="0.65" text-anchor="end">if over the budget</text>
+</svg>
