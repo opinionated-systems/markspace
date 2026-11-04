@@ -22,7 +22,7 @@ The protocol defines five mark types, three visibility levels, three conflict po
 
 LLM agents are probabilistic and reason adaptively when blocked. Coordination that depends on their compliance is therefore unsafe: the same capacity for novel solutions that makes LLMs effective will break a guarantee that relies on the agent itself.
 
-In an [experiment](experiments/comparison/analysis.md), an agent prompted to book multiple slots was rejected after its first booking. It inferred that identity checks were name-based and fabricated caller names to bypass them - through ordinary task-completion reasoning, with no instruction to attack. The gap was structural: the standard LLM tool-calling interface was designed for a single caller; caller identity was never a design parameter, which made it an attack surface the moment multiple agents shared it. The agent attempted exploitation in all 10 runs; 9 of 10 succeeded - the tenth was blocked only because all remaining slots were already taken. Safety training primarily addresses human-AI rather than AI-AI interactions ([Triedman et al., 2025](https://arxiv.org/abs/2507.06850)), leaving the AI-AI coordination layer systematically undefended.
+In an [experiment](experiments/comparison/analysis.md), an agent prompted to book multiple slots was rejected after its first booking. It inferred that identity checks were name-based and fabricated caller names to bypass them - through ordinary task-completion reasoning, with no instruction to attack. The gap was structural: the standard LLM tool-calling interface was designed for a single caller; caller identity was never a design parameter, which made it an attack surface the moment multiple agents shared it. The agent attempted exploitation in all 10 runs; 9 of 10 succeeded - the tenth was blocked only because all remaining slots were already taken. [Lupinacci et al., 2025](https://arxiv.org/abs/2507.06850) suggest that safety training primarily addresses human-AI rather than AI-AI interactions. That focus leaves the AI-AI coordination layer systematically undefended.
 
 <p align="center"><img src="figures/psa.jpg" alt="10 PM - Do you know what your agents are doing?" width="250"/></p>
 <p align="center"><sub>After <a href="https://en.wikipedia.org/wiki/Do_you_know_where_your_children_are">a US TV public service announcement</a>.</sub></p>
@@ -63,9 +63,9 @@ Full protocol design in [`framework.md`](docs/framework.md). Formal specificatio
 
 ## Composition and isolation
 
-Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent's principal declares what the agent can read and write in a manifest, and the guard rejects everything else. Capabilities you didn't grant don't exist.
+Blocking what a general-purpose agent shouldn't do requires anticipating every failure mode in advance. Composition takes the opposite approach: each agent's principal grants the scopes and mark types the agent can write, and the guard rejects every other write. A manifest declares inputs and outputs for composition checks. Capabilities you didn't grant don't exist.
 
-Watch/subscribe lets agents activate when matching marks appear, forming pipelines without a central orchestrator. Agents can be added, removed, or replaced independently, and need marks let them escalate rather than grow to handle edge cases. The manifest interface is model-agnostic - each agent can run a different backend (cloud API, local open-weights model, or deterministic code), and sensitive scopes can run entirely on-premise.
+Watch/subscribe queues matching marks until a harness polls them and activates the agent, forming pipelines without a central orchestrator. Agents can be added, removed, or replaced independently, and need marks let them escalate rather than grow to handle edge cases. The manifest interface is model-agnostic - each agent can run a different backend (cloud API, local open-weights model, or deterministic code), and sensitive scopes can run entirely on-premise.
 
 ```python
 # Each agent declares exactly what it reads and writes
@@ -85,7 +85,7 @@ alerter = Agent(
     ),
 )
 
-validate_pipeline([sensor, alerter])  # guard rejects anything outside declared scope
+validate_pipeline([sensor, alerter])  # composition check, returns problems; the guard enforces scopes
 ```
 
 ## Verification

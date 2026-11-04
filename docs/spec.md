@@ -110,7 +110,7 @@ In this document, the key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL 
 
 **Strength**: A non-negative real number that represents the current influence of a mark. An implementation computes it at read time from the initial strength, age, decay function and source level of the mark (observations only).
 
-**Principal**: The human (or system) that the agents serve. To interact with the system, the principal writes action marks that resolve needs.
+**Principal**: The human (or system) that the agents serve. To interact with the system, the principal writes action marks and resolves needs with them (Section 8.3).
 
 **Freshness**: The component of strength that depends on time. All marks except actions and unresolved needs decay over time.
 
@@ -197,7 +197,7 @@ message ActionMark {
   optional string          resource   = 2;  // MAY: the resource that was modified
   string                   action     = 3;  // MUST: what was done
   google.protobuf.Struct   result     = 4;  // MUST: outcome of the action
-  bool                     failed     = 5;  // MAY: true when the tool threw an exception
+  bool                     failed     = 5;  // MAY: true when the tool threw an exception or when `execute` could not record its action under its lease
   // Note: supersedes is on the base Mark (field 7), not duplicated here.
   // All mark types support supersession (Section 10).
 }
@@ -207,7 +207,7 @@ message ActionMark {
 - Action marks MUST NOT decay. Their strength is constant for all time.
 - Action marks are historical facts. They are the ground truth of the system.
 - An action mark MAY supersede a prior mark (an action or an intent). The effective strength of a superseded mark becomes 0.
-- An action mark with `failed = true` records that the tool threw an exception. Failed actions MUST NOT claim the resource. The guard treats failed actions as non-blocking, so other agents can proceed ([Section 9](#9-guard-deterministic-enforcement-layer)).
+- An action mark with `failed = true` records that the tool threw an exception or that `execute` could not record the action under its lease. Failed actions MUST NOT claim the resource. The guard treats failed actions as non-blocking, so other agents can proceed ([Section 9](#9-guard-deterministic-enforcement-layer)).
 
 Ref: [`markspace/core.py::Action`](../markspace/core.py)
 
@@ -285,13 +285,14 @@ message NeedMark {
   float                  priority    = 4;  // MUST: [0.0, 1.0] urgency
   bool                   blocking    = 5;  // MUST: whether the agent is blocked waiting
   optional string        resolved_by = 6;  // MAY: UUID of the action mark that resolved this
+  optional string        resolved_by_agent = 7;  // MAY: UUID of the agent that wrote the resolving action
 }
 ```
 
 **Lifecycle**:
 - Unresolved need marks (resolved_by is None) MUST NOT decay. They keep full strength for an unlimited time.
 - Resolved need marks (resolved_by is set) MUST immediately have strength 0.
-- A need mark becomes resolved when the principal writes an action mark scoped to the need.
+- A need mark becomes resolved when the principal writes an action mark and calls `resolve()` with the need's id and the action's id. An action mark alone closes nothing.
 
 Ref: [`markspace/core.py::Need`](../markspace/core.py)
 
@@ -835,7 +836,7 @@ A projection preserves all **structural and coordination metadata** of a mark. I
 | Category | Fields | Projected? |
 |----------|--------|-----------|
 | Structural | id, mark_type, agent_id, scope, created_at, initial_strength, supersedes, projected | Preserved |
-| Coordination | resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by | Preserved |
+| Coordination | resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, resolved_by_agent | Preserved |
 | Content | result (Action), content (Observation), reason (Warning), question (Need), context (Need) | **Redacted** |
 
 A projection MUST have `projected = true`. This lets downstream code distinguish a projection from a mark that really has empty content fields.
@@ -877,7 +878,7 @@ A scope name MAY use `/` as a hierarchy separator. Authorization for a parent sc
 
 **P23: Hierarchy**: Write authorization for scope `"a"` MUST include write authorization for `"a/b"` and `"a/b/c"`, for all b and c. Read authorization MUST follow the same rule.
 
-**P24: Projection Preservation**: A projection MUST preserve all structural and coordination metadata. These fields hold that metadata: id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, supersedes. The projection redacts only the content fields (result, content, reason, question, context). `projected` MUST be `true`. *Note: P24 refines P20 (Structural Visibility). It specifies exactly which fields are structural and which are content.*
+**P24: Projection Preservation**: A projection MUST preserve all structural and coordination metadata. These fields hold that metadata: id, mark_type, agent_id, scope, created_at, initial_strength, resource, action, topic, confidence, severity, priority, blocking, source, invalidates, resolved_by, resolved_by_agent, supersedes. The projection redacts only the content fields (result, content, reason, question, context). `projected` MUST be `true`. *Note: P24 refines P20 (Structural Visibility). It specifies exactly which fields are structural and which are content.*
 
 **P25: Classified No Fallback**: A CLASSIFIED scope MUST NOT provide projections as a fallback. An unauthorized reader MUST receive no mark of a CLASSIFIED scope, and no projection of such a mark. This rule prevents a leak of the existence of marks.
 
@@ -910,7 +911,7 @@ Postconditions:
 ### 8.2 Read
 
 ```
-read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader=None) → list[Mark]
+read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader=None, max_tokens=None) → list[Mark]
 
   - Returns all marks in the given scope matching the filters
   - Each mark's effective_strength is computed at read time (Section 3 + 4), with the decay configuration of the mark's own scope
@@ -919,6 +920,7 @@ read(scope, resource=None, topic=None, mark_type=None, min_strength=0.01, reader
   - reader: the agent performing the read (controls visibility per Section 7.4)
     - None: full access (used by guard, aggregator, internal infrastructure)
     - Agent: respects scope visibility rules (OPEN/PROTECTED/CLASSIFIED)
+  - max_tokens: keeps the strongest marks whose estimated token count fits this limit; the other marks stay in the space
 ```
 
 A read is a pure query with no side effects. A read MUST NOT modify the marks that it reads. In a PROTECTED scope with an unauthorized reader, the read returns projections (content redacted, `projected=true`). In a CLASSIFIED scope with an unauthorized reader, the read returns no mark of that scope.
@@ -1286,7 +1288,7 @@ Ref: [`markspace/probe.py::DiagnosticProbe`](../markspace/probe.py), [`tests/tes
 
 ### 9.10 Token Budgets
 
-An agent MAY carry a `TokenBudget` in its manifest that limits token consumption. All fields are optional. An omitted field means no limit. The guard tracks cumulative usage and enforces the limits at activation time.
+An agent MAY carry a `TokenBudget` in its manifest that limits token consumption. All fields are optional. An omitted field means no limit. The guard tracks cumulative usage. At a lifetime limit, `check_budget_activation()` refuses activation.
 
 ```protobuf
 message TokenBudget {
@@ -1305,8 +1307,8 @@ message AgentManifest {
 
 **Enforcement rules:**
 
-1. **Per-round input budget.** When the manifest sets `max_input_tokens_per_round`, the mark space returns marks ranked by effective strength. Effective strength includes recency through decay. The mark space truncates the list at the token limit.
-2. **Per-round output budget.** When the manifest sets `max_output_tokens_per_round`, the LLM call gets a matching `max_tokens` parameter.
+1. **Per-round input budget.** When the manifest sets `max_input_tokens_per_round`, the harness passes that limit to `read(max_tokens=...)`. The mark space returns marks ranked by effective strength. Effective strength includes recency through decay. The mark space truncates the list at the token limit.
+2. **Per-round output budget.** When the manifest sets `max_output_tokens_per_round`, the harness gives the LLM call a matching `max_tokens` parameter.
 3. **Lifetime tracking.** The guard keeps running totals of the input and output tokens across all rounds. Usage is monotonically non-decreasing (P63).
 4. **Warning at threshold.** When lifetime usage crosses `warning_fraction` of the total budget in either dimension, the guard writes a non-blocking need mark (`blocking=False`). The guard writes exactly one such need mark for each dimension (P60). The structurally correct value is `warning_fraction = 1 - (R * T / B)`, where:
    - R is the expected number of rounds before the principal responds.
@@ -1315,7 +1317,7 @@ message AgentManifest {
 
    The default 4/5 assumes approximately one round of runway.
 5. **Hard stop at limit.** When lifetime usage reaches the total budget in either dimension, the guard rejects all further activations (P61). The existing marks of the agent stay in the mark space.
-6. **Principal resumption.** The principal MAY increase the budget with an update to the manifest. If the new total is more than the consumption, the agent resumes (P62).
+6. **Principal resumption.** The principal MAY increase the budget. The principal gives the harness an `Agent` with the same `id` and the new budget in its manifest, and then calls `Guard.update_budget()`. If the new total is more than the consumption, the agent resumes (P62).
 
 Input and output budgets are separate because they have different cost profiles. Input tokens are the dominant cost factor. The size of the mark space drives them. Output tokens reflect agent verbosity and model choice.
 
@@ -1331,7 +1333,7 @@ The protocol controls tokens. Tokens are the measurable quantity at the guard. C
 
 **P61: Budget Hard Stop**: When lifetime token usage reaches or exceeds the total budget in any dimension, the guard MUST reject all further activations for that agent. After the stop, the agent stays stopped until the principal increases the budget.
 
-**P62: Budget Resumption**: A principal MAY increase the budget of an agent with an update to the manifest. After a budget increase makes the new total more than the cumulative usage, the agent MUST be eligible for activation again.
+**P62: Budget Resumption**: A principal MAY increase the budget of an agent. The principal gives the harness an `Agent` with the same `id` and the new budget in its manifest, and then calls `Guard.update_budget()`. After a budget increase makes the new total more than the cumulative usage, the agent MUST be eligible for activation again.
 
 **P63: Budget Tracking Accuracy**: The cumulative token tracking of the guard MUST be monotonically non-decreasing. The guard MUST NOT decrement token usage after it records it. A principal increases the budget ceiling. A principal does not reset consumption. The agent resumes with its full history intact.
 
@@ -1625,7 +1627,7 @@ markspace/
   barrier.py       -- AgentBarrier (monotonic permission restriction)
   probe.py         -- DiagnosticProbe (canary injection and response checking)
   compose.py       -- composition validation (pipeline, manifest-permission checks)
-  schedule.py      -- mark-driven scheduling (reads configs, writes activations)
+  schedule.py      -- manifest-based scheduling (reads manifests, returns due agents)
   llm.py           -- provider-agnostic LLM client (OpenAI-compatible)
   models.py        -- model registry
   __init__.py      -- DSL re-exports
@@ -1670,7 +1672,7 @@ calendar = Scope(
     allowed_action_verbs=["booked", "rescheduled", "cancelled"],
     decay=DecayConfig(
         observation_half_life=hours(1),
-        warning_half_life=hours(4),
+        warning_half_life=minutes(30),
         intent_ttl=minutes(30),
     ),
     conflict_policy=ConflictPolicy.HIGHEST_CONFIDENCE,
@@ -1729,7 +1731,7 @@ The protocol follows the Unix philosophy. In this philosophy, each agent is smal
 
 Agents do not know about each other. They read from the mark space and write to it. To compose the agents, the principal defines the scopes and the permissions.
 
-This section defines two mechanisms that make composition explicit and reactive:
+This section defines two mechanisms that make composition explicit:
 
 - **Watch patterns** declare the interest of an agent in marks.
 - **Agent manifests** declare input/output contracts.
@@ -1800,7 +1802,7 @@ Postconditions:
 
 ### 13.4 Watched Marks
 
-An agent polls the mark space to get its queued marks.
+A harness polls the mark space for an agent's queued marks.
 
 ```
 get_watched_marks(agent, clear=true) -> list[Mark]
@@ -1844,14 +1846,14 @@ Two validation functions operate on manifests without runtime state.
 
 Ref: [`markspace/core.py::WatchPattern, AgentManifest`](../markspace/core.py), [`markspace/space.py::subscribe, get_watched_marks`](../markspace/space.py), [`markspace/compose.py`](../markspace/compose.py), [`tests/test_composition.py`](../tests/test_composition.py)
 
-**Note on source agents.** The subscription mechanism activates downstream agents reactively when upstream marks appear. Source agents (agents at the start of a pipeline, with no upstream marks) need a different trigger.
+**Note on source agents.** Through the subscription mechanism, a harness activates downstream agents when upstream marks appear. Source agents (agents at the start of a pipeline, with no upstream marks) need a different trigger.
 
 [Section 14 (Scheduling)](#14-scheduling) gives this trigger through the agent manifest. The principal sets `schedule_interval` on the manifest of the agent. The Scheduler infrastructure decides when the agent is due for activation. Scheduling involves no marks. Scheduling is a property of the agent, not a signal in the environment.
 
 
 ## 14. Scheduling
 
-Downstream agents activate reactively through subscription ([Section 13.3](#133-subscription)). Source agents (agents with no upstream marks) need an external trigger. Scheduling gives this trigger through the agent manifest. The principal sets `schedule_interval` when it creates or configures an agent. The Scheduler infrastructure decides when each agent is due.
+Through subscription ([Section 13.3](#133-subscription)), a harness activates downstream agents when upstream marks appear. Source agents (agents with no upstream marks) need an external trigger. Scheduling gives this trigger through the agent manifest. The principal sets `schedule_interval` when it creates or configures an agent. The Scheduler infrastructure decides when each agent is due.
 
 ### 14.1 Schedule Configuration
 
